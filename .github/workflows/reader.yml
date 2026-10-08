@@ -21,3 +21,5 @@ jobs:
         run: make test-features FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Validate directory and extent errors against corrupted fixtures
         run: make test-corruption FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify metadata checksums and reject byte corruption
+        run: make test-checksums FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

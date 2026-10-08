@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
         subprocess.run([mke2fs, "-q", "-F", "-t", "ext4", "-b", "4096", *options, str(image)], check=True, capture_output=True)
         return image
 
-    base = make_image("default.img")
+    base = make_image("default.img", ["-O", "^metadata_csum,^uninit_bg"])
     check(base)
     check(make_image("32bit.img", ["-O", "^64bit"]))
     original_header = base.read_bytes()[:8192]

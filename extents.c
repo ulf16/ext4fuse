@@ -8,10 +8,11 @@
 #include "disk.h"
 #include "extents.h"
 #include "super.h"
+#include "checksum.h"
 
 static int walk(const void *node, size_t capacity, uint32_t logical,
                 uint64_t lower, uint64_t upper, int expected_depth,
-                uint64_t *physical, uint32_t *run)
+                uint64_t *physical, uint32_t *run, uint32_t seed)
 {
     struct ext4_extent_header h;
     if (capacity < sizeof(h)) return -EIO;
@@ -20,6 +21,10 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
     if (h.eh_magic != EXT4_EXT_MAGIC || !h.eh_max || h.eh_max > slots ||
         h.eh_entries > h.eh_max || h.eh_depth > 5 ||
         (expected_depth >= 0 && h.eh_depth != expected_depth)) return -EIO;
+    if (expected_depth >= 0 && super_metadata_csum()) {
+        size_t tail=sizeof(h)+(size_t)h.eh_max*sizeof(struct ext4_extent);
+        if (tail+4>capacity || checksum_crc32c(seed,node,tail)!=checksum_u32((const unsigned char *)node+tail)) return -EIO;
+    }
     const unsigned char *entries = (const unsigned char *)node + sizeof(h);
     if (expected_depth >= 0) {
         uint32_t first_key;
@@ -71,18 +76,18 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
     if (!child) return -ENOMEM;
     int ret = disk_read_exact(BLOCKS2BYTES(chosen.ei_leaf_lo), BLOCK_SIZE, child);
     if (!ret) ret = walk(child, BLOCK_SIZE, logical, chosen.ei_block, upper,
-                         h.eh_depth - 1, physical, run);
+                         h.eh_depth - 1, physical, run, seed);
     free(child);
     return ret;
 }
 
 int extent_get_pblock(const void *node, size_t capacity, uint32_t logical,
-                      uint64_t *physical, uint32_t *run)
+                      uint64_t *physical, uint32_t *run, uint32_t seed)
 {
     uint32_t local_run;
     if (!run) run = &local_run;
     *physical = 0;
     *run = 1;
     return walk(node, capacity, logical, 0, (uint64_t)UINT32_MAX + 1,
-                -1, physical, run);
+                -1, physical, run, seed);
 }

@@ -41,7 +41,7 @@ override LDFLAGS += -lexecinfo
 endif
 
 BINARY = ext4fuse
-SOURCES += fuse-main.o logging.o extents.o disk.o super.o inode.o dcache.o
+SOURCES += fuse-main.o logging.o extents.o disk.o checksum.o super.o inode.o dcache.o
 SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o
 
 BUILD_DIR = .build/fuse$(FUSE_API)
@@ -98,3 +98,8 @@ test-corruption: test/corruption-probe
 	$(PYTHON) test/corruption.py
 
 .PHONY: test-corruption
+
+test-checksums: test/corruption-probe
+	$(PYTHON) test/checksums.py
+
+.PHONY: test-checksums

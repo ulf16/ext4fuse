@@ -5,6 +5,6 @@
 #include "types/ext4_extents.h"
 
 int extent_get_pblock(const void *inode_extents, size_t capacity, uint32_t lblock,
-                      uint64_t *pblock, uint32_t *len);
+                      uint64_t *pblock, uint32_t *len, uint32_t seed);
 
 #endif

@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include "checksum.h"
 #include "types/ext4_super.h"
 
 #include "disk.h"
@@ -60,6 +61,10 @@ static int reject_features(const char *kind, uint32_t bits,
 
 static struct ext4_super_block super;
 static struct ext4_group_desc *gdesc_table;
+static uint32_t csum_seed;
+int super_metadata_csum(void) { return !!(super.s_feature_ro_compat & 0x400); }
+uint32_t super_checksum_seed(void) { return csum_seed; }
+
 
 
 static uint64_t super_block_group_size(void)
@@ -105,6 +110,16 @@ int super_fill(void)
     return invalid("only little-endian hosts are supported");
 #endif
     if (super.s_magic != 0xEF53) return invalid("not an ext filesystem (bad magic)");
+    /* Modern checksum fields occupy offsets in the legacy reserved tail. */
+    const unsigned char *raw = (const void *)&super;
+    if (super_metadata_csum()) {
+        if (raw[0x175] != 1) return invalid("unsupported metadata checksum algorithm");
+        if (checksum_crc32c(~0U, raw, 0x3fc) != checksum_u32(raw+0x3fc))
+            return invalid("superblock checksum mismatch");
+        if (super.s_creator_os) return invalid("metadata checksums require Linux inode format");
+    }
+    csum_seed = (super.s_feature_incompat & 0x2000)
+        ? checksum_u32(raw+0x270) : checksum_crc32c(~0U,super.s_uuid,16);
     if (super.s_rev_level > 1) return invalid("unsupported superblock revision");
     ret = reject_features("incompatible", super.s_feature_incompat & ~INCOMPAT_SUPPORTED,
                           incompat_names, sizeof(incompat_names) / sizeof(incompat_names[0]));
@@ -178,6 +193,23 @@ int super_group_fill(void)
         if (ret < 0) {
             free(table);
             return invalid("cannot read complete group descriptor table (truncated image or I/O error)");
+        }
+        if (super_metadata_csum() || (super.s_feature_ro_compat & 0x10)) {
+            unsigned char *desc=(void *)&table[i];
+            uint16_t supplied=table[i].bg_checksum, calculated;
+            size_t length=super_group_desc_size();
+            if (super_metadata_csum()) {
+                table[i].bg_checksum=0;
+                uint32_t crc=checksum_crc32c(csum_seed,&i,4);
+                calculated=checksum_crc32c(crc,desc,length);
+                table[i].bg_checksum=supplied;
+            } else {
+                uint16_t crc=checksum_crc16(0xffff,super.s_uuid,16);
+                crc=checksum_crc16(crc,&i,4);
+                crc=checksum_crc16(crc,desc,30);
+                calculated=checksum_crc16(crc,desc+32,length-32);
+            }
+            if (supplied!=calculated) { free(table); return invalid("group descriptor checksum mismatch"); }
         }
         if (table[i].bg_inode_table_hi) {
             free(table);

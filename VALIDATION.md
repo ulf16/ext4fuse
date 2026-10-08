@@ -64,3 +64,13 @@ checks cover 256- and 257-byte components; both mounted APIs pass long-name list
 - Checksums and unused extent subtrees are not verified. No real Linux disks were used.
 - All 78 hardening checks pass with AddressSanitizer and UndefinedBehaviorSanitizer
   for both FUSE APIs; existing 97 preflight checks and both mounted smoke tests pass.
+
+## Metadata checksums — 2026-10-08
+
+- Verify CRC32C primary superblock/group descriptors, full raw inodes, directory
+  leaves/htree nodes, and traversed external extent nodes before consuming metadata.
+- Support UUID/stored seeds, 16/32-bit inode checksums, and legacy CRC16 descriptors.
+- Structural suites use non-checksummed copies to preserve independent bounds coverage.
+- No file-data, bitmap, xattr, journal, backup, or unused-subtree checksum certification.
+- 75 checksum checks pass locally under ASan/UBSan for both FUSE APIs, alongside
+  the existing 97 preflight and 78 structural checks. Both macFUSE mount tests pass.

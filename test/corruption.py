@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-corruption-") as temp:
         return subprocess.run([debugfs, "-w", "-R", command, str(target)], check=True, capture_output=True, text=True).stdout
     def create(target, kind):
         with target.open("wb") as f: f.truncate(32 * 1024 * 1024)
-        subprocess.run([mkfs, "-q", "-F", "-t", kind, "-b", str(block), str(target)], check=True, capture_output=True)
+        subprocess.run([mkfs, "-q", "-F", "-t", kind, "-b", str(block), "-O", "^metadata_csum,^uninit_bg", str(target)], check=True, capture_output=True)
         debug("write %s /payload" % host, target)
     create(image, "ext4")
     debug("write %s /sparse" % sparse)

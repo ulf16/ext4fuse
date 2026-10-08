@@ -120,6 +120,8 @@ struct ext4_inode {
 	__le32  i_crtime;       /* File Creation time */
 	__le32  i_crtime_extra; /* extra FileCreationtime (nsec << 2 | epoch) */
 	__le32  i_version_hi;	/* high 32 bits for 64-bit version */
+    /* Reader-only state, never part of the on-disk inode. */
+    uint32_t reader_csum_seed;
 };
 
 #endif

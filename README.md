@@ -114,7 +114,7 @@ Features permitted by preflight include filetype, extents, flex_bg, csum_seed, a
 64bit descriptors **with 32-bit block addressing**. The usual sparse_super, large_file,
 huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
-metadata checksums are not yet verified, extended attributes are not exposed, and large
+extended attributes are not exposed, and large
 file allocation statistics still need an audit.
 
 Encryption, casefold, inline_data, meta_bg, bigalloc, largedir, ea_inode, mmp, dirdata,
@@ -130,7 +130,7 @@ Geometry checks cover block sizes (1/2/4 KiB), inode size, group capacities, des
 size and inode table bounds. Descriptor allocations are limited to 256 MiB. Regular
 images shorter than their declared filesystem size are refused; physical-device size
 checking needs platform-specific work. These checks are not a replacement for fsck,
-and directory and extent records are also checked on demand. Metadata checksums remain unverified.
+and directory and extent records are also checked on demand. Checksums are verified as described below.
 
 ```sh
 make test-features
@@ -143,6 +143,32 @@ the reader leaves the images unchanged. The preflight follows the Linux kernel's
 [superblock](https://www.kernel.org/doc/html/latest/filesystems/ext4/super.html) and
 [group descriptor](https://www.kernel.org/doc/html/latest/filesystems/ext4/group_descr.html)
 documentation.
+
+## Metadata checksum verification
+
+When `metadata_csum` is enabled, CRC32C verification covers the primary superblock,
+all primary group descriptors, each inode read, directory leaves and htree index
+blocks, and external extent nodes traversed. The inode extent root is covered by
+its inode checksum. Stored checksum seeds, UUID-derived seeds, 16-bit inode checksums,
+and the older `gdt_csum` CRC16 descriptor format are supported. A bad superblock or
+descriptor stops preflight; bad inode/directory/extent checksums return I/O errors.
+Metadata-checksummed non-Linux inode formats and unknown checksum algorithms are refused.
+
+Verification follows the Linux kernel's
+[checksum formats](https://www.kernel.org/doc/html/latest/filesystems/ext4/checksums.html).
+It does not verify file payloads, allocation bitmaps, extended attributes, journal
+contents, backup metadata, or unused extent subtrees. Filesystems without checksum
+features still receive structural validation; missing checksums cannot detect arbitrary
+byte corruption. Images must remain unmounted and unchanged while being read.
+
+```sh
+make test-checksums
+```
+
+The suite uses e2fsprogs-generated checksums and indexed directories, flips individual
+bytes in disposable copies, and checks that reader operations leave images unchanged.
+Structural mutation suites use separate non-checksummed fixtures so checksum rejection
+does not mask their bounds checks.
 
 ## Directory and extent validation
 
@@ -172,8 +198,8 @@ after preflight to verify that actual short reads return errors. Images are neve
 ## Remaining work
 
 - Reproduce and triage upstream issues individually, including permissions and directory caching.
-- Expand malformed-metadata coverage and implement checksum verification.
-- Verify metadata checksums and expand support for explicitly rejected features.
+- Expand malformed-metadata coverage and audit filesystem allocation statistics.
+- Expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.
 - Replace the bypassed directory cache with a validated, thread-safe implementation if needed.
 - Add reproducible packaging through a separate Homebrew tap after broader validation.

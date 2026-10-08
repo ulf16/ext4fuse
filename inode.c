@@ -11,6 +11,7 @@
 #include "extents.h"
 #include "inode.h"
 #include "super.h"
+#include "checksum.h"
 
 int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
                           uint64_t *physical, uint32_t *run)
@@ -18,7 +19,7 @@ int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
     *physical = 0;
     if (run) *run = 1;
     if (inode->i_flags & EXT4_EXTENTS_FL)
-        return extent_get_pblock(inode->i_block, sizeof(inode->i_block), logical, physical, run);
+        return extent_get_pblock(inode->i_block, sizeof(inode->i_block), logical, physical, run, inode->reader_csum_seed);
     uint64_t index = logical;
     uint64_t per_block = BLOCK_SIZE / sizeof(uint32_t);
     if (index < EXT4_NDIR_BLOCKS) {
@@ -82,6 +83,9 @@ int inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ct
         if (!physical) return -EIO; /* Directories cannot contain holes. */
         ret = disk_read_exact(BLOCKS2BYTES(physical), BLOCK_SIZE, ctx->buf);
         if (ret < 0) return ret;
+        ret = checksum_directory(ctx->buf, inode->reader_csum_seed,
+                                 inode->i_flags & EXT4_INDEX_FL, logical);
+        if (ret < 0) return ret;
         ctx->lblock = logical;
     }
     const size_t header = offsetof(struct ext4_dir_entry_2, name);
@@ -103,8 +107,27 @@ int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
     off_t off = super_group_inode_table_offset(number);
     off += (uint64_t)(number % super_inodes_per_group()) * super_inode_size();
     memset(inode, 0, sizeof(*inode));
-    int ret = disk_read_exact(off, MIN(super_inode_size(), sizeof(*inode)), inode);
+    /* Verify the full on-disk inode, including fields absent from our struct. */
+    unsigned char raw[4096];
+    size_t length=super_inode_size();
+    int ret = disk_read_exact(off, length, raw);
     if (ret < 0) return ret;
+    memcpy(inode, raw, MIN(length, offsetof(struct ext4_inode,reader_csum_seed)));
+    uint32_t inum=number+1;
+    uint32_t seed=checksum_crc32c(super_checksum_seed(),&inum,4);
+    inode->reader_csum_seed=checksum_crc32c(seed,&inode->i_generation,4);
+    if (super_metadata_csum()) {
+        /* Linux i_checksum_lo is at 0x7c; i_checksum_hi at 0x82 requires
+         * at least four bytes of i_extra_isize beyond the 128-byte inode. */
+        uint32_t supplied=checksum_u16(raw+124);
+        raw[124]=raw[125]=0;
+        int high=length>128 && checksum_u16(raw+128)>=4;
+        if (length>128 && (checksum_u16(raw+128)>length-128 || checksum_u16(raw+128)%4)) return -EIO;
+        if (high) { supplied |= (uint32_t)checksum_u16(raw+130)<<16; raw[130]=raw[131]=0; }
+        uint32_t crc=checksum_crc32c(inode->reader_csum_seed,raw,length);
+        if (!high) crc &= 0xffff;
+        if (crc!=supplied) return -EIO;
+    }
     if (inode->i_flags & (0x4U | 0x800U | 0x10000000U)) return -EIO;
     return 0;
 }
