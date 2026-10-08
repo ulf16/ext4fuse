@@ -8,3 +8,5 @@ ext4fuse
 /test/image-reader
 
 *.dSYM/
+
+/.build/

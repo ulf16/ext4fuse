@@ -156,10 +156,10 @@ int inode_get_by_number(uint32_t n, struct ext4_inode *inode)
     return 0;
 }
 
-static uint8_t get_path_token_len(const char *path)
+static size_t get_path_token_len(const char *path)
 {
-    uint8_t len = 0;
-    while (path[len] != '/' && path[len]) len++;
+    size_t len = 0;
+    while (len <= EXT4_NAME_LEN && path[len] != '/' && path[len]) len++;
     return len;
 }
 
@@ -170,10 +170,10 @@ static struct dcache_entry *get_cached_inode_num(const char **path)
 
     do {
         if (**path == '/') *path = *path + 1; /* Skip over the slash */
-        uint8_t path_len = get_path_token_len(*path);
+        size_t path_len = get_path_token_len(*path);
         ret = next;
 
-        if (path_len == 0) {
+        if (path_len == 0 || path_len > EXT4_NAME_LEN) {
             return ret;
         }
 
@@ -211,9 +211,13 @@ uint32_t inode_get_idx_by_path(const char *path)
         struct ext4_dir_entry_2 *dentry = NULL;
 
         path = skip_trailing_backslash(path);
-        uint8_t path_len = get_path_token_len(path);
+        size_t path_len = get_path_token_len(path);
 
         if (path_len == 0) break;
+        if (path_len > EXT4_NAME_LEN) {
+            inode_idx = 0;
+            break;
+        }
         inode_get_by_number(inode_idx, &inode);
 
         inode_dir_ctx_reset(dctx, &inode);

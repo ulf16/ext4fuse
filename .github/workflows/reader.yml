@@ -5,11 +5,15 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      matrix:
+        fuse: [2, 3]
     steps:
       - uses: actions/checkout@v4
       - name: Install development dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfuse-dev pkg-config e2fsprogs
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev libfuse3-dev pkg-config e2fsprogs
       - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
-        run: make -j2 CFLAGS='-O1 -g -fsanitize=address,undefined'
+        run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Test disposable ext4 images without mounting
-        run: make test-images CFLAGS='-O1 -g -fsanitize=address,undefined'
+        run: make test-images FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

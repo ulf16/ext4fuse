@@ -11,8 +11,15 @@
 #include "logging.h"
 
 static int found_long_name;
-static int list_entry(void *buf, const char *name, const struct stat *st, off_t off)
+static int list_entry(void *buf, const char *name, const struct stat *st, off_t off
+#if FUSE_MAJOR_VERSION >= 3
+                      , enum fuse_fill_dir_flags flags
+#endif
+                      )
 {
+#if FUSE_MAJOR_VERSION >= 3
+    assert(flags == 0);
+#endif
     (void)buf; (void)st; (void)off;
     if (strlen(name) == 255) found_long_name++;
     return 0;
@@ -45,6 +52,15 @@ int main(int argc, char **argv)
     }
     assert(op_readdir("/", NULL, list_entry, 0, &fi) == 0);
     assert(found_long_name == 1);
-    puts("PASS: content, offset/EOF, read-only modes, missing paths, 255-byte filename");
+    /* macOS metadata probes may prefix a valid name with ._, exceeding 255. */
+    char overlong[259];
+    overlong[0] = '/';
+    memset(overlong + 1, 'x', 257);
+    overlong[258] = 0;
+    assert(op_getattr(overlong, &st) == -ENOENT);
+    overlong[257] = 0;
+    assert(op_getattr(overlong, &st) == -ENOENT);
+    assert(op_getattr("/payload", &st) == 0);
+    puts("PASS: content, offset/EOF, read-only modes, missing/overlong paths, 255-byte filename");
     return 0;
 }

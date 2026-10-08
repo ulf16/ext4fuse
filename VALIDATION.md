@@ -19,3 +19,19 @@ No physical Linux disks were mounted. No claim is made about all filesystem feat
 combinations, large volumes, corrupted images, multi-threaded cache access or write support.
 The new fixtures cover a small normal filesystem, not the entire upstream issue backlog.
 No Linux-reference mounted comparison has been performed yet. CI results are tracked on GitHub.
+
+## FUSE 3 milestone — 2026-10-08
+
+- FUSE 3 API 31 build against macFUSE's installed `fuse3` 3.18.2 library.
+- Portable macFUSE ABI selected explicitly; no Darwin attribute extensions.
+- AddressSanitizer/UndefinedBehaviorSanitizer image tests pass for both API versions.
+- Mounted smoke tests check both APIs, including directory listings and reading a
+  255-byte filename, alongside content, missing-path and write-rejection checks.
+- Switching API versions without cleaning uses separate objects and relinks outputs.
+- FUSE 3 is the default; FUSE 2 is selectable with `FUSE_API=2`.
+- Linux CI covers both APIs; no performance improvement is claimed.
+
+The expanded mounted-directory test exposed a separate upstream hang: filename
+length was counted in a uint8_t and wrapped on components longer than 255 bytes.
+The parser now uses a bounded size_t counter and rejects such lookups. Regression
+checks cover 256- and 257-byte components; both mounted APIs pass long-name listings.

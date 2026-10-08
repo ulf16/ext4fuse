@@ -35,13 +35,42 @@
 #endif
 
 
+/* Keep the filesystem reader independent of FUSE callback ABI changes. */
+#if FUSE_MAJOR_VERSION >= 3
+static int e4f_getattr(const char *path, struct stat *st,
+                       struct fuse_file_info *fi)
+{
+    UNUSED(fi);
+    return op_getattr(path, st);
+}
+
+static int e4f_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
+                       off_t offset, struct fuse_file_info *fi,
+                       enum fuse_readdir_flags flags)
+{
+    /* Ordinary entries are valid even when READDIR_PLUS is requested. */
+    UNUSED(flags);
+    return op_readdir(path, buf, filler, offset, fi);
+}
+
+static void *e4f_init(struct fuse_conn_info *info, struct fuse_config *config)
+{
+    UNUSED(config);
+    return op_init(info);
+}
+#else
+#define e4f_getattr op_getattr
+#define e4f_readdir op_readdir
+#define e4f_init op_init
+#endif
+
 static struct fuse_operations e4f_ops = {
-    .getattr    = op_getattr,
-    .readdir    = op_readdir,
+    .getattr    = e4f_getattr,
+    .readdir    = e4f_readdir,
     .open       = op_open,
     .read       = op_read,
     .readlink   = op_readlink,
-    .init       = op_init,
+    .init       = e4f_init,
 };
 
 static struct e4f {

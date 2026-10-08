@@ -1,7 +1,8 @@
 # ext4fuse — Sequoia maintenance fork
 
 Read-only ext4 access using FUSE, based on [gerard/ext4fuse](https://github.com/gerard/ext4fuse).
-This fork starts with macOS Sequoia 15 on Intel and macFUSE's FUSE 2 compatibility API.
+This fork starts with macOS Sequoia 15 on Intel and macFUSE's FUSE 3 API.
+FUSE 3 is the default; FUSE 2 remains available as a build-time fallback.
 It does not require a VM. It preserves the upstream GPLv2 license and copyright notices.
 
 ## Status
@@ -12,9 +13,12 @@ not a claim that every upstream issue or ext4 feature is fixed.
 
 Changes so far:
 
+- Reject overlong path components without overflowing the length counter or hanging.
+- Support FUSE 3 and FUSE 2 through small callback adapters.
+- Keep separate object directories for each API, so switching does not mix ABIs.
 - Fix a stack buffer overflow when listing a valid 255-byte filename.
 - Default macOS deployment target to 15.0 (overridable).
-- Diagnose missing FUSE 2 development metadata and support `PKG_CONFIG`/`FUSE_PKG` overrides.
+- Diagnose missing FUSE development metadata and support `PKG_CONFIG`/`FUSE_PKG` overrides.
 - Preserve required build flags when supplying custom `CFLAGS`, including sanitizers.
 - Resolve the SDK's `MIN` macro conflict and quote the fallback version string.
 - Add disposable ext4 image regression tests and Linux CI.
@@ -32,9 +36,16 @@ brew install pkgconf e2fsprogs
 make -j4
 ```
 
-`pkg-config --modversion fuse` should find the FUSE 2 compatibility library.
-For a nonstandard install, set `PKG_CONFIG_PATH` to the directory containing `fuse.pc`.
-FUSE 3 is not a drop-in replacement for this code's FUSE 2 API.
+`pkg-config --modversion fuse3` should find the FUSE 3 library.
+For a nonstandard install, set `PKG_CONFIG_PATH` to the directory containing `fuse3.pc`.
+For the FUSE 2 fallback, use `make FUSE_API=2` and `make test-images FUSE_API=2`.
+Both APIs use the same read-only filesystem reader. Objects are stored separately,
+and switching API versions relinks the binary. Clean before changing optimization
+or sanitizer flags.
+
+On macOS, FUSE 3 uses `FUSE_DARWIN_ENABLE_EXTENSIONS=0` to select macFUSE's portable
+`struct stat` API. Darwin-specific extended attributes and READDIR_PLUS optimization
+are not implemented in this milestone.
 
 The binary stays in the checkout; building does not replace an installed ext4fuse.
 For an older macOS target, explicitly set `MACOSX_DEPLOYMENT_TARGET` (not tested here).
@@ -66,7 +77,7 @@ On macOS, separately test the actual macFUSE mount:
 
 This checks file contents, missing paths and write rejection, then unmounts the image.
 It requires a working, approved macFUSE installation. CI currently tests the reader on
-Linux without mounting; it does not certify macOS mounting.
+Linux for both FUSE 2 and FUSE 3 without mounting; it does not certify macOS mounting.
 
 The older `make test` / `make test-slow` suites remain available but contain Linux-specific
 mounting tools and privileged operations. They are not the Sequoia validation entry point.

@@ -25,6 +25,8 @@ printf 'ext4 fixture\n' > "$fixture_dir/payload"
 dd if=/dev/zero of="$fixture_dir/ext4.img" bs=1048576 count=32 2>/dev/null
 "$MKE2FS" -q -F -t ext4 "$fixture_dir/ext4.img"
 "$DEBUGFS" -w -R "write $fixture_dir/payload /payload" "$fixture_dir/ext4.img" >/dev/null 2>&1
+long_name=$(printf '%0255d' 0)
+"$DEBUGFS" -w -R "write $fixture_dir/payload /$long_name" "$fixture_dir/ext4.img" >/dev/null 2>&1
 mkdir "$fixture_dir/mount"
 ./ext4fuse "$fixture_dir/ext4.img" "$fixture_dir/mount" -f -s -o ro,defer_permissions > "$fixture_dir/reader.log" 2>&1 &
 reader_pid=$!
@@ -39,9 +41,11 @@ until [ -f "$fixture_dir/mount/payload" ]; do
     sleep 0.25
 done
 cmp "$fixture_dir/payload" "$fixture_dir/mount/payload"
+ls -l "$fixture_dir/mount" >/dev/null
+cmp "$fixture_dir/payload" "$fixture_dir/mount/$long_name"
 [ ! -e "$fixture_dir/mount/missing" ]
 if touch "$fixture_dir/mount/should-not-exist" 2>/dev/null; then
     echo 'FAIL: mount accepted a write' >&2
     exit 1
 fi
-echo 'PASS: macFUSE mounted image, exact contents, missing path, write rejection'
+echo 'PASS: macFUSE mounted image, exact contents, 255-byte listing, missing path, write rejection'
