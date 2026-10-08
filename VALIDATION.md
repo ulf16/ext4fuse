@@ -35,3 +35,18 @@ The expanded mounted-directory test exposed a separate upstream hang: filename
 length was counted in a uint8_t and wrapped on components longer than 255 bytes.
 The parser now uses a bounded size_t counter and rejects such lookups. Regression
 checks cover 256- and 257-byte components; both mounted APIs pass long-name listings.
+
+## Feature preflight milestone — 2026-10-08
+
+- Unsupported incompatible/read-only-compatible features are reported before FUSE starts.
+- Clean default ext4 images with 32-byte and 64-byte descriptors are accepted.
+- Normal image-reader tests cover 1, 2, and 4 KiB block sizes.
+- Rejection tests include real mkfs layouts (encrypt, casefold, inline_data, meta_bg,
+  bigalloc), unknown bits, recovery/dirty state, malformed geometry, inode-table
+  addresses, and truncated regular files. Each probe verifies the image is unchanged.
+- Rejected CLI input returns status 1 with a named diagnostic, without a mount or assertion.
+- Checked metadata reads handle EOF, read errors and EINTR; existing deeper reader
+  assertions and checksum verification remain separate work.
+- Features accepted by preflight are documented separately from full feature certification.
+- 97 feature/geometry acceptance and rejection checks pass locally under sanitizers
+  for each FUSE API. Both mounted smoke tests pass after the preflight change.

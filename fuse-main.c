@@ -159,15 +159,10 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    off_t disk_magic_offset = BOOT_SECTOR_SIZE + offsetof(struct ext4_super_block, s_magic);
-    uint16_t disk_magic;
-    if (disk_read(disk_magic_offset, sizeof(disk_magic), &disk_magic) < 0) {
-        fprintf(stderr, "Failed to read disk: %s\n",  e4f.disk);
-        return EXIT_FAILURE;
-    }
-
-    if (disk_magic != 0xEF53) {
-        fprintf(stderr, "Partition doesn't contain EXT4 filesystem\n");
+    /* Reject unsupported layouts and incomplete metadata before starting FUSE. */
+    if (super_fill() < 0 || super_group_fill() < 0) {
+        fuse_opt_free_args(&args);
+        free(e4f.disk);
         return EXIT_FAILURE;
     }
 

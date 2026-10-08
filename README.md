@@ -14,6 +14,7 @@ not a claim that every upstream issue or ext4 feature is fixed.
 Changes so far:
 
 - Reject overlong path components without overflowing the length counter or hanging.
+- Reject unsupported features, unclean volumes, truncated images, and invalid metadata geometry before mounting.
 - Support FUSE 3 and FUSE 2 through small callback adapters.
 - Keep separate object directories for each API, so switching does not mix ABIs.
 - Fix a stack buffer overflow when listing a valid 255-byte filename.
@@ -99,11 +100,52 @@ Unmount with `umount /path/to/mountpoint`.
 Read-only prevents intentional filesystem writes; it does not guarantee correct parsing
 of every image. Keep backups of important files.
 
+## Feature and metadata preflight
+
+Before starting FUSE, the reader inspects the superblock and every group descriptor.
+Unknown incompatible and read-only-compatible feature bits are rejected with their hex
+mask; known unsupported bits are named. Compatible feature bits are ignored according
+to the ext filesystem format's compatibility rules.
+
+Features permitted by preflight include filetype, extents, flex_bg, csum_seed, and
+64bit descriptors **with 32-bit block addressing**. The usual sparse_super, large_file,
+huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
+flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
+metadata checksums are not yet verified, extended attributes are not exposed, and large
+file allocation statistics still need an audit.
+
+Encryption, casefold, inline_data, meta_bg, bigalloc, largedir, ea_inode, mmp, dirdata,
+compression, external journal devices, shared_blocks, verity, and other unrecognized
+layouts are refused in this milestone. Some could be supported with further work;
+rejection means this reader has not established support.
+
+Filesystems needing journal replay, marked unclean/erroneous, or containing pending
+orphans are also refused. Unmount/check them using Linux before reading. Do not clear
+feature bits to bypass these checks.
+
+Geometry checks cover block sizes (1/2/4 KiB), inode size, group capacities, descriptor
+size and inode table bounds. Descriptor allocations are limited to 256 MiB. Regular
+images shorter than their declared filesystem size are refused; physical-device size
+checking needs platform-specific work. These checks are not a replacement for fsck,
+and parsing errors deeper in directories/extents still need hardening.
+
+```sh
+make test-features
+# Or use the fallback API:
+make test-features FUSE_API=2
+```
+
+Tests use real mkfs feature layouts plus deliberately mutated copies, and verify that
+the reader leaves the images unchanged. The preflight follows the Linux kernel's
+[superblock](https://www.kernel.org/doc/html/latest/filesystems/ext4/super.html) and
+[group descriptor](https://www.kernel.org/doc/html/latest/filesystems/ext4/group_descr.html)
+documentation.
+
 ## Remaining work
 
 - Reproduce and triage upstream issues individually, including permissions and directory caching.
 - Handle short reads, I/O errors and malformed metadata gracefully instead of assertions.
-- Audit unsupported ext4 feature flags and reject incompatible layouts explicitly.
+- Verify metadata checksums and expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.
 - Audit cache concurrency (examples above use single-threaded mode).
 - Add reproducible packaging through a separate Homebrew tap after broader validation.

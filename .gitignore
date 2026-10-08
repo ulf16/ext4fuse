@@ -10,3 +10,5 @@ ext4fuse
 *.dSYM/
 
 /.build/
+
+/test/feature-probe

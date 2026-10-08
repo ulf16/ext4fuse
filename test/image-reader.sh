@@ -10,7 +10,7 @@ fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/ext4fuse-images.XXXXXX")
 trap 'rm -rf "$fixture_dir"' EXIT HUP INT TERM
 printf 'ext4 fixture\n' > "$fixture_dir/payload"
 long_name=$(printf '%0255d' 0)
-for block_size in 1024 4096; do
+for block_size in 1024 2048 4096; do
     image="$fixture_dir/ext4-$block_size.img"
     dd if=/dev/zero of="$image" bs=1048576 count=32 2>/dev/null
     "$MKE2FS" -q -F -t ext4 -b "$block_size" "$image"

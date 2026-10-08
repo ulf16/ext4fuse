@@ -11,6 +11,8 @@
 #define _XOPEN_SOURCE 500
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <stdint.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
@@ -91,6 +93,34 @@ int disk_open(const char *path)
         return -errno;
     }
 
+    return 0;
+}
+
+/* Checked reads for pre-mount metadata. Existing reader call sites are audited
+ * separately; do not silently change their assertion-based contracts here. */
+int disk_read_exact(off_t where, size_t size, void *p)
+{
+    unsigned char *out = p;
+    while (size) {
+        ssize_t n = pread(disk_fd, out, size, where);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -errno;
+        }
+        if (n == 0) return -EIO;
+        out += n;
+        where += n;
+        size -= n;
+    }
+    return 0;
+}
+
+int disk_check_size(uint64_t size)
+{
+    struct stat st;
+    if (fstat(disk_fd, &st) < 0) return -errno;
+    /* Device sizes need platform-specific ioctls; only bound regular images. */
+    if (S_ISREG(st.st_mode) && (uint64_t)st.st_size < size) return -EIO;
     return 0;
 }
 

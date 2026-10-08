@@ -17,3 +17,5 @@ jobs:
         run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Test disposable ext4 images without mounting
         run: make test-images FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Reject unsupported features and malformed metadata
+        run: make test-features FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

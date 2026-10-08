@@ -22,6 +22,8 @@ struct disk_ctx {
 };
 
 int disk_open(const char *path);
+int disk_read_exact(off_t where, size_t size, void *p);
+int disk_check_size(uint64_t size);
 int __disk_read(off_t where, size_t size, void *p, const char *func, int line);
 
 int disk_ctx_create(struct disk_ctx *ctx, off_t where, size_t size, uint32_t len);

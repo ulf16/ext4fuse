@@ -19,16 +19,6 @@ void *op_init(struct fuse_conn_info *info)
 {
     INFO("Using FUSE protocol %d.%d", info->proto_major, info->proto_minor);
 
-    if (super_fill() != 0) {
-        ERR("ext4fuse cannot continue");
-        abort();
-    }
-
-    if (super_group_fill() != 0) {
-        ERR("ext4fuse cannot continue");
-        abort();
-    }
-
     if (inode_init() != 0) {
         ERR("inode initialization failed")
         abort();
