@@ -6,3 +6,5 @@ ext4fuse
 /test/logs
 
 /test/image-reader
+
+*.dSYM/
