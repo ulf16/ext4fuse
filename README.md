@@ -1,100 +1,105 @@
-ext4fuse 
-======
-This is a read-only implementation of ext4 for FUSE.  The main reason this
-exists is to be able to read linux partitions from OSX.  However, it should
-work on top of any FUSE implementation.  Linux and FreeBSD have been tested to
-some point and I've heard that OpenSolaris should also work.
+# ext4fuse — Sequoia maintenance fork
 
-Write support will only come if I get the time, knowledge, patience and nerve
-to support it.  Most of them I lack, so it's a long shot.  However, the fact
-that ext4fuse is read-only also means that it's completely safe to use.
+Read-only ext4 access using FUSE, based on [gerard/ext4fuse](https://github.com/gerard/ext4fuse).
+This fork starts with macOS Sequoia 15 on Intel and macFUSE's FUSE 2 compatibility API.
+It does not require a VM. It preserves the upstream GPLv2 license and copyright notices.
 
-## Installation
-### OS X 
-If you use OS X I suggest you rely on the [homebrew project](http://mxcl.github.com/homebrew/).
+## Status
 
-Once you have homebrew installed, simply type the following two commands:
+The first milestone builds and passes disposable-image reader and mounted-access tests
+on Intel macOS 15.8.1 with macFUSE 5.4.0. This is an experimental maintenance fork,
+not a claim that every upstream issue or ext4 feature is fixed.
 
-`$ brew cask install osxfuse`
+Changes so far:
 
-`$ brew install ext4fuse`
+- Fix a stack buffer overflow when listing a valid 255-byte filename.
+- Default macOS deployment target to 15.0 (overridable).
+- Diagnose missing FUSE 2 development metadata and support `PKG_CONFIG`/`FUSE_PKG` overrides.
+- Preserve required build flags when supplying custom `CFLAGS`, including sanitizers.
+- Resolve the SDK's `MIN` macro conflict and quote the fallback version string.
+- Add disposable ext4 image regression tests and Linux CI.
+- Make the legacy test loops propagate failures.
 
-At least on Leopard, you need to add your user to the operator group so you can
-have readonly permissions to the disks.  Use this:
+## Build on Sequoia
 
-`$ sudo dscl . append /Groups/operator GroupMembership <your-user>`
+Install macFUSE from its official installer or Homebrew cask if it is not already installed.
+Use its normal macOS approval process; this project does not change system security settings.
 
-Also, you will need to know the <device> name of your ext4 partition.  Take a
-look at the Mac Disk Utility.  It should be something _like_ `/dev/disk0s5`.
+```sh
+brew install pkgconf e2fsprogs
+# Only if macFUSE is not already installed:
+# brew install --cask macfuse
+make -j4
+```
 
-### FreeBSD 
-Simply install it through the ports tree:
+`pkg-config --modversion fuse` should find the FUSE 2 compatibility library.
+For a nonstandard install, set `PKG_CONFIG_PATH` to the directory containing `fuse.pc`.
+FUSE 3 is not a drop-in replacement for this code's FUSE 2 API.
 
-`$ cd /usr/ports/sysutils/fusefs-ext4fuse && make install clean`
+The binary stays in the checkout; building does not replace an installed ext4fuse.
+For an older macOS target, explicitly set `MACOSX_DEPLOYMENT_TARGET` (not tested here).
 
-Remember that you need the fuse module loaded.  In my experience it doesn't
-load automatically, but then again, I have nearly zero experience with FreeBSD.
+## Tests
 
-### Compiling from source
-If you prefer bleeding edge, get the source, untar it and compile using:
+The new tests use e2fsprogs to create temporary **regular-file images**, never physical disks.
+They check ext4 filesystems with 1 KiB and 4 KiB blocks, exact file contents, partial reads,
+EOF, read-only mode bits, repeated missing-path lookups, and 255-byte directory entries.
 
-`$ make`
+```sh
+export PATH="$(brew --prefix e2fsprogs)/sbin:$PATH"
+make test-images
+```
 
-or in case you are on FreeBSD:
+For sanitizer validation, clean first so every object uses the same instrumentation:
 
-`$ gmake`
+```sh
+make clean
+make -j4 CFLAGS='-O1 -g -fsanitize=address,undefined'
+make test-images CFLAGS='-O1 -g -fsanitize=address,undefined'
+```
 
-You need to have pkg-config for the compilation to work as well as the FUSE
-kernel module.  For OSX you should use fuse4x (notice that fuse4x is also
-available via `brew install`).
+On macOS, separately test the actual macFUSE mount:
 
-## Mounting 
-You can mount a filesystem like this:
+```sh
+./test/mount-smoke.sh
+```
 
-`$ ext4fuse <device> <mountpoint>`
+This checks file contents, missing paths and write rejection, then unmounts the image.
+It requires a working, approved macFUSE installation. CI currently tests the reader on
+Linux without mounting; it does not certify macOS mounting.
 
-If you compiled from source, and you haven't manually installed `ext4fuse` in
-your $PATH, go to the directory where you did the compilation and run this
+The older `make test` / `make test-slow` suites remain available but contain Linux-specific
+mounting tools and privileged operations. They are not the Sequoia validation entry point.
 
-`$ ./ext4fuse <device> <mountpoint>`
+## Mounting real partitions
 
-The <device> should be the partition device and the <mountpoint> is the
-directory where you want to mount your partition.
+Identify the correct **partition** using `diskutil list`. Unmount it before mounting here.
+Create a mount directory and use your checkout's binary:
 
-> On macOS Sierra (10.12) or later, when mounting a filesystem with `sudo`, you need to add the option `-o allow_other` to allow non-root accounts access to the mount. See [this issue](https://github.com/gerard/ext4fuse/issues/36) for details.
+```sh
+./ext4fuse /dev/diskNsM /path/to/mountpoint -s -o ro,defer_permissions
+```
 
-## Reporting bugs 
-If you notice a problem, please file a [bug report](http://github.com/gerard/ext4fuse/issues).
+Replace the placeholders with your actual partition and directory. Raw-device access may
+require `sudo`; a root-owned mount may additionally need macFUSE's `allow_other` option for
+other users. Prefer the disposable-image test before trying a real partition.
+Unmount with `umount /path/to/mountpoint`.
 
-If you have a reproducible problem the easiest for debugging is to share the
-filesystem.  First of all, umount the partition, then you can create a backup
-like this:
+Read-only prevents intentional filesystem writes; it does not guarantee correct parsing
+of every image. Keep backups of important files.
 
-`$ dd if=<device> bs=64K | gzip -c > filesystem.backup.gz`
+## Remaining work
 
-Then, just upload the .gz file somewhere.
+- Reproduce and triage upstream issues individually, including permissions and directory caching.
+- Handle short reads, I/O errors and malformed metadata gracefully instead of assertions.
+- Audit unsupported ext4 feature flags and reject incompatible layouts explicitly.
+- Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.
+- Audit cache concurrency (examples above use single-threaded mode).
+- Add reproducible packaging through a separate Homebrew tap after broader validation.
 
-However, I understand that you generally do *not* want to do that.  In that
-case you can also generate a log file.  Notice that the log file still contains
-the directory listings.
+Write support and an FSKit port are outside the initial milestone. Existing limitations
+include incomplete large-volume addressing; do not assume full support for modern ext4
+features, encryption, or LVM containers.
 
-To get a logfile, you can run ext4fuse like this:
-
-`$ ext4fuse <device> <mountpoint> -o logfile=/dev/stdout`
-
-If you do not want to share the logfile, another option is to provide a
-backtrace with gdb or a coredump (a coredump might contain file data).
-
-Finally, you can always drop a mail:
-  * gerard.lledo@gmail.com
-
-## Limitations
- * All code is religiously Little Endian only.  If you don't know what this
-   means, you are probably OK (ie, you are using an intel or amd cpu).  The
-   code should be better tested on x86-64, you should not be using anything
-   else on modern hardware anyway.
- * Block numbers over 32 bits aren't supported.  You hit those when you reach
-   around the terabyte, and I don't have any way to test that.  It should be
-   quite easy to fix, but I don't feel like spending time on something that
-   neither has a use for me or can be proved to be correct.  I don't have such
-   big disks :P.
+Report reproducible issues to [this fork](https://github.com/ulf16/ext4fuse/issues).
+Do not upload private filesystem images or directory logs to public issues.

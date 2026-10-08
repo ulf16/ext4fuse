@@ -29,7 +29,7 @@ int op_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     DEBUG("readdir");
 
     UNUSED(fi);
-    char name_buf[EXT4_NAME_LEN];
+    char name_buf[EXT4_NAME_LEN + 1];
     struct ext4_dir_entry_2 *dentry = NULL;
     struct ext4_inode inode;
 

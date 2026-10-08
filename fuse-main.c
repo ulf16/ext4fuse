@@ -31,7 +31,7 @@
 #include "types/ext4_super.h"
 
 #ifndef EXT4FUSE_VERSION
-#define EXT4FUSE_VERSION    ext4fuse_unknown_version
+#define EXT4FUSE_VERSION    "ext4fuse_unknown_version"
 #endif
 
 

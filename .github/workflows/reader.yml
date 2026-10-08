@@ -1,0 +1,15 @@
+name: Reader regression tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev pkg-config e2fsprogs
+      - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
+        run: make -j2 CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Test disposable ext4 images without mounting
+        run: make test-images CFLAGS='-O1 -g -fsanitize=address,undefined'
