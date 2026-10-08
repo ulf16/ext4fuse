@@ -9,6 +9,7 @@
 
 
 #include <errno.h>
+#include <sys/stat.h>
 
 #include "common.h"
 #include "inode.h"
@@ -21,7 +22,14 @@ int op_open(const char *path, struct fuse_file_info *fi)
     if((fi->flags & 3) != O_RDONLY)
         return -EACCES;
 
-    fi->fh = inode_get_idx_by_path(path);
+    uint32_t number;
+    int ret = inode_lookup(path, &number);
+    if (ret < 0) return ret;
+    struct ext4_inode inode;
+    ret = inode_get_by_number(number, &inode);
+    if (ret < 0) return ret;
+    if (S_ISDIR(inode.i_mode)) return -EISDIR;
+    fi->fh = number;
     DEBUG("%s is inode %d", path, fi->fh);
 
     return 0;

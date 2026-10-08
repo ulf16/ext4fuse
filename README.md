@@ -13,6 +13,9 @@ not a claim that every upstream issue or ext4 feature is fixed.
 
 Changes so far:
 
+- Validate directory records and bounded extent trees, propagating read errors to FUSE.
+- Return zeroes for sparse holes and unwritten extents, including partial-block reads.
+- Bound symlink reads and report path errors consistently.
 - Reject overlong path components without overflowing the length counter or hanging.
 - Reject unsupported features, unclean volumes, truncated images, and invalid metadata geometry before mounting.
 - Support FUSE 3 and FUSE 2 through small callback adapters.
@@ -127,7 +130,7 @@ Geometry checks cover block sizes (1/2/4 KiB), inode size, group capacities, des
 size and inode table bounds. Descriptor allocations are limited to 256 MiB. Regular
 images shorter than their declared filesystem size are refused; physical-device size
 checking needs platform-specific work. These checks are not a replacement for fsck,
-and parsing errors deeper in directories/extents still need hardening.
+and directory and extent records are also checked on demand. Metadata checksums remain unverified.
 
 ```sh
 make test-features
@@ -141,13 +144,38 @@ the reader leaves the images unchanged. The preflight follows the Linux kernel's
 [group descriptor](https://www.kernel.org/doc/html/latest/filesystems/ext4/group_descr.html)
 documentation.
 
+## Directory and extent validation
+
+Directory records must advance, stay within their block and directory, have aligned
+record lengths, and contain valid names and inode numbers. Invalid offsets and attempts
+to traverse regular files as directories return errors. Deleted records and checksum
+trailers remain readable using the standard linear-directory representation.
+
+Extent headers and entry counts are bounded by their actual container. Depth is limited
+to five; child depth and first-key relationships are checked, along with ordering,
+overlap, physical block ranges, and logical overflow. Only nodes visited by the read
+are validated, not every unused subtree. Unwritten extents and holes return zeroes.
+Legacy direct/indirect block reads also use checked pointers and I/O.
+
+Path lookups currently bypass the old directory cache; this can cost lookup performance.
+FUSE's normal caching remains available. Read errors propagate to callbacks instead of
+being treated as missing files. This is not a complete filesystem integrity check.
+
+```sh
+make test-corruption
+```
+
+This suite compares ordinary and sparse-file reads with e2fsprogs `debugfs`, tests
+malformed records/trees and symlink buffers, and deliberately truncates disposable images
+after preflight to verify that actual short reads return errors. Images are never real disks.
+
 ## Remaining work
 
 - Reproduce and triage upstream issues individually, including permissions and directory caching.
-- Handle short reads, I/O errors and malformed metadata gracefully instead of assertions.
+- Expand malformed-metadata coverage and implement checksum verification.
 - Verify metadata checksums and expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.
-- Audit cache concurrency (examples above use single-threaded mode).
+- Replace the bypassed directory cache with a validated, thread-safe implementation if needed.
 - Add reproducible packaging through a separate Homebrew tap after broader validation.
 
 Write support and an FSKit port are outside the initial milestone. Existing limitations

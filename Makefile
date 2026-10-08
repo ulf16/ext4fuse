@@ -67,7 +67,7 @@ test: $(BINARY)
 	@for T in test/[0-9][0-9][0-9][0-9]-*; do SKIP_SLOW_TESTS=1 ./$$T || exit $$?; done
 
 clean:
-	rm -f *.o $(BINARY) test/image-reader test/feature-probe
+	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe
 	rm -rf test/logs .build
 
 .PHONY: test
@@ -90,3 +90,11 @@ test-features: $(BINARY) test/feature-probe
 	$(PYTHON) test/features.py
 
 .PHONY: test-features
+
+test/corruption-probe: test/corruption-probe.c $(READER_OBJECTS) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/corruption-probe.c $(READER_OBJECTS) $(LDFLAGS)
+
+test-corruption: test/corruption-probe
+	$(PYTHON) test/corruption.py
+
+.PHONY: test-corruption

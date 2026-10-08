@@ -1,101 +1,88 @@
-/*
+/* SPDX-License-Identifier: GPL-2.0-only
  * Copyright (c) 2010, Gerard Lledó Vives, gerard.lledo@gmail.com
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation. See README and COPYING for
- * more details.
+ * Derived from Gerard Lledó Vives's ext4fuse extent reader (2010).
  */
-
-
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
 #include "disk.h"
 #include "extents.h"
-#include "logging.h"
 #include "super.h"
 
-/* Calculates the physical block from a given logical block and extent */
-static uint64_t extent_get_block_from_ees(struct ext4_extent *ee, uint32_t n_ee, uint32_t lblock, uint32_t *len)
+static int walk(const void *node, size_t capacity, uint32_t logical,
+                uint64_t lower, uint64_t upper, int expected_depth,
+                uint64_t *physical, uint32_t *run)
 {
-    uint32_t block_ext_index = 0;
-    uint32_t block_ext_offset = 0;
-    uint32_t i;
-
-    DEBUG("Extent contains %d entries", n_ee);
-    DEBUG("Looking for LBlock %d", lblock);
-
-    /* Skip to the right extent entry */
-    for (i = 0; i < n_ee; i++) {
-        ASSERT(ee[i].ee_start_hi == 0);
-
-        if (ee[i].ee_block + ee[i].ee_len > lblock) {
-            block_ext_index = i;
-            block_ext_offset = lblock - ee[i].ee_block;
-            if (len) *len = ee[i].ee_block + ee[i].ee_len - lblock;
-            break;
-        }
+    struct ext4_extent_header h;
+    if (capacity < sizeof(h)) return -EIO;
+    memcpy(&h, node, sizeof(h));
+    size_t slots = (capacity - sizeof(h)) / sizeof(struct ext4_extent);
+    if (h.eh_magic != EXT4_EXT_MAGIC || !h.eh_max || h.eh_max > slots ||
+        h.eh_entries > h.eh_max || h.eh_depth > 5 ||
+        (expected_depth >= 0 && h.eh_depth != expected_depth)) return -EIO;
+    const unsigned char *entries = (const unsigned char *)node + sizeof(h);
+    if (expected_depth >= 0) {
+        uint32_t first_key;
+        if (!h.eh_entries) return -EIO;
+        memcpy(&first_key, entries, sizeof(first_key));
+        if (first_key != lower) return -EIO;
     }
-
-    if (n_ee == i) {
-        DEBUG("Extent [%d] doesn't contain block", block_ext_index);
+    uint64_t previous = lower;
+    int selected = -1;
+    if (!h.eh_depth) {
+        for (unsigned i = 0; i < h.eh_entries; i++) {
+            struct ext4_extent e;
+            memcpy(&e, entries + i * sizeof(e), sizeof(e));
+            uint32_t length = e.ee_len > 32768 ? e.ee_len - 32768 : e.ee_len;
+            uint64_t end = (uint64_t)e.ee_block + length;
+            if (!length || e.ee_block < previous || end > upper ||
+                e.ee_start_hi || !e.ee_start_lo || e.ee_start_lo >= super_block_count() ||
+                length > super_block_count() - e.ee_start_lo) return -EIO;
+            previous = end;
+            if (logical >= e.ee_block && logical < end) selected = i;
+        }
+        if (selected < 0) { *physical = 0; *run = 1; return 0; }
+        struct ext4_extent e;
+        memcpy(&e, entries + selected * sizeof(e), sizeof(e));
+        uint32_t length = e.ee_len > 32768 ? e.ee_len - 32768 : e.ee_len;
+        uint32_t delta = logical - e.ee_block;
+        *physical = e.ee_len > 32768 ? 0 : (uint64_t)e.ee_start_lo + delta;
+        *run = length - delta;
         return 0;
-    } else {
-        DEBUG("Block located [%d:%d]", block_ext_index, block_ext_offset);
-        return ee[block_ext_index].ee_start_lo + block_ext_offset;
     }
-}
-
-/* Fetches a block that stores extent info and returns an array of extents
- * _with_ its header. */
-static void *extent_get_extents_in_block(uint32_t block)
-{
-    struct ext4_extent_header eh;
-    void *exts;
-
-    disk_read(BLOCKS2BYTES(block), sizeof(struct ext4_extent_header), &eh);
-
-    uint32_t extents_len = eh.eh_entries * sizeof(struct ext4_extent)
-                                         + sizeof(struct ext4_extent_header);
-
-    exts = malloc(extents_len);
-
-    disk_read(BLOCKS2BYTES(block), extents_len, exts);
-
-    return exts;
-}
-
-/* Returns the physical block number */
-uint64_t extent_get_pblock(void *extents, uint32_t lblock, uint32_t *len)
-{
-    struct ext4_extent_header *eh = extents;
-    struct ext4_extent *ee_array;
-    uint64_t ret;
-
-    ASSERT(eh->eh_magic == EXT4_EXT_MAGIC);
-
-    if (eh->eh_depth == 0) {
-        ee_array = extents + sizeof(struct ext4_extent_header);
-        ret = extent_get_block_from_ees(ee_array, eh->eh_entries, lblock, len);
-    } else {
-        struct ext4_extent_idx *ei_array = extents + sizeof(struct ext4_extent_header);
-        struct ext4_extent_idx *recurse_ei = NULL;
-
-        for (int i = 0; i < eh->eh_entries; i++) {
-            ei_array = extents + sizeof(struct ext4_extent_header);
-            ASSERT(ei_array[i].ei_leaf_hi == 0);
-
-            if (ei_array[i].ei_block > lblock) {
-                break;
-            }
-
-            recurse_ei = &ei_array[i];
-        }
-
-        ASSERT(recurse_ei);
-
-        void *leaf_extents = extent_get_extents_in_block(recurse_ei->ei_leaf_lo);
-        ret = extent_get_pblock(leaf_extents, lblock, len);
-        free(leaf_extents);
+    if (!h.eh_entries) return -EIO;
+    for (unsigned i = 0; i < h.eh_entries; i++) {
+        struct ext4_extent_idx e;
+        memcpy(&e, entries + i * sizeof(e), sizeof(e));
+        if (e.ei_block < lower || e.ei_block >= upper ||
+            (i && e.ei_block <= previous) || e.ei_leaf_hi || !e.ei_leaf_lo ||
+            e.ei_leaf_lo >= super_block_count()) return -EIO;
+        previous = e.ei_block;
+        if (e.ei_block <= logical) selected = i;
     }
-
+    if (selected < 0) { *physical = 0; *run = 1; return 0; }
+    struct ext4_extent_idx chosen, next;
+    memcpy(&chosen, entries + selected * sizeof(chosen), sizeof(chosen));
+    if (selected + 1 < h.eh_entries) {
+        memcpy(&next, entries + (selected + 1) * sizeof(next), sizeof(next));
+        upper = next.ei_block;
+    }
+    void *child = malloc(BLOCK_SIZE);
+    if (!child) return -ENOMEM;
+    int ret = disk_read_exact(BLOCKS2BYTES(chosen.ei_leaf_lo), BLOCK_SIZE, child);
+    if (!ret) ret = walk(child, BLOCK_SIZE, logical, chosen.ei_block, upper,
+                         h.eh_depth - 1, physical, run);
+    free(child);
     return ret;
+}
+
+int extent_get_pblock(const void *node, size_t capacity, uint32_t logical,
+                      uint64_t *physical, uint32_t *run)
+{
+    uint32_t local_run;
+    if (!run) run = &local_run;
+    *physical = 0;
+    *run = 1;
+    return walk(node, capacity, logical, 0, (uint64_t)UINT32_MAX + 1,
+                -1, physical, run);
 }

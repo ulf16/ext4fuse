@@ -16,12 +16,16 @@ static inline uint64_t inode_get_size(struct ext4_inode *inode)
     return ((uint64_t)inode->i_size_high << 32) | inode->i_size_lo;
 }
 
-uint64_t inode_get_data_pblock(struct ext4_inode *inode, uint32_t lblock, uint32_t *extent_len);
+int inode_get_data_pblock(struct ext4_inode *inode, uint32_t lblock,
+                          uint64_t *pblock, uint32_t *extent_len);
+int inode_read_data(struct ext4_inode *inode, char *buf, size_t size, off_t offset);
+int inode_lookup(const char *path, uint32_t *number);
 
 struct inode_dir_ctx *inode_dir_ctx_get(void);
 void inode_dir_ctx_put(struct inode_dir_ctx *);
-void inode_dir_ctx_reset(struct inode_dir_ctx *ctx, struct ext4_inode *inode);
-struct ext4_dir_entry_2 *inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ctx *ctx);
+int inode_dir_ctx_reset(struct inode_dir_ctx *ctx, struct ext4_inode *inode);
+int inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ctx *ctx,
+                     struct ext4_dir_entry_2 **entry);
 
 int inode_get_by_number(uint32_t n, struct ext4_inode *inode);
 int inode_get_by_path(const char *path, struct ext4_inode *inode);

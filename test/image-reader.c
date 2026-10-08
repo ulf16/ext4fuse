@@ -57,9 +57,9 @@ int main(int argc, char **argv)
     overlong[0] = '/';
     memset(overlong + 1, 'x', 257);
     overlong[258] = 0;
-    assert(op_getattr(overlong, &st) == -ENOENT);
+    assert(op_getattr(overlong, &st) == -ENAMETOOLONG);
     overlong[257] = 0;
-    assert(op_getattr(overlong, &st) == -ENOENT);
+    assert(op_getattr(overlong, &st) == -ENAMETOOLONG);
     assert(op_getattr("/payload", &st) == 0);
     puts("PASS: content, offset/EOF, read-only modes, missing/overlong paths, 255-byte filename");
     return 0;

@@ -9,6 +9,7 @@
 
 
 #include <string.h>
+#include <errno.h>
 #include <fuse.h>
 
 #include "common.h"
@@ -41,8 +42,9 @@ int op_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     }
 
     struct inode_dir_ctx *dctx = inode_dir_ctx_get();
-    inode_dir_ctx_reset(dctx, &inode);
-    while ((dentry = inode_dentry_get(&inode, offset, dctx))) {
+    ret = inode_dir_ctx_reset(dctx, &inode);
+    if (ret < 0) { inode_dir_ctx_put(dctx); return ret; }
+    while ((ret = inode_dentry_get(&inode, offset, dctx, &dentry)) > 0) {
         offset += dentry->rec_len;
 
         if (!dentry->inode) {
@@ -64,5 +66,5 @@ int op_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     }
     inode_dir_ctx_put(dctx);
 
-    return 0;
+    return ret < 0 ? ret : 0;
 }

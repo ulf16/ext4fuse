@@ -12,3 +12,5 @@ ext4fuse
 /.build/
 
 /test/feature-probe
+
+/test/corruption-probe

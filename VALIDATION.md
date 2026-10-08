@@ -50,3 +50,17 @@ checks cover 256- and 257-byte components; both mounted APIs pass long-name list
 - Features accepted by preflight are documented separately from full feature certification.
 - 97 feature/geometry acceptance and rejection checks pass locally under sanitizers
   for each FUSE API. Both mounted smoke tests pass after the preflight change.
+
+## Directory and extent hardening — 2026-10-08
+
+- Checked directory records (length, alignment, block boundaries, names and inode ranges).
+- Checked extent headers, depth, parent/child key agreement, ordering, overlaps and pointers.
+- Checked legacy block mapping and inode reads; I/O errors propagate to FUSE callbacks.
+- Sparse gaps/unwritten extents and partial-block reads return zeroes.
+- Symlink buffers are bounded; missing paths and non-directory traversal report errors.
+- The old directory cache is bypassed pending a separate correctness/concurrency audit.
+- Disposable-image tests compare normal/sparse/fragmented contents with debugfs and use malformed
+  trees, directory records, cyclic pointers and deliberate truncation after preflight.
+- Checksums and unused extent subtrees are not verified. No real Linux disks were used.
+- All 78 hardening checks pass with AddressSanitizer and UndefinedBehaviorSanitizer
+  for both FUSE APIs; existing 97 preflight checks and both mounted smoke tests pass.

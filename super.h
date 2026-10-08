@@ -19,6 +19,8 @@
 
 /* struct ext4_super */
 uint32_t super_block_size(void);
+uint32_t super_block_count(void);
+uint32_t super_inode_count(void);
 uint32_t super_inodes_per_group(void);
 uint32_t super_inode_size(void);
 int super_fill(void);

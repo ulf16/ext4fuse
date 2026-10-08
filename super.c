@@ -79,6 +79,9 @@ static uint32_t super_group_desc_size(void)
         ? super.s_desc_size : GROUP_DESC_MIN_SIZE;
 }
 
+uint32_t super_block_count(void) { return super.s_blocks_count_lo; }
+uint32_t super_inode_count(void) { return super.s_inodes_count; }
+
 uint32_t super_block_size(void) {
     return ((uint64_t)1) << (super.s_log_block_size + 10);
 }
