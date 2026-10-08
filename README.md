@@ -13,6 +13,8 @@ not a claim that every upstream issue or ext4 feature is fixed.
 
 Changes so far:
 
+- Verify metadata checksums for superblocks, descriptors, inodes, directories and traversed extents.
+
 - Validate directory records and bounded extent trees, propagating read errors to FUSE.
 - Return zeroes for sparse holes and unwritten extents, including partial-block reads.
 - Bound symlink reads and report path errors consistently.
@@ -27,6 +29,23 @@ Changes so far:
 - Resolve the SDK's `MIN` macro conflict and quote the fallback version string.
 - Add disposable ext4 image regression tests and Linux CI.
 - Make the legacy test loops propagate failures.
+
+## Install with Homebrew
+
+The [ulf16/ext4fuse tap](https://github.com/ulf16/homebrew-ext4fuse) packages a pinned,
+checksummed source snapshot. It requires macOS Sequoia or newer and macFUSE's FUSE 3
+development files. Install macFUSE if needed, then:
+
+```sh
+brew install ulf16/ext4fuse/ext4fuse-maintained
+brew test ulf16/ext4fuse/ext4fuse-maintained
+```
+
+Run `ext4fuse-maintained` for the packaged fork. It coexists with an older `ext4fuse`
+installation. The package builds from source; no bottles are provided. Its Homebrew
+test checks version and corrupted-image rejection without mounting. Tested on Intel
+Sequoia; Apple Silicon is not yet validated. See the tap's README for macFUSE setup,
+mounting, upgrade and removal instructions.
 
 ## Build on Sequoia
 
