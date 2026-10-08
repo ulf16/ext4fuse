@@ -86,3 +86,21 @@ checks cover 256- and 257-byte components; both mounted APIs pass long-name list
 - Hidden directories, missing-path listings and colon-filename upstream reports are not
   reproduced on this Intel Sequoia/macFUSE setup. Other platforms/Finder remain untested.
 - No UID translation, Linux ACL enforcement or cross-user certification is claimed.
+
+## Large-file and allocation milestone — 2026-10-08
+
+- Decode Linux huge-file 48-bit block counts and filesystem-block units into POSIX
+  512-byte st_blocks; report block-size hints and reject stat sizes above INT64_MAX.
+- 89 portable checks cover real ext4/ext2 logical files over 4GiB, direct through
+  triple-indirect transition data/holes, offsets/EOF, real depth-two extent traversal,
+  debugfs mapping/allocation/dump comparisons, and synthetic huge-file count encodings.
+- The slow mounted test compares full SHA-256 for a 5GiB+13-byte file, debugfs output,
+  and a sparse host copy. It deliberately avoids physically allocating a 5GiB copy.
+- Physical block addresses remain limited to 32 bits. No real-volume or maximum-depth
+  certification is claimed; synthetic accounting variants do not represent huge allocation.
+- Return validated contiguous hole runs, capped at the next extent or subtree boundary.
+- Replace bit-at-a-time CRC32C with an immutable Castagnoli table; verify standard
+  CRC vectors/chaining and e2fsprogs-generated metadata before mounted validation.
+- Confirmed macFUSE 5.4.0 derives mounted st_blocks from logical size; the callback
+  matches debugfs (80 sectors versus 10485768 mounted). Track macFUSE issue #1121;
+  this remains a provider limitation, not a claim of corrected macOS du output.

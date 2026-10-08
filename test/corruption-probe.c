@@ -9,6 +9,7 @@
 #include "ops.h"
 #include "super.h"
 #include "logging.h"
+#include "checksum.h"
 static int fill(void *buf, const char *name, const struct stat *st, off_t off
 #if FUSE_MAJOR_VERSION >= 3
                 , enum fuse_fill_dir_flags flags
@@ -25,6 +26,10 @@ int main(int argc, char **argv)
 {
     if (argc < 4 || logging_open("/dev/null") < 0 || disk_open(argv[1]) < 0 ||
         super_fill() < 0 || super_group_fill() < 0 || inode_init() < 0) return 2;
+    /* Standard CRC32C check vector, with ext4's uncomplemented result. */
+    if (checksum_crc32c(~0U,"123456789",9) != 0x1cf96d7cU ||
+        checksum_crc32c(checksum_crc32c(~0U,"1234",4),"56789",5) != 0x1cf96d7cU ||
+        checksum_crc16(0xffff,"123456789",9) != 0x4b37) return 2;
     int ret;
     char buf[64];
     off_t offset = argc > 4 ? strtoll(argv[4], NULL, 10) : 0;
@@ -37,6 +42,27 @@ int main(int argc, char **argv)
         uint64_t physical;
         if (ret < 0 || inode_get_data_pblock(&inode, 0, &physical, NULL) < 0 || !physical) return 2;
         if (truncate(argv[1], BLOCKS2BYTES(physical) + 10) < 0) return 2;
+    }
+    if (!strcmp(argv[2], "bulk")) {
+        size_t size = argc > 5 ? strtoul(argv[5],NULL,10) : 8U*1024*1024;
+        if (!size || size > 16U*1024*1024) return 2;
+        char *data = malloc(size);
+        if (!data) return 2;
+        ret = op_open(argv[3], &fi);
+        if (!ret) ret = op_read(argv[3], data, size, offset, &fi);
+        printf("%d\n",ret);
+        fflush(stdout);
+        if (ret > 0) fwrite(data,1,ret,stdout);
+        free(data);
+        return 0;
+    }
+    if (!strcmp(argv[2], "allocation")) {
+        struct stat st;
+        ret = op_getattr(argv[3], &st);
+        printf("%d\n",ret);
+        if (!ret) printf("%llu %llu %llu\n",(unsigned long long)st.st_size,
+                         (unsigned long long)st.st_blocks,(unsigned long long)st.st_blksize);
+        return 0;
     }
     if (!strcmp(argv[2], "stat")) {
         struct stat st;

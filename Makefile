@@ -108,3 +108,9 @@ test-attributes: test/corruption-probe
 	$(PYTHON) test/attributes.py
 
 .PHONY: test-attributes
+
+
+test-large: test/corruption-probe
+	$(PYTHON) test/large-files.py
+
+.PHONY: test-large

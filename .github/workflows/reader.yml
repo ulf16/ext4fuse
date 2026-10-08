@@ -25,3 +25,5 @@ jobs:
         run: make test-checksums FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify ownership and upstream path regressions
         run: make test-attributes FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify large sparse files and indirect/extent boundaries
+        run: make test-large FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

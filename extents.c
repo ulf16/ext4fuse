@@ -34,6 +34,7 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
     }
     uint64_t previous = lower;
     int selected = -1;
+    uint64_t gap_end = upper;
     if (!h.eh_depth) {
         for (unsigned i = 0; i < h.eh_entries; i++) {
             struct ext4_extent e;
@@ -44,9 +45,15 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
                 e.ee_start_hi || !e.ee_start_lo || e.ee_start_lo >= super_block_count() ||
                 length > super_block_count() - e.ee_start_lo) return -EIO;
             previous = end;
+            if (e.ee_block > logical && e.ee_block < gap_end) gap_end = e.ee_block;
             if (logical >= e.ee_block && logical < end) selected = i;
         }
-        if (selected < 0) { *physical = 0; *run = 1; return 0; }
+        if (selected < 0) {
+            *physical = 0;
+            uint64_t length = gap_end - logical;
+            *run = length > UINT32_MAX ? UINT32_MAX : length;
+            return *run ? 0 : -EIO;
+        }
         struct ext4_extent e;
         memcpy(&e, entries + selected * sizeof(e), sizeof(e));
         uint32_t length = e.ee_len > 32768 ? e.ee_len - 32768 : e.ee_len;
@@ -65,7 +72,13 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
         previous = e.ei_block;
         if (e.ei_block <= logical) selected = i;
     }
-    if (selected < 0) { *physical = 0; *run = 1; return 0; }
+    if (selected < 0) {
+        uint32_t first;
+        memcpy(&first, entries, sizeof(first));
+        *physical = 0;
+        *run = first - logical;
+        return *run ? 0 : -EIO;
+    }
     struct ext4_extent_idx chosen, next;
     memcpy(&chosen, entries + selected * sizeof(chosen), sizeof(chosen));
     if (selected + 1 < h.eh_entries) {

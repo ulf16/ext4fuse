@@ -11,6 +11,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <errno.h>
+#include <stdint.h>
 
 #include "inode.h"
 #include "logging.h"
@@ -36,8 +38,17 @@ int op_getattr(const char *path, struct stat *stbuf)
 
     stbuf->st_mode = inode.i_mode & ~0222;
     stbuf->st_nlink = inode.i_links_count;
-    stbuf->st_size = inode_get_size(&inode);
-    stbuf->st_blocks = inode.i_blocks_lo;
+    uint64_t size = inode_get_size(&inode);
+    if (size > INT64_MAX) return -EOVERFLOW;
+    stbuf->st_size = size;
+    uint64_t blocks = inode.i_blocks_lo;
+    if (super_huge_file() && super_linux_inode_format()) {
+        blocks |= (uint64_t)inode.osd2.linux2.l_i_blocks_high << 32;
+        if (inode.i_flags & EXT4_HUGE_FILE_FL) blocks *= BLOCK_SIZE / 512;
+    }
+    /* POSIX st_blocks always counts 512-byte units, even for huge-file inodes. */
+    stbuf->st_blocks = blocks;
+    stbuf->st_blksize = BLOCK_SIZE;
     stbuf->st_ino = number;
     stbuf->st_uid = inode.i_uid;
     stbuf->st_gid = inode.i_gid;

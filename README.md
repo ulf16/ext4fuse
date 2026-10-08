@@ -165,8 +165,7 @@ Features permitted by preflight include filetype, extents, flex_bg, csum_seed, a
 64bit descriptors **with 32-bit block addressing**. The usual sparse_super, large_file,
 huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
-extended attributes are not exposed, and large
-file allocation statistics still need an audit.
+extended attributes are not exposed, and large-volume addressing remains limited.
 
 Encryption, casefold, inline_data, meta_bg, bigalloc, largedir, ea_inode, mmp, dirdata,
 compression, external journal devices, shared_blocks, verity, and other unrecognized
@@ -246,10 +245,47 @@ This suite compares ordinary and sparse-file reads with e2fsprogs `debugfs`, tes
 malformed records/trees and symlink buffers, and deliberately truncates disposable images
 after preflight to verify that actual short reads return errors. Images are never real disks.
 
+## Large-file validation and allocation reporting
+
+Logical file sizes use the high and low inode size words; sizes beyond signed 64-bit
+`off_t` return an overflow error. Linux-format `huge_file` block counts use both
+48-bit count words and, when the inode huge-file flag is set, convert filesystem
+blocks into the 512-byte units required by `st_blocks`. This reports allocated blocks,
+not the logical size of a sparse file.
+
+```sh
+make test-large
+# Slow macOS integration test: reads/hashes a full 5GiB file and preserves copy holes.
+./test/mount-large.sh
+```
+
+The portable suite creates sparse ext4 and ext2 files larger than 4GiB inside small
+images, checks data and holes across direct/single/double/triple-indirect boundaries,
+and compares sizes, allocation and mappings with `debugfs`. A fragmented ext4 file
+requires a real depth-two extent tree and is compared with a `debugfs` dump. Additional
+metadata-only count variants exercise huge-file accounting; they are synthetic
+encodings, not evidence of physically allocating huge amounts of storage.
+
+CRC32C uses an immutable lookup table, checked against standard vectors and real
+e2fsprogs metadata fixtures. Sparse hole runs stop at validated extent/subtree boundaries, avoiding repeated
+metadata reads and checksums for every zero-filled block.
+
+On macFUSE 5.4.0, mounted `stat`/`du` derive allocation from logical size even when
+our callback supplies the correct sparse count. This matches the open
+[macFUSE sparse-file report](https://github.com/macfuse/macfuse/issues/1121).
+The mounted test explicitly records this provider limitation and checks the callback
+against `debugfs`; it does not claim accurate macOS `du` output or SEEK_HOLE support.
+The test's sparse copy skips zero-filled chunks rather than relying on SEEK_HOLE.
+
+The mounted test hashes every byte of a 5GiB+13-byte sparse file through FUSE, hashes
+independent `debugfs cat` output, and verifies a sparse host copy against both. It uses
+no real disks. Testing large logical files does not remove the 32-bit physical block
+address limit or certify all volumes, maximum extent depths, or legacy file-size limits.
+
 ## Remaining work
 
 - Reproduce remaining upstream reports; expand supplementary-group, ACL and cross-user tests.
-- Expand malformed-metadata coverage and audit filesystem allocation statistics.
+- Expand malformed-metadata coverage and physical large-volume validation.
 - Expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.
 - Replace the bypassed directory cache with a validated, thread-safe implementation if needed.
