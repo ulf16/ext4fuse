@@ -25,6 +25,7 @@ uint32_t super_inodes_per_group(void);
 uint32_t super_inode_size(void);
 int super_fill(void);
 int super_metadata_csum(void);
+int super_linux_inode_format(void);
 uint32_t super_checksum_seed(void);
 
 /* struct ext4_group_desc */

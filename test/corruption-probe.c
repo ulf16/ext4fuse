@@ -38,6 +38,15 @@ int main(int argc, char **argv)
         if (ret < 0 || inode_get_data_pblock(&inode, 0, &physical, NULL) < 0 || !physical) return 2;
         if (truncate(argv[1], BLOCKS2BYTES(physical) + 10) < 0) return 2;
     }
+    if (!strcmp(argv[2], "stat")) {
+        struct stat st;
+        ret = op_getattr(argv[3], &st);
+        printf("%d\n", ret);
+        if (!ret) printf("%llu %llu %o %llu\n", (unsigned long long)st.st_uid,
+                        (unsigned long long)st.st_gid, st.st_mode,
+                        (unsigned long long)st.st_ino);
+        return 0;
+    }
     if (!strcmp(argv[2], "list") || !strcmp(argv[2], "truncate-list")) ret = op_readdir(argv[3], NULL, fill, offset, &fi);
     else if (!strcmp(argv[2], "lookup")) { struct ext4_inode inode; ret = inode_get_by_path(argv[3], &inode); }
     else if (!strcmp(argv[2], "link")) {

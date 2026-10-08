@@ -64,6 +64,7 @@ static struct ext4_group_desc *gdesc_table;
 static uint32_t csum_seed;
 int super_metadata_csum(void) { return !!(super.s_feature_ro_compat & 0x400); }
 uint32_t super_checksum_seed(void) { return csum_seed; }
+int super_linux_inode_format(void) { return super.s_creator_os == 0; }
 
 
 

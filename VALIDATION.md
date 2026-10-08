@@ -74,3 +74,15 @@ checks cover 256- and 257-byte components; both mounted APIs pass long-name list
 - No file-data, bitmap, xattr, journal, backup, or unused-subtree checksum certification.
 - 75 checksum checks pass locally under ASan/UBSan for both FUSE APIs, alongside
   the existing 97 preflight and 78 structural checks. Both macFUSE mount tests pass.
+
+## Ownership and upstream path regressions — 2026-10-08
+
+- Preserve Linux UID/GID high words and expose the inode number through getattr.
+- 35 portable tests cover owner/group IDs up to 32 bits, read-only modes, inode identity,
+  hidden/space/colon names, repeated missing paths and non-directory errors, for both APIs.
+- Both macFUSE APIs pass expanded mounted tests under defer_permissions and
+  default_permissions. Strict tests reject foreign private files whose low UID matches
+  the mounting user, mode-zero files, and traversal through mode-zero directories.
+- Hidden directories, missing-path listings and colon-filename upstream reports are not
+  reproduced on this Intel Sequoia/macFUSE setup. Other platforms/Finder remain untested.
+- No UID translation, Linux ACL enforcement or cross-user certification is claimed.

@@ -14,6 +14,7 @@
 
 #include "inode.h"
 #include "logging.h"
+#include "super.h"
 
 int op_getattr(const char *path, struct stat *stbuf)
 {
@@ -23,7 +24,9 @@ int op_getattr(const char *path, struct stat *stbuf)
     DEBUG("getattr(%s)", path);
 
     memset(stbuf, 0, sizeof(struct stat));
-    ret = inode_get_by_path(path, &inode);
+    uint32_t number;
+    ret = inode_lookup(path, &number);
+    if (!ret) ret = inode_get_by_number(number, &inode);
 
     if (ret < 0) {
         return ret;
@@ -35,8 +38,13 @@ int op_getattr(const char *path, struct stat *stbuf)
     stbuf->st_nlink = inode.i_links_count;
     stbuf->st_size = inode_get_size(&inode);
     stbuf->st_blocks = inode.i_blocks_lo;
+    stbuf->st_ino = number;
     stbuf->st_uid = inode.i_uid;
     stbuf->st_gid = inode.i_gid;
+    if (super_linux_inode_format()) {
+        stbuf->st_uid |= (uint32_t)inode.osd2.linux2.l_i_uid_high << 16;
+        stbuf->st_gid |= (uint32_t)inode.osd2.linux2.l_i_gid_high << 16;
+    }
     stbuf->st_atime = inode.i_atime;
     stbuf->st_mtime = inode.i_mtime;
     stbuf->st_ctime = inode.i_ctime;

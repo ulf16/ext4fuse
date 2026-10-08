@@ -15,6 +15,7 @@ Changes so far:
 
 - Verify metadata checksums for superblocks, descriptors, inodes, directories and traversed extents.
 
+- Preserve full Linux UID/GID ownership and inode numbers; regress hidden/missing/colon paths.
 - Validate directory records and bounded extent trees, propagating read errors to FUSE.
 - Return zeroes for sparse holes and unwritten extents, including partial-block reads.
 - Bound symlink reads and report path errors consistently.
@@ -111,7 +112,7 @@ Identify the correct **partition** using `diskutil list`. Unmount it before moun
 Create a mount directory and use your checkout's binary:
 
 ```sh
-./ext4fuse /dev/diskNsM /path/to/mountpoint -s -o ro,defer_permissions
+./ext4fuse /dev/diskNsM /path/to/mountpoint -s -o ro,default_permissions
 ```
 
 Replace the placeholders with your actual partition and directory. Raw-device access may
@@ -121,6 +122,37 @@ Unmount with `umount /path/to/mountpoint`.
 
 Read-only prevents intentional filesystem writes; it does not guarantee correct parsing
 of every image. Keep backups of important files.
+
+## Ownership and permission modes
+
+Linux-format inodes report the full 32-bit UID/GID, with no translation to local users.
+Write mode bits are cleared, and mounts remain read-only. Numeric Linux owners often
+have no matching macOS account. Use `default_permissions` to have the kernel enforce
+reported Unix owner/group/mode bits. The mounted tests verify access to the mounting
+user's private file and rejection of foreign-owned private files, mode-zero files,
+and traversal through mode-zero directories.
+
+For intentional data recovery where Linux permissions prevent access, macOS's
+`defer_permissions` bypasses kernel checks; this reader does not independently enforce
+read permissions. It therefore permits the mounting user to read mode-zero and foreign
+private files. Do not combine that recovery mode with `allow_other` when access should
+remain private. `allow_other` separately expands who can access the mount.
+See [macFUSE's mount options](https://github.com/macfuse/macfuse/wiki/Mount-Options).
+Linux ACLs are not exposed or enforced by this reader; mode checks are not full Linux
+ACL equivalence. Non-Linux inode ownership layouts remain unaudited.
+
+```sh
+make test-attributes
+./test/mount-smoke.sh
+MOUNT_OPTIONS=ro,default_permissions ./test/mount-smoke.sh
+# Test an installed package instead of the checkout binary:
+READER="$(command -v ext4fuse-maintained)" ./test/mount-smoke.sh
+```
+
+Mounted regressions cover hidden directories/files, repeated missing-path operations,
+and literal colon filenames. The original upstream reports are not reproduced on
+Intel Sequoia/macFUSE 5.4.0 with either FUSE API. This does not certify older macOS
+versions, Finder behavior, or cross-user/ACL access.
 
 ## Feature and metadata preflight
 
@@ -216,12 +248,12 @@ after preflight to verify that actual short reads return errors. Images are neve
 
 ## Remaining work
 
-- Reproduce and triage upstream issues individually, including permissions and directory caching.
+- Reproduce remaining upstream reports; expand supplementary-group, ACL and cross-user tests.
 - Expand malformed-metadata coverage and audit filesystem allocation statistics.
 - Expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.
 - Replace the bypassed directory cache with a validated, thread-safe implementation if needed.
-- Add reproducible packaging through a separate Homebrew tap after broader validation.
+- Broaden platform and real-filesystem validation of the published Homebrew package.
 
 Write support and an FSKit port are outside the initial milestone. Existing limitations
 include incomplete large-volume addressing; do not assume full support for modern ext4

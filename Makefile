@@ -103,3 +103,8 @@ test-checksums: test/corruption-probe
 	$(PYTHON) test/checksums.py
 
 .PHONY: test-checksums
+
+test-attributes: test/corruption-probe
+	$(PYTHON) test/attributes.py
+
+.PHONY: test-attributes
