@@ -10,6 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+/* Linux kernel typedefs must precede this project's legacy __u* aliases. */
+#ifdef __linux__
+#include <linux/fs.h>
+#undef BLOCK_SIZE
+#endif
 #include "inode.h"
 #include "ops.h"
 #include "logging.h"
