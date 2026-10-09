@@ -60,6 +60,7 @@
 #define EXT4_EXTENTS_FL                 0x00080000 /* Inode uses extents */
 #define EXT4_EA_INODE_FL                0x00200000 /* Inode used for large EA */
 #define EXT4_EOFBLOCKS_FL               0x00400000 /* Blocks allocated beyond EOF */
+#define EXT4_INLINE_DATA_FL            0x10000000 /* Data stored in inode body */
 #define EXT4_RESERVED_FL                0x80000000 /* reserved for ext4 lib */
 
 
@@ -122,6 +123,8 @@ struct ext4_inode {
 	__le32  i_version_hi;	/* high 32 bits for 64-bit version */
     /* Reader-only state, never part of the on-disk inode. */
     uint32_t reader_csum_seed;
+    uint32_t reader_inline_size;
+    unsigned char reader_inline[4096];
 };
 
 #endif

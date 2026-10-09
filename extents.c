@@ -42,8 +42,9 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
             uint32_t length = e.ee_len > 32768 ? e.ee_len - 32768 : e.ee_len;
             uint64_t end = (uint64_t)e.ee_block + length;
             if (!length || e.ee_block < previous || end > upper ||
-                e.ee_start_hi || !e.ee_start_lo || e.ee_start_lo >= super_block_count() ||
-                length > super_block_count() - e.ee_start_lo) return -EIO;
+                !(((uint64_t)e.ee_start_hi << 32) | e.ee_start_lo) ||
+                (((uint64_t)e.ee_start_hi << 32) | e.ee_start_lo) >= super_block_count() ||
+                length > super_block_count() - (((uint64_t)e.ee_start_hi << 32) | e.ee_start_lo)) return -EIO;
             previous = end;
             if (e.ee_block > logical && e.ee_block < gap_end) gap_end = e.ee_block;
             if (logical >= e.ee_block && logical < end) selected = i;
@@ -58,7 +59,7 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
         memcpy(&e, entries + selected * sizeof(e), sizeof(e));
         uint32_t length = e.ee_len > 32768 ? e.ee_len - 32768 : e.ee_len;
         uint32_t delta = logical - e.ee_block;
-        *physical = e.ee_len > 32768 ? 0 : (uint64_t)e.ee_start_lo + delta;
+        *physical = e.ee_len > 32768 ? 0 : (((uint64_t)e.ee_start_hi << 32) | e.ee_start_lo) + delta;
         *run = length - delta;
         return 0;
     }
@@ -67,8 +68,9 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
         struct ext4_extent_idx e;
         memcpy(&e, entries + i * sizeof(e), sizeof(e));
         if (e.ei_block < lower || e.ei_block >= upper ||
-            (i && e.ei_block <= previous) || e.ei_leaf_hi || !e.ei_leaf_lo ||
-            e.ei_leaf_lo >= super_block_count()) return -EIO;
+            (i && e.ei_block <= previous) ||
+            !(((uint64_t)e.ei_leaf_hi << 32) | e.ei_leaf_lo) ||
+            (((uint64_t)e.ei_leaf_hi << 32) | e.ei_leaf_lo) >= super_block_count()) return -EIO;
         previous = e.ei_block;
         if (e.ei_block <= logical) selected = i;
     }
@@ -87,7 +89,7 @@ static int walk(const void *node, size_t capacity, uint32_t logical,
     }
     void *child = malloc(BLOCK_SIZE);
     if (!child) return -ENOMEM;
-    int ret = disk_read_exact(BLOCKS2BYTES(chosen.ei_leaf_lo), BLOCK_SIZE, child);
+    int ret = disk_read_exact(BLOCKS2BYTES(((uint64_t)chosen.ei_leaf_hi << 32) | chosen.ei_leaf_lo), BLOCK_SIZE, child);
     if (!ret) ret = walk(child, BLOCK_SIZE, logical, chosen.ei_block, upper,
                          h.eh_depth - 1, physical, run, seed);
     free(child);

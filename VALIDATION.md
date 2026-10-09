@@ -104,3 +104,32 @@ checks cover 256- and 257-byte components; both mounted APIs pass long-name list
 - Confirmed macFUSE 5.4.0 derives mounted st_blocks from logical size; the callback
   matches debugfs (80 sectors versus 10485768 mounted). Track macFUSE issue #1121;
   this remains a provider limitation, not a claim of corrected macOS du output.
+
+## High physical addresses and inline data — 2026-10-09
+
+This milestone supersedes the earlier 32-bit physical-address and inline-data limits.
+
+- Preserve the 64-bit superblock block count, high inode-table addresses and 48-bit
+  extent data/index addresses. Reject signed-byte-offset overflow, invalid group
+  counts and metadata outside the declared volume; retain the descriptor memory cap.
+- Optional address fixtures use real mke2fs 16 TiB sparse geometry and explicit high
+  data, external-tree and inode-table relocations. Six high-address reads/rejections
+  agree with debugfs. The relocations do not certify bitmap accounting/e2fsck consistency.
+- Read Linux inline regular files from i_block plus inode-body system.data, including
+  zero-length attribute values. Validate xattr bounds, table/value separation,
+  required/duplicate system.data entries and unsupported external-value references.
+- Read both inline-directory regions separately; synthesize dot/parent entries and
+  validate dirent bounds without expecting separate directory-block checksums.
+- 817 inline checks cover real 1/2/4 KiB filesystems, 256/512-byte inodes, checksum
+  variants, empty/boundary/converted files, two-region directories, path traversal,
+  symlinks and malformed xattrs/directory records.
+- All portable suites pass with ASan/UBSan for both FUSE APIs: normal images, 98
+  feature/geometry checks, 78 corruption checks, 75 checksum checks, 35 ownership/path
+  checks, 89 large-file checks and 817 inline checks. Linux CI includes the inline suite.
+- Both APIs pass mounted inline contents, directory listing, sizes, parent paths,
+  symlinks and write rejection; strict mounted path/permission regression coverage remains.
+- The disposable 16 TiB geometry also reads high data/tree/inode addresses through
+  macFUSE. No physical disk or Apple Silicon certification is claimed.
+
+meta_bg and other documented unsupported layouts remain refused. No journal replay,
+write support, Linux ACL enforcement or macFUSE sparse stat/du allocation fix is added.

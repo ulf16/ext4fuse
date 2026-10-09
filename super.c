@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <stdio.h>
+#include <limits.h>
 #include "checksum.h"
 #include "types/ext4_super.h"
 
@@ -19,7 +20,7 @@
 
 #define GROUP_DESC_MIN_SIZE         0x20
 #define INCOMPAT_64BIT              0x0080
-#define INCOMPAT_SUPPORTED         (0x0002 | 0x0040 | 0x0080 | 0x0200 | 0x2000)
+#define INCOMPAT_SUPPORTED         (0x0002 | 0x0040 | 0x0080 | 0x0200 | 0x2000 | 0x8000)
 #define RO_COMPAT_SUPPORTED        (0x0001 | 0x0002 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0100 | 0x0400 | 0x1000 | 0x2000)
 
 struct feature_name { uint32_t bit; const char *name; };
@@ -65,6 +66,7 @@ static uint32_t csum_seed;
 int super_metadata_csum(void) { return !!(super.s_feature_ro_compat & 0x400); }
 uint32_t super_checksum_seed(void) { return csum_seed; }
 int super_linux_inode_format(void) { return super.s_creator_os == 0; }
+int super_inline_data(void) { return !!(super.s_feature_incompat & 0x8000); }
 int super_huge_file(void) { return !!(super.s_feature_ro_compat & 0x8); }
 
 
@@ -76,7 +78,7 @@ static uint64_t super_block_group_size(void)
 
 static uint32_t super_n_block_groups(void)
 {
-    return ((uint64_t)super.s_blocks_count_lo - super.s_first_data_block - 1)
+    return (super_block_count() - super.s_first_data_block - 1)
             / super.s_blocks_per_group + 1;
 }
 
@@ -86,7 +88,7 @@ static uint32_t super_group_desc_size(void)
         ? super.s_desc_size : GROUP_DESC_MIN_SIZE;
 }
 
-uint32_t super_block_count(void) { return super.s_blocks_count_lo; }
+uint64_t super_block_count(void) { return ((uint64_t)super.s_blocks_count_hi << 32) | super.s_blocks_count_lo; }
 uint32_t super_inode_count(void) { return super.s_inodes_count; }
 
 uint32_t super_block_size(void) {
@@ -122,6 +124,8 @@ int super_fill(void)
     }
     csum_seed = (super.s_feature_incompat & 0x2000)
         ? checksum_u32(raw+0x270) : checksum_crc32c(~0U,super.s_uuid,16);
+    if (super_inline_data() && !super_linux_inode_format())
+        return invalid("inline data requires Linux inode format");
     if (super.s_rev_level > 1) return invalid("unsupported superblock revision");
     ret = reject_features("incompatible", super.s_feature_incompat & ~INCOMPAT_SUPPORTED,
                           incompat_names, sizeof(incompat_names) / sizeof(incompat_names[0]));
@@ -140,10 +144,15 @@ int super_fill(void)
     if (!super.s_blocks_per_group || super.s_blocks_per_group > BLOCK_SIZE * 8 ||
         !super.s_inodes_per_group || super.s_inodes_per_group > BLOCK_SIZE * 8)
         return invalid("invalid blocks/inodes per group");
-    if (super.s_blocks_count_hi)
-        return invalid("large-volume addressing above 32-bit block numbers is unsupported");
-    if (super.s_blocks_count_lo <= super.s_first_data_block || super.s_inodes_count < 2)
+    if (super.s_blocks_count_hi && !(super.s_feature_incompat & INCOMPAT_64BIT))
+        return invalid("high block count requires the 64bit feature");
+    if (super_block_count() > INT64_MAX / (uint64_t)BLOCK_SIZE)
+        return invalid("filesystem byte size exceeds signed 64-bit offsets");
+    if (super_block_count() <= super.s_first_data_block || super.s_inodes_count < 2)
         return invalid("invalid filesystem block/inode counts");
+    uint64_t groups = (super_block_count() - super.s_first_data_block - 1) / super.s_blocks_per_group + 1;
+    if (groups > UINT32_MAX)
+        return invalid("block group count exceeds 32-bit group numbering");
     uint32_t inode_size = super_inode_size();
     if (inode_size < 128 || inode_size > BLOCK_SIZE || (inode_size & (inode_size - 1)))
         return invalid("invalid inode size");
@@ -151,7 +160,7 @@ int super_fill(void)
         return invalid("unsupported 64bit group descriptor size (expected 64 bytes)");
     if ((uint64_t)super.s_inodes_count > (uint64_t)super_n_block_groups() * super.s_inodes_per_group)
         return invalid("inode count exceeds block group capacity");
-    ret = disk_check_size((uint64_t)super.s_blocks_count_lo * BLOCK_SIZE);
+    ret = disk_check_size(super_block_count() * BLOCK_SIZE);
     if (ret < 0) return invalid("image is shorter than its declared filesystem size (or I/O error)");
 
     INFO("BLOCK SIZE: %i", super_block_size());
@@ -163,13 +172,13 @@ int super_fill(void)
     return 0;
 }
 
-/* High inode-table block addresses are rejected by preflight. */
+/* Group descriptors have already been checked against filesystem bounds. */
 off_t super_group_inode_table_offset(uint32_t inode_num)
 {
     uint32_t n_group = inode_num / super_inodes_per_group();
     ASSERT(n_group < super_n_block_groups());
     DEBUG("Inode table offset: 0x%x", gdesc_table[n_group].bg_inode_table_lo);
-    return BLOCKS2BYTES(gdesc_table[n_group].bg_inode_table_lo);
+    return BLOCKS2BYTES(((uint64_t)gdesc_table[n_group].bg_inode_table_hi << 32) | gdesc_table[n_group].bg_inode_table_lo);
 }
 
 /* struct ext4_group_desc might be bigger than on disk structure, if we are not
@@ -180,7 +189,7 @@ int super_group_fill(void)
     uint32_t groups = super_n_block_groups();
     uint64_t table_start = ALIGN_TO_BLOCKSIZE(BOOT_SECTOR_SIZE + sizeof(super));
     uint64_t table_size = (uint64_t)groups * super_group_desc_size();
-    uint64_t filesystem_size = (uint64_t)super.s_blocks_count_lo * BLOCK_SIZE;
+    uint64_t filesystem_size = super_block_count() * BLOCK_SIZE;
     if (table_start > filesystem_size || table_size > filesystem_size - table_start)
         return invalid("group descriptor table exceeds filesystem bounds");
     if ((uint64_t)groups * sizeof(struct ext4_group_desc) > 256U * 1024 * 1024)
@@ -213,13 +222,9 @@ int super_group_fill(void)
             }
             if (supplied!=calculated) { free(table); return invalid("group descriptor checksum mismatch"); }
         }
-        if (table[i].bg_inode_table_hi) {
-            free(table);
-            return invalid("inode table above 32-bit block numbers is unsupported");
-        }
-        uint64_t inode_table = table[i].bg_inode_table_lo;
-        if (inode_table <= super.s_first_data_block || inode_table >= super.s_blocks_count_lo ||
-            inode_blocks > (uint64_t)super.s_blocks_count_lo - inode_table) {
+        uint64_t inode_table = ((uint64_t)table[i].bg_inode_table_hi << 32) | table[i].bg_inode_table_lo;
+        if (inode_table <= super.s_first_data_block || inode_table >= super_block_count() ||
+            inode_blocks > super_block_count() - inode_table) {
             free(table);
             return invalid("inode table exceeds filesystem bounds");
         }

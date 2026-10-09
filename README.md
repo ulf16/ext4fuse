@@ -162,12 +162,12 @@ mask; known unsupported bits are named. Compatible feature bits are ignored acco
 to the ext filesystem format's compatibility rules.
 
 Features permitted by preflight include filetype, extents, flex_bg, csum_seed, and
-64bit descriptors **with 32-bit block addressing**. The usual sparse_super, large_file,
+64bit descriptors and checked high physical block addresses. The usual sparse_super, large_file,
 huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
-extended attributes are not exposed, and large-volume addressing remains limited.
+extended attributes are not exposed, and resource/address bounds still apply.
 
-Encryption, casefold, inline_data, meta_bg, bigalloc, largedir, ea_inode, mmp, dirdata,
+Encryption, casefold, meta_bg, bigalloc, largedir, ea_inode, mmp, dirdata,
 compression, external journal devices, shared_blocks, verity, and other unrecognized
 layouts are refused in this milestone. Some could be supported with further work;
 rejection means this reader has not established support.
@@ -279,8 +279,38 @@ The test's sparse copy skips zero-filled chunks rather than relying on SEEK_HOLE
 
 The mounted test hashes every byte of a 5GiB+13-byte sparse file through FUSE, hashes
 independent `debugfs cat` output, and verifies a sparse host copy against both. It uses
-no real disks. Testing large logical files does not remove the 32-bit physical block
-address limit or certify all volumes, maximum extent depths, or legacy file-size limits.
+no real disks. Testing large logical files does not certify all volumes, maximum
+extent depths, or legacy file-size limits.
+
+## High physical addresses and inline data
+
+Physical extent addresses (48-bit on disk), extent index pointers, inode-table addresses
+and the 64-bit superblock block count retain their high words. Preflight rejects byte
+sizes beyond signed 64-bit offsets, invalid group counts and out-of-volume metadata.
+The 256 MiB descriptor-table resource limit remains; meta_bg is still refused. This is
+expanded addressing support, not a guarantee that every large ext4 layout is supported.
+
+```sh
+# Optional: sparse-capable host filesystem and approximately 1.6 GiB free space.
+make test-addresses
+make test-inline
+```
+
+The address suite creates a real 16 TiB sparse ext4 geometry, then explicitly relocates
+file data, an external extent node and an inode table above 2**32 physical blocks.
+Reads agree with Linux debugfs; out-of-volume high addresses fail. Those relocation
+fixtures test the reader, not full bitmap accounting or e2fsck consistency.
+
+Linux inline regular files and directories are supported. File bytes come from the
+60-byte i_block area followed by the inode-body system.data attribute. Directories
+keep the two dirent regions separate and synthesize dot/parent entries from the stored
+parent inode. The bounded xattr parser requires system.data and rejects malformed,
+overlapping-table, out-of-inode, duplicate or external-value references. Inode checksums
+protect inline data where enabled. Other extended attributes and ACLs remain unexposed.
+
+Real e2fsprogs fixtures cover 1/2/4 KiB blocks, 256/512-byte inodes, checksums on/off,
+empty files, the 60-byte boundary, larger files converted to extents, both inline directory
+regions, missing names, dot/parent traversal, symlinks and corrupted inline metadata.
 
 ## Remaining work
 
@@ -292,7 +322,7 @@ address limit or certify all volumes, maximum extent depths, or legacy file-size
 - Broaden platform and real-filesystem validation of the published Homebrew package.
 
 Write support and an FSKit port are outside the initial milestone. Existing limitations
-include incomplete large-volume addressing; do not assume full support for modern ext4
+include resource limits and unsupported large-volume layouts; do not assume full support for modern ext4
 features, encryption, or LVM containers.
 
 Report reproducible issues to [this fork](https://github.com/ulf16/ext4fuse/issues).

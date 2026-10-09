@@ -13,9 +13,89 @@
 #include "super.h"
 #include "checksum.h"
 
+/* Inline values live in the inode body, relative to the first xattr entry.
+ * Validate the whole entry table before copying any system.data bytes. */
+static int inline_directory_region(const unsigned char *data, size_t size)
+{
+    size_t offset = 0;
+    while (offset < size) {
+        if (size - offset < 8) return -EIO;
+        uint32_t number = checksum_u32(data + offset);
+        uint16_t length = checksum_u16(data + offset + 4);
+        unsigned names = data[offset + 6], type = data[offset + 7];
+        if (length < 8 || length % 4 || length > size - offset || names > length - 8)
+            return -EIO;
+        if (number && (number > super_inode_count() || !names || type > 7 ||
+            memchr(data + offset + 8, 0, names) || memchr(data + offset + 8, '/', names)))
+            return -EIO;
+        offset += length;
+    }
+    return 0;
+}
+
+static int inode_inline_load(struct ext4_inode *inode, const unsigned char *raw,
+                             size_t length, uint32_t number)
+{
+    if (!super_inline_data() || length <= 128 ||
+        (inode->i_flags & (EXT4_EXTENTS_FL | EXT4_INDEX_FL)) ||
+        !(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode))) return -EIO;
+    unsigned extra = checksum_u16(raw + 128);
+    if (extra < 4 || extra % 4 || extra > length - 128) return -EIO;
+    size_t header = 128 + extra;
+    if (length - header < 8 || checksum_u32(raw + header) != 0xea020000U) return -EIO;
+    size_t first = header + 4, cursor = first, value_floor = length;
+    size_t data_offset = 0, data_size = 0;
+    int found = 0;
+    while (1) {
+        if (length - cursor < 4) return -EIO;
+        if (!checksum_u32(raw + cursor)) { cursor += 4; break; }
+        if (length - cursor < 16) return -EIO;
+        size_t entry_size = (16 + raw[cursor] + 3) & ~3U;
+        if (entry_size > length - cursor) return -EIO;
+        size_t value = first + checksum_u16(raw + cursor + 2);
+        size_t bytes = checksum_u32(raw + cursor + 8);
+        if (checksum_u32(raw + cursor + 4)) return -EIO;
+        if (bytes) {
+            if (value % 4 || value > length || bytes > length - value) return -EIO;
+            if (value < value_floor) value_floor = value;
+        }
+        if (raw[cursor] == 4 && raw[cursor + 1] == 7 &&
+            !memcmp(raw + cursor + 16, "data", 4)) {
+            if (found++) return -EIO;
+            data_offset = bytes ? value : 0; data_size = bytes;
+        }
+        cursor += entry_size;
+    }
+    if (!found || cursor > value_floor || 60 + data_size > sizeof(inode->reader_inline)) return -EIO;
+    uint64_t size = inode_get_size(inode);
+    if (S_ISREG(inode->i_mode)) {
+        if (size > 60 + data_size) return -EIO;
+        memcpy(inode->reader_inline, inode->i_block, 60);
+        if (data_size) memcpy(inode->reader_inline + 60, raw + data_offset, data_size);
+        inode->reader_inline_size = 60 + data_size;
+    } else {
+        uint32_t parent = checksum_u32((const void *)inode->i_block);
+        if (!parent || parent > super_inode_count() || size != 60 + data_size ||
+            80 + data_size > sizeof(inode->reader_inline)) return -EIO;
+        if (inline_directory_region((const unsigned char *)inode->i_block + 4, 56) < 0 ||
+            inline_directory_region(raw + data_offset, data_size) < 0) return -EIO;
+        unsigned char *out = inode->reader_inline;
+        struct ext4_dir_entry_2 *dot = (void *)out;
+        dot->inode = number; dot->rec_len = 12; dot->name_len = 1; dot->file_type = 2; dot->name[0] = '.';
+        dot = (void *)(out + 12);
+        dot->inode = parent; dot->rec_len = 12; dot->name_len = 2; dot->file_type = 2;
+        dot->name[0] = dot->name[1] = '.';
+        memcpy(out + 24, (const unsigned char *)inode->i_block + 4, 56);
+        if (data_size) memcpy(out + 80, raw + data_offset, data_size);
+        inode->reader_inline_size = 80 + data_size;
+    }
+    return 0;
+}
+
 int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
                           uint64_t *physical, uint32_t *run)
 {
+    if (inode->i_flags & EXT4_INLINE_DATA_FL) return -EIO;
     *physical = 0;
     if (run) *run = 1;
     if (inode->i_flags & EXT4_EXTENTS_FL)
@@ -61,6 +141,12 @@ int inode_dir_ctx_reset(struct inode_dir_ctx *ctx, struct ext4_inode *inode)
     if (!ctx) return -ENOMEM;
     if (!S_ISDIR(inode->i_mode)) return -ENOTDIR;
     uint64_t size = inode_get_size(inode);
+    if (inode->i_flags & EXT4_INLINE_DATA_FL) {
+        if (!inode->reader_inline_size) return -EIO;
+        memcpy(ctx->buf, inode->reader_inline, inode->reader_inline_size);
+        ctx->lblock = 0;
+        return 0;
+    }
     if (!size || size % BLOCK_SIZE || size / BLOCK_SIZE > UINT32_MAX) return -EIO;
     ctx->lblock = UINT32_MAX;
     return 0;
@@ -71,7 +157,7 @@ int inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ct
 {
     *entry = NULL;
     if (offset < 0 || offset % 4) return -EINVAL;
-    uint64_t size = inode_get_size(inode);
+    uint64_t size = (inode->i_flags & EXT4_INLINE_DATA_FL) ? inode->reader_inline_size : inode_get_size(inode);
     if ((uint64_t)offset > size) return -EIO;
     if ((uint64_t)offset == size) return 0;
     uint32_t logical = (uint64_t)offset / BLOCK_SIZE;
@@ -128,7 +214,9 @@ int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
         if (!high) crc &= 0xffff;
         if (crc!=supplied) return -EIO;
     }
-    if (inode->i_flags & (0x4U | 0x800U | 0x10000000U)) return -EIO;
+    if (inode->i_flags & (0x4U | 0x800U)) return -EIO;
+    if (inode->i_flags & EXT4_INLINE_DATA_FL)
+        return inode_inline_load(inode, raw, length, inum);
     return 0;
 }
 

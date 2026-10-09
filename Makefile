@@ -114,3 +114,14 @@ test-large: test/corruption-probe
 	$(PYTHON) test/large-files.py
 
 .PHONY: test-large
+
+test-inline: test/corruption-probe
+	$(PYTHON) test/inline.py
+
+.PHONY: test-inline
+
+# Optional: needs a sparse-capable host filesystem and ~1.6 GiB free space.
+test-addresses: test/corruption-probe
+	$(PYTHON) test/addresses.py
+
+.PHONY: test-addresses

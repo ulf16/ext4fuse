@@ -19,7 +19,7 @@
 
 /* struct ext4_super */
 uint32_t super_block_size(void);
-uint32_t super_block_count(void);
+uint64_t super_block_count(void);
 uint32_t super_inode_count(void);
 uint32_t super_inodes_per_group(void);
 uint32_t super_inode_size(void);
@@ -27,6 +27,7 @@ int super_fill(void);
 int super_metadata_csum(void);
 int super_linux_inode_format(void);
 int super_huge_file(void);
+int super_inline_data(void);
 uint32_t super_checksum_seed(void);
 
 /* struct ext4_group_desc */

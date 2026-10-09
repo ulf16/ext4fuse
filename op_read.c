@@ -15,6 +15,11 @@ int inode_read_data(struct ext4_inode *inode, char *buf, size_t size, off_t offs
     uint64_t file_size = inode_get_size(inode);
     if ((uint64_t)offset >= file_size) return 0;
     if (size > file_size - offset) size = file_size - offset;
+    if (inode->i_flags & EXT4_INLINE_DATA_FL) {
+        if (file_size > inode->reader_inline_size) return -EIO;
+        memcpy(buf, inode->reader_inline + offset, size);
+        return size;
+    }
     size_t done = 0;
     while (done < size) {
         uint64_t position = (uint64_t)offset + done;
