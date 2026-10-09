@@ -29,6 +29,7 @@ int super_linux_inode_format(void);
 int super_huge_file(void);
 int super_inline_data(void);
 int super_ea_inode(void);
+int super_largedir(void);
 uint32_t super_first_inode(void);
 uint32_t super_checksum_seed(void);
 

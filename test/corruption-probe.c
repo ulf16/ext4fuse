@@ -10,13 +10,19 @@
 #include "super.h"
 #include "logging.h"
 #include "checksum.h"
+static unsigned names_count, names_hash, names_limit = ~0U;
+static off_t names_next;
 static int fill(void *buf, const char *name, const struct stat *st, off_t off
 #if FUSE_MAJOR_VERSION >= 3
                 , enum fuse_fill_dir_flags flags
 #endif
                 )
 {
-    (void)buf; (void)name; (void)st; (void)off;
+    (void)buf; (void)st;
+    if (names_count == names_limit) return 1;
+    names_count++;
+    names_hash ^= checksum_crc32c(~0U, name, strlen(name));
+    names_next = off;
 #if FUSE_MAJOR_VERSION >= 3
     (void)flags;
 #endif
@@ -116,7 +122,8 @@ int main(int argc, char **argv)
                         (unsigned long long)st.st_ino);
         return 0;
     }
-    if (!strcmp(argv[2], "list") || !strcmp(argv[2], "truncate-list")) ret = op_readdir(argv[3], NULL, fill, offset, &fi);
+    if (!strcmp(argv[2], "listpage") && argc > 5) names_limit = strtoul(argv[5], NULL, 10);
+    if (!strcmp(argv[2], "list") || !strcmp(argv[2], "listnames") || !strcmp(argv[2], "listpage") || !strcmp(argv[2], "truncate-list")) ret = op_readdir(argv[3], NULL, fill, offset, &fi);
     else if (!strcmp(argv[2], "lookup")) { struct ext4_inode inode; ret = inode_get_by_path(argv[3], &inode); }
     else if (!strcmp(argv[2], "link")) {
         if (offset < 0 || offset > (off_t)sizeof(buf)) return 2;
@@ -129,6 +136,8 @@ int main(int argc, char **argv)
         if (!ret) ret = op_read(argv[3], buf, sizeof(buf), offset, &fi);
     }
     printf("%d\n", ret);
+    if (!strcmp(argv[2], "listnames") || !strcmp(argv[2], "listpage"))
+        printf("%u %u %lld\n", names_count, names_hash, (long long)names_next);
     if (ret > 0) { for (int i = 0; i < ret; i++) printf("%02x", (unsigned char)buf[i]); puts(""); }
     return 0;
 }

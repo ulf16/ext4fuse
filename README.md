@@ -161,13 +161,13 @@ Unknown incompatible and read-only-compatible feature bits are rejected with the
 mask; known unsupported bits are named. Compatible feature bits are ignored according
 to the ext filesystem format's compatibility rules.
 
-Features permitted by preflight include filetype, extents, flex_bg, ea_inode, csum_seed, and
+Features permitted by preflight include filetype, extents, flex_bg, ea_inode, csum_seed, largedir, and
 64bit descriptors and checked high physical block addresses. The usual sparse_super, large_file,
 huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
 EA inode values have a 64 KiB limit, and resource/address bounds still apply.
 
-Encryption, casefold, bigalloc, largedir, mmp, dirdata,
+Encryption, casefold, bigalloc, mmp, dirdata,
 compression, external journal devices, shared_blocks, verity, and other unrecognized
 layouts are refused in this milestone. Some could be supported with further work;
 rejection means this reader has not established support.
@@ -429,3 +429,32 @@ features, encryption, or LVM containers.
 
 Report reproducible issues to [this fork](https://github.com/ulf16/ext4fuse/issues).
 Do not upload private filesystem images or directory logs to public issues.
+
+## Large directories (0.2.7)
+
+`largedir` (`large_dir` in e2fsprogs) permits the extra htree index level.
+The reader accepts root `indirect_levels` through two when this feature is set,
+through one otherwise. Root headers, exact index capacity/count, hash order and
+28-bit child block bounds are checked even without metadata checksums. Index and
+leaf checksums remain verified before their entries are exposed.
+
+Enumeration and filename lookup use linear block scans; index nodes are skipped
+as empty directory records. This adds layout compatibility, not indexed lookup
+acceleration. Listing buffers retain 64-bit resume offsets and directory sizes.
+
+`make test-largedir` builds real indexed directories across 1/2/4 KiB blocks and
+checksum modes, inserts valid intermediate nodes using a test-only libext2fs helper,
+and certifies the resulting three-level trees with `e2fsck`. It checks complete and
+paged name sets, file/missing-name lookup, feature-gated depth and structural
+corruption with repaired checksums. Separate synthetic cursor fixtures test beyond
+4 GiB; these deliberately contain directory holes and are not fsck-certified
+large-directory images. Multi-gigabyte populated directories have not been tested.
+
+```sh
+PATH="$(brew --prefix e2fsprogs)/sbin:$PATH" make test-largedir
+PATH="$(brew --prefix e2fsprogs)/sbin:$PATH" sh test/mount-largedir.sh
+```
+
+The mounted test checks exact 1,100-name listings through macFUSE, repeated/paged
+enumeration, contents, missing-name behavior, read-only rejection and unchanged image
+bytes. The test helper uses the same libext2fs development files as the EA inode suite.

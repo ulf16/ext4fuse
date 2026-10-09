@@ -58,9 +58,9 @@ uint16_t checksum_crc16(uint16_t crc, const void *data, size_t size)
     }
     return crc;
 }
-int checksum_directory(const void *block, uint32_t seed, int indexed, uint32_t logical)
+int checksum_directory(const void *block, uint32_t seed, int indexed, uint32_t logical, uint64_t directory_blocks)
 {
-    if (!super_metadata_csum()) return 0;
+    int metadata = super_metadata_csum();
     const unsigned char *p=block;
     size_t size=BLOCK_SIZE;
     /* Indexed roots and internal nodes carry dx_tail, not a dirent tail. */
@@ -69,18 +69,38 @@ int checksum_directory(const void *block, uint32_t seed, int indexed, uint32_t l
         size_t offset;
         if (!logical) {
             if (checksum_u16(p+4)!=12 || checksum_u16(p+16)!=size-12 ||
-                checksum_u32(p+24)!=0 || p[29]!=8 || p[30]>1 || p[31]!=0) return -EIO;
+                p[6]!=1 || p[8]!='.' || p[18]!=2 || p[20]!='.' || p[21]!='.' ||
+                checksum_u32(p+24)!=0 || p[28]>5 || p[29]!=8 ||
+                p[30]>(super_largedir() ? 2 : 1) || p[31]!=0) return -EIO;
             offset=32;
-        } else offset=8;
+        } else {
+            if (p[6] || p[7]) return -EIO;
+            offset=8;
+        }
         unsigned limit=checksum_u16(p+offset), count=checksum_u16(p+offset+2);
-        if (!limit || !count || count>limit || limit>(size-offset-8)/8) return -EIO;
+        if (!count || count>limit || limit!=(size-offset-(metadata ? 8 : 0))/8) return -EIO;
+        /* Linear enumeration skips these nodes, but malformed references must
+         * not be accepted merely because the reader does not follow the index. */
+        uint32_t previous=0;
+        for (unsigned i=0; i<count; i++) {
+            uint32_t child=checksum_u32(p+offset+i*8+4) & 0x0fffffffU;
+            if (!child || child>=directory_blocks || child==logical) return -EIO;
+            if (i) {
+                uint32_t hash=checksum_u32(p+offset+i*8) & ~1U;
+                if (hash<previous) return -EIO;
+                previous=hash;
+            }
+        }
+        if (!metadata) return 0;
         size_t tail=offset+limit*8, used=offset+count*8;
+        if (checksum_u32(p+tail)) return -EIO;
         uint32_t zero=0;
         uint32_t crc=checksum_crc32c(seed,p,used);
         crc=checksum_crc32c(crc,p+tail,4);
         crc=checksum_crc32c(crc,&zero,4);
         return crc==checksum_u32(p+tail+4) ? 0 : -EIO;
     }
+    if (!metadata) return 0;
     size_t tail=size-12;
     if (checksum_u32(p+tail) || checksum_u16(p+tail+4)!=12 || p[tail+6] || p[tail+7]!=0xde) return -EIO;
     return checksum_crc32c(seed,p,tail)==checksum_u32(p+tail+8) ? 0 : -EIO;

@@ -37,3 +37,5 @@ jobs:
         run: make test-xattrs FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify large EA inode values and integrity checks
         run: make test-ea-inode FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify three-level largedir indexes and directory cursors
+        run: make test-largedir FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

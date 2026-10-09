@@ -231,3 +231,32 @@ Read-only access, no journal replay, no Linux ACL enforcement, no Finder namespa
 translation and the macFUSE sparse stat/du allocation limitation remain. Apple Silicon
 and FreeBSD are untested. Values above 64 KiB and unhashed legacy Lustre EA layouts
 are not supported.
+
+## Largedir milestone (0.2.7)
+
+- Accept `INCOMPAT_LARGEDIR`; allow `indirect_levels == 2` only with that bit.
+  Existing non-largedir indexed directories retain the one-level limit.
+- Validate indexed root metadata, exact entry capacity/count, masked 28-bit child
+  block bounds, self references and hash ordering before exposing records. Apply
+  structural checks even without `metadata_csum`; verify index/leaf CRCs when present.
+- `make test-largedir` uses 1/2/4 KiB blocks with plain, UUID checksum and stored-seed
+  layouts. A test-only libext2fs helper inserts legitimate intermediate nodes into
+  real e2fsck-indexed directories; `e2fsck -fn` certifies each three-level baseline.
+  Name counts/digests and paged resume cursors cover every one of 1,100 filenames,
+  dot and dotdot. Contents, missing names, EOF and unchanged image bytes are checked.
+- Structural mutations include excessive depth, feature removal, invalid root
+  metadata, counts/capacities, child bounds/self references, hash ordering and damaged
+  checksums. Repair covering checksums where meaningful. Reserved high child-address
+  bits follow the kernel's masking behavior.
+- Separate synthetic directory cursor fixtures exercise size and reads beyond 4 GiB,
+  EOF and invalid offsets. They intentionally have holes; full listing must fail.
+  They are boundary tests, not fsck-certified sparse or multi-gigabyte directories.
+- Native Intel Sequoia/macFUSE listing and scandir return the complete 1,100-name set
+  from a three-level stored-seed fixture, including multiple directory buffers.
+  File contents and missing-name lookup pass; writes return EROFS and the image's
+  SHA-256 remains unchanged. `test/mount-largedir.sh` repeats this on either API.
+
+The reader continues to enumerate and look up names by linear scans. Indexed lookup
+acceleration and testing of multi-gigabyte populated directories are not included.
+Existing read-only, journal, ACL enforcement, Apple Silicon/FreeBSD and macFUSE
+sparse-allocation limitations remain.

@@ -212,7 +212,7 @@ int inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ct
         ret = disk_read_exact(BLOCKS2BYTES(physical), BLOCK_SIZE, ctx->buf);
         if (ret < 0) return ret;
         ret = checksum_directory(ctx->buf, inode->reader_csum_seed,
-                                 inode->i_flags & EXT4_INDEX_FL, logical);
+                                 inode->i_flags & EXT4_INDEX_FL, logical, size / BLOCK_SIZE);
         if (ret < 0) return ret;
         ctx->lblock = logical;
     }

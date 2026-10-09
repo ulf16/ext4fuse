@@ -39,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
     check(base)
     check(make_image("32bit.img", ["-O", "^64bit"]))
     check(make_image("inline.img", ["-O", "inline_data"]))
+    check(make_image("largedir.img", ["-O", "large_dir"]))
     check(make_image("meta.img", ["-O", "meta_bg,^resize_inode"]))
     original_header = base.read_bytes()[:8192]
     def mutate(offset, fmt, value, expected=None):
@@ -56,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
     incompat = struct.unpack_from("<I", original_header, 1024 + 0x60)[0]
     ro_compat = struct.unpack_from("<I", original_header, 1024 + 0x64)[0]
     for bit, name in [(1,"compression"),(4,"needs_recovery"),(8,"journal_dev"),
-                      (0x100,"mmp"),(0x1000,"dirdata"),(0x4000,"largedir"),
+                      (0x100,"mmp"),(0x1000,"dirdata"),
                       (0x10000,"encrypt"),(0x20000,"casefold"),
                       (0x80000000,"unknown=0x80000000")]:
         mutate(1024 + 0x60, "I", incompat | bit, name)

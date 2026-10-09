@@ -145,3 +145,8 @@ test-ea-inode: test/corruption-probe
 	$(PYTHON) test/ea-inode.py
 
 .PHONY: test-ea-inode
+
+test-largedir: test/corruption-probe
+	python3 test/largedir.py
+
+.PHONY: test-largedir
