@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "ops.h"
 #include "inode.h"
 #include "super.h"
@@ -14,18 +15,85 @@
 #define NO_ATTRIBUTE ENODATA
 #endif
 
-/* At most one inode body and one block; ea_inode remains unsupported. */
+/* Linux userspace xattr limit; bound each allocation and value read. */
+#define VALUE_MAX 65536
 struct attribute {
     char name[256];
     const unsigned char *value;
     size_t size;
     unsigned index;
+    uint32_t value_inode;
+    const unsigned char *entry;
+    unsigned char *owned;
 };
 struct attributes {
     unsigned char inode[4096], block[4096];
     struct attribute entries[512];
     size_t count;
+    uint32_t parent;
 };
+
+/* EA inodes are internal regular files. Never recursively interpret their xattrs. */
+static int value_inode(uint32_t number, uint32_t parent, size_t bytes,
+                       struct ext4_inode *inode)
+{
+    if (!super_ea_inode() || !super_linux_inode_format() || number == parent ||
+        number < super_first_inode() || number > super_inode_count() || !bytes)
+        return -EIO;
+    if (bytes > VALUE_MAX) return -E2BIG;
+    unsigned char raw[4096];
+    int ret = inode_get_raw(number, inode, raw);
+    if (ret < 0) return ret;
+    if (!(inode->i_flags & EXT4_EA_INODE_FL) || !S_ISREG(inode->i_mode) ||
+        (inode->i_flags & EXT4_INLINE_DATA_FL) || inode_get_size(inode) != bytes ||
+        inode->i_links_count != 1 || inode->i_dtime ||
+        (!inode->i_ctime && !inode->osd1.linux1.l_i_version) ||
+        inode->i_file_acl_lo || inode->osd2.linux2.l_i_file_acl_high) return -EIO;
+    if (super_inode_size() > 128) {
+        size_t header = 128 + inode->i_extra_isize;
+        if (super_inode_size() - header >= 4 && checksum_u32(raw + header)) return -EIO;
+    }
+    return 0;
+}
+
+static uint32_t entry_hash(const unsigned char *entry, uint32_t value_hash, int signed_name)
+{
+    uint32_t hash = 0;
+    for (unsigned i = 0; i < entry[0]; i++) {
+        uint32_t byte = signed_name ? (uint32_t)(int32_t)(int8_t)entry[16 + i] : entry[16 + i];
+        hash = (hash << 5) ^ (hash >> 27) ^ byte;
+    }
+    return (hash << 16) ^ (hash >> 16) ^ value_hash;
+}
+
+static int read_value(struct attributes *attrs, struct attribute *attr)
+{
+    if (!attr->value_inode || attr->owned) return 0;
+    struct ext4_inode inode;
+    int ret = value_inode(attr->value_inode, attrs->parent, attr->size, &inode);
+    if (ret < 0) return ret;
+    attr->owned = malloc(attr->size);
+    if (!attr->owned) return -ENOMEM;
+    for (size_t done = 0; done < attr->size;) {
+        uint64_t physical;
+        ret = inode_get_data_pblock(&inode, done / BLOCK_SIZE, &physical, NULL);
+        /* EA values cannot contain holes or unwritten extents. */
+        if (ret < 0) return ret;
+        if (!physical) return -EIO;
+        size_t bytes = attr->size - done;
+        if (bytes > BLOCK_SIZE) bytes = BLOCK_SIZE;
+        ret = disk_read_exact(BLOCKS2BYTES(physical), bytes, attr->owned + done);
+        if (ret < 0) return ret;
+        done += bytes;
+    }
+    uint32_t hash = checksum_crc32c(super_checksum_seed(), attr->owned, attr->size);
+    uint32_t supplied = checksum_u32(attr->entry + 12);
+    if (hash != inode.i_atime ||
+        (entry_hash(attr->entry, hash, 0) != supplied &&
+         entry_hash(attr->entry, hash, 1) != supplied)) return -EIO;
+    attr->value = attr->owned;
+    return 0;
+}
 
 static int parse(struct attributes *attrs, const unsigned char *raw,
                  size_t length, size_t first, size_t base, int sorted)
@@ -39,12 +107,20 @@ static int parse(struct attributes *attrs, const unsigned char *raw,
         const unsigned char *entry = raw + cursor;
         size_t names = entry[0], step = (16 + names + 3) & ~(size_t)3;
         unsigned index = entry[1];
-        if (step > length - cursor || memchr(entry + 16, 0, names) ||
-            checksum_u32(entry + 4)) return -EIO;
+        if (step > length - cursor || memchr(entry + 16, 0, names)) return -EIO;
+        uint32_t external_inode = checksum_u32(entry + 4);
         size_t value = base + checksum_u16(entry + 2);
         size_t bytes = checksum_u32(entry + 8), padded = (bytes + 3) & ~(size_t)3;
-        if (bytes && (bytes > length || value % 4 || value > length || padded < bytes || padded > length - value)) return -EIO;
-        if (bytes && value < floor) floor = value;
+        if (external_inode) {
+            struct ext4_inode inode;
+            int ret = value_inode(external_inode, attrs->parent, bytes, &inode);
+            if (ret < 0) return ret;
+            uint32_t supplied = checksum_u32(entry + 12);
+            if (entry_hash(entry, inode.i_atime, 0) != supplied &&
+                entry_hash(entry, inode.i_atime, 1) != supplied) return -EIO;
+        }
+        if (bytes && !external_inode && (bytes > length || value % 4 || value > length || padded < bytes || padded > length - value)) return -EIO;
+        if (bytes && !external_inode && value < floor) floor = value;
         if (sorted && previous) {
             int order = (int)index - previous[1];
             if (!order) order = (int)names - previous[0];
@@ -66,6 +142,7 @@ static int parse(struct attributes *attrs, const unsigned char *raw,
         /* system.data holds inline file/directory contents, not public metadata.
          * Unknown namespace indices are validated but cannot be named. */
         int hidden = index == 7 && names == 4 && !memcmp(entry + 16, "data", 4);
+        if (hidden && external_inode) return -EIO;
         if (prefix && !hidden) {
             size_t prefix_size = strlen(prefix);
             if ((index == 2 || index == 3 || index == 8) ? names != 0 : names == 0)
@@ -75,7 +152,8 @@ static int parse(struct attributes *attrs, const unsigned char *raw,
             memcpy(attr->name, prefix, prefix_size);
             memcpy(attr->name + prefix_size, entry + 16, names);
             attr->name[prefix_size + names] = 0;
-            attr->value = bytes ? raw + value : NULL;
+            attr->value = bytes && !external_inode ? raw + value : NULL;
+            attr->value_inode = external_inode; attr->entry = entry;
             attr->size = bytes; attr->index = index;
             for (size_t i = 0; i < attrs->count; i++)
                 if (!strcmp(attr->name, attrs->entries[i].name)) return -EIO;
@@ -92,6 +170,7 @@ static int load(const char *path, struct attributes *attrs)
     struct ext4_inode inode;
     int ret = inode_lookup(path, &number);
     if (ret < 0) return ret;
+    attrs->parent = number;
     ret = inode_get_raw(number, &inode, attrs->inode);
     if (ret < 0) return ret;
     size_t length = super_inode_size();
@@ -165,16 +244,20 @@ static int operation(const char *path, const char *name, char *buf, size_t size)
     int ret = load(path, attrs);
     if (ret < 0) goto done;
     for (size_t i = 0; i < attrs->count; i++) {
-        const struct attribute *attr = &attrs->entries[i];
-        if ((attr->index == 2 || attr->index == 3) && acl_value(attr, NULL, 0) < 0) {
-            ret = -EIO; goto done;
+        struct attribute *attr = &attrs->entries[i];
+        if (attr->index == 2 || attr->index == 3) {
+            ret = read_value(attrs, attr);
+            if (ret < 0) goto done;
+            if (acl_value(attr, NULL, 0) < 0) { ret = -EIO; goto done; }
         }
     }
     if (name) {
         ret = -NO_ATTRIBUTE;
         for (size_t i = 0; i < attrs->count; i++) {
-            const struct attribute *attr = &attrs->entries[i];
+            struct attribute *attr = &attrs->entries[i];
             if (strcmp(name, attr->name)) continue;
+            ret = read_value(attrs, attr);
+            if (ret < 0) goto done;
             if (attr->index == 2 || attr->index == 3) ret = acl_value(attr, buf, size);
             else if (size && size < attr->size) ret = -ERANGE;
             else {
@@ -196,6 +279,7 @@ static int operation(const char *path, const char *name, char *buf, size_t size)
         }
     }
 done:
+    for (size_t i = 0; i < attrs->count; i++) free(attrs->entries[i].owned);
     free(attrs);
     return ret;
 }

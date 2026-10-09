@@ -20,7 +20,7 @@
 
 #define GROUP_DESC_MIN_SIZE         0x20
 #define INCOMPAT_64BIT              0x0080
-#define INCOMPAT_SUPPORTED         (0x0002 | 0x0010 | 0x0040 | 0x0080 | 0x0200 | 0x2000 | 0x8000)
+#define INCOMPAT_SUPPORTED         (0x0002 | 0x0010 | 0x0040 | 0x0080 | 0x0200 | 0x0400 | 0x2000 | 0x8000)
 #define RO_COMPAT_SUPPORTED        (0x0001 | 0x0002 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0100 | 0x0400 | 0x1000 | 0x2000)
 
 struct feature_name { uint32_t bit; const char *name; };
@@ -66,6 +66,8 @@ static uint32_t csum_seed;
 int super_metadata_csum(void) { return !!(super.s_feature_ro_compat & 0x400); }
 uint32_t super_checksum_seed(void) { return csum_seed; }
 int super_linux_inode_format(void) { return super.s_creator_os == 0; }
+uint32_t super_first_inode(void) { return super.s_rev_level ? super.s_first_ino : 11; }
+int super_ea_inode(void) { return !!(super.s_feature_incompat & 0x400); }
 int super_inline_data(void) { return !!(super.s_feature_incompat & 0x8000); }
 int super_huge_file(void) { return !!(super.s_feature_ro_compat & 0x8); }
 
@@ -122,6 +124,10 @@ int super_fill(void)
             return invalid("superblock checksum mismatch");
         if (super.s_creator_os) return invalid("metadata checksums require Linux inode format");
     }
+    if (super_ea_inode() && !super_linux_inode_format())
+        return invalid("ea_inode requires Linux inode format");
+    if (super_ea_inode() && (super_first_inode() < 11 || super_first_inode() > super_inode_count()))
+        return invalid("invalid first non-reserved inode for ea_inode");
     csum_seed = (super.s_feature_incompat & 0x2000)
         ? checksum_u32(raw+0x270) : checksum_crc32c(~0U,super.s_uuid,16);
     if (super_inline_data() && !super_linux_inode_format())

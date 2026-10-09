@@ -17,20 +17,37 @@ cleanup() {
     fi
 }
 trap cleanup EXIT HUP INT TERM
-python3 - "$fixture_dir" <<'PY'
-import pathlib,subprocess,sys,shutil,struct
+python3 - "$fixture_dir" "$(dirname "$0")/ea-set.c" <<'PY'
+import os,pathlib,re,shlex,subprocess,sys,shutil,struct
 r=pathlib.Path(sys.argv[1]);tree=r/'tree';tree.mkdir();(tree/'file').write_bytes(b'inline payload');(tree/'empty').touch();(tree/'folder').mkdir();(tree/'link').symlink_to('file')
 with (r/'image').open('wb') as f:f.truncate(32*1024**2)
 mkfs=shutil.which('mke2fs');debugfs=shutil.which('debugfs');assert mkfs and debugfs
-subprocess.run([mkfs,'-q','-F','-t','ext4','-O','inline_data,metadata_csum_seed','-d',str(tree),str(r/'image')],check=True)
-values={'user.note':b'hello','user.empty':b'','user.binary':bytes(range(256))*2,'security.selinux':b'unconfined_u:object_r:default_t:s0\0','trusted.archive':b'yes','user.com.apple.FinderInfo':bytes(32)}
+subprocess.run([mkfs,'-q','-F','-t','ext4','-O','inline_data,metadata_csum_seed'+(',ea_inode' if os.environ.get('EA_INODE')=='1' else ''),'-d',str(tree),str(r/'image')],check=True)
+values={'user.note':b'hello','user.empty':b'','user.binary':bytes(range(256))*(256 if os.environ.get("EA_INODE")=="1" else 2),'security.selinux':b'unconfined_u:object_r:default_t:s0\0','trusted.archive':b'yes','user.com.apple.FinderInfo':bytes(32)}
 acl=struct.pack('<I',2)+b''.join(struct.pack('<HHI',tag,perm,ident) for tag,perm,ident in [(1,7,0xffffffff),(2,4,70001),(4,5,0xffffffff),(16,5,0xffffffff),(32,0,0xffffffff)])
 values['system.posix_acl_access']=acl
-for i,(name,value) in enumerate(values.items()):
-    host=r/('value'+str(i));host.write_bytes(value)
-    p=subprocess.run([debugfs,'-w','-R','ea_set -f %s /file %s'%(host,name),str(r/'image')],capture_output=True,check=True)
-    assert b'while ' not in p.stderr,p.stderr
+if os.environ.get('EA_INODE')=='1':
+    env=os.environ.copy();prefix=pathlib.Path(mkfs).resolve().parent.parent
+    env['PKG_CONFIG_PATH']=str(prefix/'lib/pkgconfig')+os.pathsep+env.get('PKG_CONFIG_PATH','')
+    flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','--static','ext2fs'],env=env,text=True))
+    subprocess.run(['cc',sys.argv[2],*flags,'-o',str(r/'ea-set')],check=True)
+    stat=subprocess.run([debugfs,'-R','stat /file',str(r/'image')],capture_output=True,check=True).stdout
+    number=re.search(rb'Inode:\s*(\d+)',stat).group(1).decode()
+    args=[str(r/'ea-set'),str(r/'image')]
+    for i,(name,value) in enumerate(values.items()):
+        host=r/('value'+str(i));host.write_bytes(value);args += [number,name,str(host)]
+    subprocess.run(args,capture_output=True,check=True)
+else:
+    for i,(name,value) in enumerate(values.items()):
+        host=r/('value'+str(i));host.write_bytes(value)
+        p=subprocess.run([debugfs,'-w','-R','ea_set -f %s /file %s'%(host,name),str(r/'image')],capture_output=True,check=True)
+        assert b'while ' not in p.stderr,p.stderr
 p=subprocess.run([debugfs,'-w','-R','ea_set /link user.note link-metadata',str(r/'image')],capture_output=True,check=True);assert b'while ' not in p.stderr,p.stderr
+if os.environ.get('EA_INODE')=='1':
+    check=subprocess.run([shutil.which('e2fsck'),'-fy',str(r/'image')],capture_output=True)
+    assert check.returncode in [0,1],check.stdout+check.stderr
+    check=subprocess.run([shutil.which('e2fsck'),'-fn',str(r/'image')],capture_output=True);assert check.returncode==0,check.stdout+check.stderr
+
 PY
 mkdir "$fixture_dir/mount"
 "${READER:-./ext4fuse}" "$fixture_dir/image" "$fixture_dir/mount" -f -s -o ro,default_permissions > "$fixture_dir/reader.log" 2>&1 &
@@ -70,7 +87,7 @@ def mutate(path,name,value=None):
     n=lib.removexattr(*args,0) if value is None else lib.setxattr(*args,value,len(value),0,0)
     if n<0: raise OSError(ctypes.get_errno(),name)
 r=pathlib.Path(sys.argv[1]);mount=r/'mount';f=mount/'file';before=hashlib.sha256((r/'image').read_bytes()).digest()
-values={'user.note':b'hello','user.empty':b'','user.binary':bytes(range(256))*2,'security.selinux':b'unconfined_u:object_r:default_t:s0\0','trusted.archive':b'yes','user.com.apple.FinderInfo':bytes(32)}
+values={'user.note':b'hello','user.empty':b'','user.binary':bytes(range(256))*(256 if os.environ.get("EA_INODE")=="1" else 2),'security.selinux':b'unconfined_u:object_r:default_t:s0\0','trusted.archive':b'yes','user.com.apple.FinderInfo':bytes(32)}
 values['system.posix_acl_access']=struct.pack('<I',2)+b''.join(struct.pack('<HHI',tag,perm,ident) for tag,perm,ident in [(1,7,0xffffffff),(2,4,70001),(4,5,0xffffffff),(16,5,0xffffffff),(32,0,0xffffffff)])
 assert set(listing(f))==set(values),listing(f)
 for name,value in values.items(): assert get(f,name)==value,(name,get(f,name))
@@ -87,5 +104,5 @@ for action in [lambda:mutate(f,'user.note',b'changed'),lambda:mutate(f,'user.not
 assert subprocess.run(['/usr/bin/xattr','-p','user.note',str(f)],capture_output=True,check=True).stdout.rstrip(b'\n')==b'hello'
 assert f.read_bytes()==b'inline payload'
 assert before==hashlib.sha256((r/'image').read_bytes()).digest()
-print('PASS: mounted inode/block binary xattrs, empty values, symlinks, Linux ACL metadata and read-only enforcement')
+print('PASS: mounted '+('64 KiB ea_inode + inline ' if os.environ.get('EA_INODE')=='1' else 'inode/block ')+'binary xattrs, empty values, symlinks, Linux ACL metadata and read-only enforcement')
 PY

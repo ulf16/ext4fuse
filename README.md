@@ -161,13 +161,13 @@ Unknown incompatible and read-only-compatible feature bits are rejected with the
 mask; known unsupported bits are named. Compatible feature bits are ignored according
 to the ext filesystem format's compatibility rules.
 
-Features permitted by preflight include filetype, extents, flex_bg, csum_seed, and
+Features permitted by preflight include filetype, extents, flex_bg, ea_inode, csum_seed, and
 64bit descriptors and checked high physical block addresses. The usual sparse_super, large_file,
 huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
-ea_inode-backed large attributes remain unsupported, and resource/address bounds still apply.
+EA inode values have a 64 KiB limit, and resource/address bounds still apply.
 
-Encryption, casefold, bigalloc, largedir, ea_inode, mmp, dirdata,
+Encryption, casefold, bigalloc, largedir, mmp, dirdata,
 compression, external journal devices, shared_blocks, verity, and other unrecognized
 layouts are refused in this milestone. Some could be supported with further work;
 rejection means this reader has not established support.
@@ -363,8 +363,8 @@ are validated before returning data: entry/value bounds, table separation, names
 duplicate exposed names, external entry ordering, header fields and unexpected external-value inode
 references. Inode checksums cover inode-body attributes; external blocks use CRC32C with
 the filesystem seed and full 64-bit block address when metadata_csum is enabled.
-Shared xattr blocks and shared value storage are permitted. ea_inode remains rejected,
-so supported value capacity is limited to the inode body and one filesystem block.
+Shared xattr blocks and shared value storage are permitted. Large values can be read
+from EA inodes as described below.
 
 ```sh
 make test-xattrs
@@ -376,6 +376,43 @@ The disposable fixtures compare attributes with debugfs across 1/2/4 KiB blocks,
 128/256/512-byte inodes, checksums on/off and stored checksum seeds. They cover binary,
 empty and long-name attributes, Linux ACL conversion, symlink metadata, inline files,
 size queries, missing paths and checksum-repaired malformed records.
+
+## Large values in EA inodes
+
+Filesystems with `ea_inode` are accepted for read-only access. Referenced internal EA
+inodes supply attribute values up to 64 KiB, Linux's userspace xattr limit. Values above
+this limit return E2BIG. Entries may be in the inode body or external xattr block;
+ordinary attributes, inline files/directories and shared EA values remain supported.
+The driver does not create, modify or free EA inodes.
+
+EA references must point to a non-reserved inode, differ from the owning inode and
+match the declared value size. The target must be an active regular EA inode with
+one link and a nonzero 64-bit reference count. Nested attributes, deleted inodes,
+inline EA value storage, missing blocks and unwritten extents are rejected. Ordinary
+path lookups reject internal EA inodes even if a corrupt directory names one.
+Metadata checksums cover the owning/reference/value inodes and external xattr blocks
+where enabled. Listing checks reference metadata and entry hashes without reading
+all large value payloads. Retrieval, including size queries, verifies the full value's
+seeded CRC32C against its stored hash, plus the name/value entry hash. The historical
+signed-byte name-hash variant is accepted; unhashed legacy Lustre EA layouts are not.
+EA timestamp/version fields encode hashes and reference counts, and are not interpreted
+as normal file timestamps or versions.
+
+```sh
+# On Linux, the additional fixture writer needs libext2fs-dev and pkg-config.
+# On macOS it uses the existing e2fsprogs development files.
+make test-ea-inode
+EA_INODE=1 ./test/mount-xattrs.sh
+```
+
+The fixture writer uses libext2fs because debugfs `ea_set -f` reads only one filesystem
+block of input. Fixtures include complete 64 KiB binary values; e2fsck reconciles
+parent EA allocation charging and confirms clean filesystems before reader comparisons.
+Tests cover extent/indirect storage, 1/2/4 KiB blocks, 128/256/512-byte inodes, inline
+owners, checksums on/off and stored seeds. A shared-value layout is verified by e2fsck.
+Corruption fixtures exercise reference numbers, inode state, size/entry hashes, value
+CRC, missing/unwritten blocks, short reads and internal-inode isolation. Every test
+uses disposable images, not real disks.
 
 ## Remaining work
 

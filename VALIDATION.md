@@ -165,7 +165,7 @@ This milestone supersedes the earlier rejection of meta_bg layouts.
 Apple Silicon and FreeBSD remain untested. No write support, journal replay, Linux ACL
 enforcement or macFUSE sparse stat/du allocation fix is included.
 
-## Extended attributes milestone
+## Extended attributes milestone (0.2.5)
 
 - Add read-only listxattr/getxattr for inode-body and external-block attributes.
   Preserve Linux user/trusted/security/system namespace names and binary/empty values;
@@ -189,5 +189,43 @@ enforcement or macFUSE sparse stat/du allocation fix is included.
   empty values, namespace preservation and EROFS for attribute writes/removal. Every
   fixture remains byte-identical after reads; temporary mounts are removed.
 
-Darwin resource-fork offsets, Finder namespace translation, ea_inode support and Linux
-ACL enforcement are not added. Apple Silicon and FreeBSD remain untested.
+At this milestone, Darwin resource-fork offsets, Finder namespace translation, ea_inode
+support and Linux ACL enforcement were not added. Apple Silicon and FreeBSD remain untested.
+
+
+## EA inode milestone (0.2.6)
+
+- Accept the ea_inode feature on Linux-format filesystems with a valid first
+  non-reserved inode boundary. Read values up to 64 KiB from references in the inode
+  body or external xattr block; values above the explicit limit return E2BIG.
+- Check target range, owner/self references, regular EA inode flag/type, one link,
+  nonzero 64-bit reference count, deletion state and exact size. Reject nested xattrs,
+  inline EA value storage, holes and unwritten extents. Ordinary paths and file handles
+  reject internal EA inodes even if corrupted directory entries name them.
+- Preserve common inode/extent/block metadata checksum validation. Check reference
+  entry hashes during listing; retrieval and size queries also check the complete
+  seeded value CRC32C and name/value hash. Accept the historical signed-byte name
+  hash without bypassing payload verification. Unhashed legacy Lustre layouts remain
+  unsupported. EA atime/ctime/version words are hashes/counters, not ordinary times.
+- Read value payloads on demand, including ACL values required for decoding, rather
+  than allocating every large attribute in a list. No recursive EA metadata traversal
+  or production write path is introduced.
+- 943 EA checks pass with ASan/UBSan for each FUSE API: real 1/2/4 KiB layouts,
+  128/256/512-byte inodes, checksums on/off/stored seeds, inline owners, extent and
+  classic indirect storage, values crossing block boundaries and complete 64 KiB
+  binary values. Compare bytes with debugfs and certify base/shared-value layouts
+  with e2fsck. Exercise repaired-CRC state/reference/hash corruption, payload damage,
+  empty/unwritten extents, actual short reads, resource limits and inode isolation.
+- Use a libext2fs fixture writer because debugfs -f reads only one block of value input;
+  e2fsck reconciles parent EA allocation charging before reader checks. All fixture
+  images are disposable. Reads leave valid fixtures byte-identical.
+- Both APIs pass all existing sanitizer suites, including 98 feature preflight checks
+  and 1,285 prior xattr checks. Both macFUSE APIs pass actual mounted 64 KiB retrieval
+  on inline owners, Linux ACL metadata, empty values, symlink attrs and EROFS on writes.
+  The optimized FUSE 3 build also passes exact timestamp/meta_bg/inline and strict
+  path/permission regressions on Intel Sequoia/macFUSE 5.4.0.
+
+Read-only access, no journal replay, no Linux ACL enforcement, no Finder namespace
+translation and the macFUSE sparse stat/du allocation limitation remain. Apple Silicon
+and FreeBSD are untested. Values above 64 KiB and unhashed legacy Lustre EA layouts
+are not supported.

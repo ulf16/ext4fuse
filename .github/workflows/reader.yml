@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install development dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfuse-dev libfuse3-dev pkg-config e2fsprogs
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev libfuse3-dev pkg-config e2fsprogs libext2fs-dev
       - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
         run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Test disposable ext4 images without mounting
@@ -35,3 +35,5 @@ jobs:
         run: make test-meta-bg FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify inode and external-block extended attributes
         run: make test-xattrs FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify large EA inode values and integrity checks
+        run: make test-ea-inode FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

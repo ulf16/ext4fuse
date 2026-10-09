@@ -140,3 +140,8 @@ test-xattrs: test/corruption-probe
 	$(PYTHON) test/xattrs.py
 
 .PHONY: test-xattrs
+
+test-ea-inode: test/corruption-probe
+	$(PYTHON) test/ea-inode.py
+
+.PHONY: test-ea-inode

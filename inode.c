@@ -54,14 +54,19 @@ static int inode_inline_load(struct ext4_inode *inode, const unsigned char *raw,
         if (entry_size > length - cursor) return -EIO;
         size_t value = first + checksum_u16(raw + cursor + 2);
         size_t bytes = checksum_u32(raw + cursor + 8);
-        if (checksum_u32(raw + cursor + 4)) return -EIO;
-        if (bytes) {
+        uint32_t value_inode = checksum_u32(raw + cursor + 4);
+        if (value_inode) {
+            if (!super_ea_inode() || !bytes || value_inode < super_first_inode() ||
+                value_inode > super_inode_count() || value_inode == number) return -EIO;
+            if (bytes > 65536) return -E2BIG;
+        }
+        if (bytes && !value_inode) {
             if (value % 4 || value > length || bytes > length - value) return -EIO;
             if (value < value_floor) value_floor = value;
         }
         if (raw[cursor] == 4 && raw[cursor + 1] == 7 &&
             !memcmp(raw + cursor + 16, "data", 4)) {
-            if (found++) return -EIO;
+            if (found++ || value_inode) return -EIO;
             data_offset = bytes ? value : 0; data_size = bytes;
         }
         cursor += entry_size;
@@ -261,7 +266,9 @@ int inode_get_raw(uint32_t number, struct ext4_inode *inode, unsigned char raw[4
 int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
 {
     unsigned char raw[4096];
-    return inode_get_raw(number, inode, raw);
+    int ret = inode_get_raw(number, inode, raw);
+    if (!ret && (inode->i_flags & EXT4_EA_INODE_FL)) return -EIO;
+    return ret;
 }
 
 int inode_lookup(const char *path, uint32_t *number)
@@ -297,10 +304,10 @@ int inode_lookup(const char *path, uint32_t *number)
         ret = 0;
     }
     inode_dir_ctx_put(ctx);
-    if (!ret && need_directory) {
+    if (!ret) {
         struct ext4_inode inode;
         ret = inode_get_by_number(current, &inode);
-        if (!ret && !S_ISDIR(inode.i_mode)) ret = -ENOTDIR;
+        if (!ret && need_directory && !S_ISDIR(inode.i_mode)) ret = -ENOTDIR;
     }
     if (!ret) *number = current;
     return ret;

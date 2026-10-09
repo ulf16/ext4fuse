@@ -28,6 +28,8 @@ int super_metadata_csum(void);
 int super_linux_inode_format(void);
 int super_huge_file(void);
 int super_inline_data(void);
+int super_ea_inode(void);
+uint32_t super_first_inode(void);
 uint32_t super_checksum_seed(void);
 
 /* struct ext4_group_desc */

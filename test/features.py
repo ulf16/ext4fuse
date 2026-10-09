@@ -56,13 +56,22 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
     incompat = struct.unpack_from("<I", original_header, 1024 + 0x60)[0]
     ro_compat = struct.unpack_from("<I", original_header, 1024 + 0x64)[0]
     for bit, name in [(1,"compression"),(4,"needs_recovery"),(8,"journal_dev"),
-                      (0x100,"mmp"),(0x400,"ea_inode"),(0x1000,"dirdata"),(0x4000,"largedir"),
+                      (0x100,"mmp"),(0x1000,"dirdata"),(0x4000,"largedir"),
                       (0x10000,"encrypt"),(0x20000,"casefold"),
                       (0x80000000,"unknown=0x80000000")]:
         mutate(1024 + 0x60, "I", incompat | bit, name)
     for bit, name in [(0x200,"bigalloc"),(0x4000,"shared_blocks"),(0x8000,"verity"),
                       (0x10000,"orphan_present"),(0x80000000,"unknown=0x80000000")]:
         mutate(1024 + 0x64, "I", ro_compat | bit, name)
+
+    mutate(1024 + 0x60, "I", incompat | 0x400)
+
+    with base.open("r+b") as file:
+        file.seek(1024 + 0x60); file.write(struct.pack("<I", incompat | 0x400))
+    mutate(1024 + 0x54, "I", 0, "first non-reserved inode")
+    with base.open("r+b") as file:
+        file.seek(1024 + 0x60); file.write(struct.pack("<I", incompat | 0x400))
+    mutate(1024 + 0x48, "I", 1, "ea_inode requires Linux")
 
     # Compatible features may be ignored by a reader; do not confuse the masks.
     compat = struct.unpack_from("<I", original_header, 1024 + 0x5c)[0]

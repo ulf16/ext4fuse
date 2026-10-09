@@ -43,9 +43,12 @@ int main(int argc, char **argv)
         if (ret < 0 || inode_get_data_pblock(&inode, 0, &physical, NULL) < 0 || !physical) return 2;
         if (truncate(argv[1], BLOCKS2BYTES(physical) + 10) < 0) return 2;
     }
-    if (!strcmp(argv[2], "xlist") || !strcmp(argv[2], "xget")) {
-        char data[32768];
-        int get = !strcmp(argv[2], "xget");
+    if (!strcmp(argv[2], "xtruncate")) {
+        if (argc != 7 || truncate(argv[1], strtoll(argv[6], NULL, 10)) < 0) return 2;
+    }
+    if (!strcmp(argv[2], "xlist") || !strcmp(argv[2], "xget") || !strcmp(argv[2], "xtruncate")) {
+        char data[65536];
+        int get = strcmp(argv[2], "xlist") != 0;
         size_t size = get ? (argc > 5 ? strtoul(argv[5], NULL, 10) : sizeof(data))
                           : (argc > 4 ? strtoul(argv[4], NULL, 10) : sizeof(data));
         if (size > sizeof(data) || (get && argc < 5)) return 2;
