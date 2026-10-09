@@ -41,7 +41,7 @@ override LDFLAGS += -lexecinfo
 endif
 
 BINARY = ext4fuse
-SOURCES += fuse-main.o logging.o extents.o disk.o checksum.o super.o inode.o dcache.o
+SOURCES += fuse-main.o logging.o extents.o disk.o checksum.o dirhash.o dirindex.o super.o inode.o dcache.o
 SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o op_xattr.o
 
 BUILD_DIR = .build/fuse$(FUSE_API)
@@ -67,7 +67,7 @@ test: $(BINARY)
 	@for T in test/[0-9][0-9][0-9][0-9]-*; do SKIP_SLOW_TESTS=1 ./$$T || exit $$?; done
 
 clean:
-	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe
+	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch
 	rm -rf test/logs .build
 
 .PHONY: test
@@ -150,3 +150,27 @@ test-largedir: test/corruption-probe
 	python3 test/largedir.py
 
 .PHONY: test-largedir
+
+test/disk-capacity: test/disk-capacity.c disk.c $(filter-out $(BUILD_DIR)/disk.o,$(READER_OBJECTS)) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/disk-capacity.c $(filter-out $(BUILD_DIR)/disk.o,$(READER_OBJECTS)) $(LDFLAGS)
+
+test-device-capacity: test/disk-capacity
+	./test/disk-capacity
+
+.PHONY: test-device-capacity
+
+test/index-probe: test/index-probe.c dirindex.c $(filter-out $(BUILD_DIR)/dirindex.o,$(READER_OBJECTS)) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/index-probe.c $(filter-out $(BUILD_DIR)/dirindex.o,$(READER_OBJECTS)) $(LDFLAGS)
+
+test/lookup-batch: test/lookup-batch.c $(READER_OBJECTS) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/lookup-batch.c $(READER_OBJECTS) $(LDFLAGS)
+
+test-indexed: test/corruption-probe test/index-probe test/lookup-batch
+	$(PYTHON) test/indexed.py
+
+.PHONY: test-indexed
+
+test-index-collisions: test/corruption-probe
+	$(PYTHON) test/index-collisions.py
+
+.PHONY: test-index-collisions

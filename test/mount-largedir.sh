@@ -4,12 +4,19 @@ set -eu
 [ "$(uname -s)" = Darwin ] || exit 1
 fixture_dir=$(mktemp -d "${TMPDIR:-/tmp}/ext4fuse-largedir-mount.XXXXXX")
 reader_pid=
+reader_device=
 cleanup() {
     /sbin/umount "$fixture_dir/mount" 2>/dev/null || true
     if [ -n "$reader_pid" ]; then kill "$reader_pid" 2>/dev/null || true; wait "$reader_pid" 2>/dev/null || true; fi
     if /sbin/mount | grep -F " on $fixture_dir/mount (" >/dev/null; then
         echo "Mount remains active; retaining $fixture_dir" >&2
-    else rm -rf "$fixture_dir"; fi
+    else
+        if [ -n "$reader_device" ] && ! hdiutil detach "$reader_device" >/dev/null; then
+            echo "Device remains attached; retaining $fixture_dir" >&2
+            return
+        fi
+        rm -rf "$fixture_dir"
+    fi
 }
 trap cleanup EXIT HUP INT TERM
 python3 - "$fixture_dir" "$(dirname "$0")/largedir-set.c" <<'PY'
@@ -31,7 +38,18 @@ subprocess.run([str(r/'deepen'),str(image),number],check=True)
 p=subprocess.run([fsck,'-fn',str(image)],capture_output=True);assert p.returncode==0,p.stdout+p.stderr
 (r/'before').write_text(hashlib.sha256(image.read_bytes()).hexdigest());(r/'mount').mkdir()
 PY
-"${READER:-./ext4fuse}" "$fixture_dir/image" "$fixture_dir/mount" -f -s -o ro,default_permissions > "$fixture_dir/reader.log" 2>&1 &
+reader_input="$fixture_dir/image"
+if [ "${RAW_DEVICE:-0}" = 1 ]; then
+    hdiutil attach -readonly -nomount -imagekey diskimage-class=CRawDiskImage -plist "$reader_input" > "$fixture_dir/device.plist"
+    reader_device=$(python3 - "$fixture_dir/device.plist" <<'PYDEVICE'
+import plistlib,sys
+with open(sys.argv[1],'rb') as f:entries=plistlib.load(f)['system-entities']
+print(min([e['dev-entry'] for e in entries if 'dev-entry' in e],key=len))
+PYDEVICE
+)
+    reader_input=$(printf '%s' "$reader_device" | sed 's,^/dev/disk,/dev/rdisk,')
+fi
+"${READER:-./ext4fuse}" "$reader_input" "$fixture_dir/mount" -f -s -o ro,default_permissions > "$fixture_dir/reader.log" 2>&1 &
 reader_pid=$!
 attempt=0
 until [ -d "$fixture_dir/mount/many" ]; do

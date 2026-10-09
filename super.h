@@ -30,6 +30,7 @@ int super_huge_file(void);
 int super_inline_data(void);
 int super_ea_inode(void);
 int super_largedir(void);
+int super_directory_hash(unsigned version, const char *name, size_t length, uint32_t *hash);
 uint32_t super_first_inode(void);
 uint32_t super_checksum_seed(void);
 

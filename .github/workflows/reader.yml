@@ -5,7 +5,7 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     strategy:
       matrix:
         fuse: [2, 3]
@@ -39,3 +39,11 @@ jobs:
         run: make test-ea-inode FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify three-level largedir indexes and directory cursors
         run: make test-largedir FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify physical-device capacity query bounds and errors
+        run: make test-device-capacity FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify indexed lookup hashes, names, corrupt paths and block-read cost
+        run: make test-indexed FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify real hash collisions across leaf and index boundaries
+        run: make test-index-collisions FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify actual read-only Linux loop-device capacity and reads
+        run: python3 test/device-capacity-linux.py

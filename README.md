@@ -178,8 +178,8 @@ feature bits to bypass these checks.
 
 Geometry checks cover block sizes (1/2/4 KiB), inode size, group capacities, descriptor
 size and inode table bounds. Descriptor allocations are limited to 256 MiB. Regular
-images shorter than their declared filesystem size are refused; physical-device size
-checking needs platform-specific work. These checks are not a replacement for fsck,
+images and supported physical devices shorter than their declared filesystem size are refused.
+Device capacity query failures are also refused; see the device/index milestone below. These checks are not a replacement for fsck,
 and directory and extent records are also checked on demand. Checksums are verified as described below.
 
 ```sh
@@ -438,9 +438,9 @@ through one otherwise. Root headers, exact index capacity/count, hash order and
 28-bit child block bounds are checked even without metadata checksums. Index and
 leaf checksums remain verified before their entries are exposed.
 
-Enumeration and filename lookup use linear block scans; index nodes are skipped
-as empty directory records. This adds layout compatibility, not indexed lookup
-acceleration. Listing buffers retain 64-bit resume offsets and directory sizes.
+Enumeration uses linear block scans, with index nodes skipped as empty records.
+Version 0.2.8 adds indexed filename lookup as described below. Listing buffers retain
+64-bit resume offsets and directory sizes.
 
 `make test-largedir` builds real indexed directories across 1/2/4 KiB blocks and
 checksum modes, inserts valid intermediate nodes using a test-only libext2fs helper,
@@ -458,3 +458,43 @@ PATH="$(brew --prefix e2fsprogs)/sbin:$PATH" sh test/mount-largedir.sh
 The mounted test checks exact 1,100-name listings through macFUSE, repeated/paged
 enumeration, contents, missing-name behavior, read-only rejection and unchanged image
 bytes. The test helper uses the same libext2fs development files as the EA inode suite.
+
+## Device capacity and indexed lookup (0.2.8)
+
+Before mounting, physical-device capacity is queried using macOS block size/count,
+Linux `BLKGETSIZE64`, or FreeBSD `DIOCGMEDIASIZE`. Undersized inputs, failed queries,
+zero device capacity and arithmetic overflow are refused. Unsupported input types
+are refused. Raw macOS and FreeBSD character-device reads use bounded sector bounce
+buffers for metadata or payload ranges that do not meet the device's alignment;
+sector sizes above 64 KiB or invalid sector geometry are refused.
+
+Indexed directories now use the htree for filename lookup. The reader implements
+legacy, half-MD4 and TEA hashes with signed/unsigned byte variants and the filesystem
+hash seed/flags. It binary-searches verified nodes, follows only the selected path,
+and continues equal-hash collisions across leaf and index-node boundaries. Invalid
+selected-node roles, ancestor cycles, checksum errors and invalid references return
+I/O errors; malformed trees do not silently fall back to linear lookup. Regular
+linear/inline directories and dot/dotdot still use their existing paths. Readdir
+remains linear and preserves paged offsets; no mutable directory cache is added.
+
+The test suite compares 8,640 hashes with libext2fs and all 1,100 names per hash variant
+with debugfs inode numbers, including UTF-8 bytes and missing names. Fsck-certified
+collision fixtures span 1/2/4 KiB blocks, plain/seeded checksums and index depths zero
+through two. Test-only instrumentation measures 3–4 directory-block loads for a miss
+versus 162–163 with linear lookup in the 1,100-name fixture. These are directory I/O
+counts, not a general wall-clock speedup claim. Indexed reads verify metadata on demand;
+corruption in unvisited nodes is not necessarily detected by a particular lookup.
+
+```sh
+make test-device-capacity test-indexed test-index-collisions
+# macOS: attaches and detaches only disposable read-only disk images.
+python3 test/device-capacity-macos.py
+RAW_DEVICE=1 sh test/mount-largedir.sh
+# Linux: creates/detaches disposable read-only loop devices; needs sudo.
+python3 test/device-capacity-linux.py
+```
+
+Native macOS tests cover both block and raw device preflight, payload reads, oversize
+rejection and a raw-device macFUSE mount. Device tests never target user disks.
+FreeBSD capacity/alignment implementation is not validated on a real FreeBSD device.
+All previously documented read-only, journal, ACL enforcement and platform limits remain.

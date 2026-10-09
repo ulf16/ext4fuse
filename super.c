@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <limits.h>
 #include "checksum.h"
+#include "dirhash.h"
 #include "types/ext4_super.h"
 
 #include "disk.h"
@@ -168,7 +169,7 @@ int super_fill(void)
     if ((uint64_t)super.s_inodes_count > (uint64_t)super_n_block_groups() * super.s_inodes_per_group)
         return invalid("inode count exceeds block group capacity");
     ret = disk_check_size(super_block_count() * BLOCK_SIZE);
-    if (ret < 0) return invalid("image is shorter than its declared filesystem size (or I/O error)");
+    if (ret < 0) return invalid("cannot verify input capacity against its declared filesystem size (undersized input or device query error)");
 
     INFO("BLOCK SIZE: %i", super_block_size());
     INFO("BLOCK GROUP SIZE: %i", super_block_group_size());
@@ -270,4 +271,10 @@ int super_group_fill(void)
     free(gdesc_table);
     gdesc_table = table;
     return 0;
+}
+
+int super_directory_hash(unsigned version, const char *name, size_t length, uint32_t *hash)
+{
+    if (version<=2 && (super.s_flags & 2)) version+=3;
+    return directory_hash(version,name,length,super.s_hash_seed,hash);
 }

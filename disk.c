@@ -13,20 +13,27 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
-#include <errno.h>
+#include <sys/ioctl.h>
+#ifdef __APPLE__
+#include <sys/disk.h>
+#elif defined(__linux__)
+#include <linux/fs.h>
+#elif defined(__FreeBSD__)
+#include <sys/disk.h>
+#endif
 
 #include "disk.h"
 #include "logging.h"
 
-#ifdef __FreeBSD__
-#include <string.h>
-#endif
 
 
 static int disk_fd = -1;
+static uint32_t disk_sector;
 
 
 static int pread_wrapper(int disk_fd, void *p, size_t size, off_t where)
@@ -93,6 +100,22 @@ int disk_open(const char *path)
         return -errno;
     }
 
+    disk_sector = 0;
+#if defined(__APPLE__) || defined(__FreeBSD__)
+    struct stat st;
+    if (fstat(disk_fd, &st) < 0) return -errno;
+    if (S_ISCHR(st.st_mode)) {
+#ifdef __APPLE__
+        unsigned long request = DKIOCGETBLOCKSIZE;
+#else
+        unsigned long request = DIOCGSECTORSIZE;
+#endif
+        int ret;
+        do { ret = ioctl(disk_fd, request, &disk_sector); } while (ret < 0 && errno == EINTR);
+        if (ret < 0) return -errno;
+        if (!disk_sector || disk_sector > 65536 || (disk_sector & (disk_sector - 1))) return -EIO;
+    }
+#endif
     return 0;
 }
 
@@ -101,27 +124,79 @@ int disk_open(const char *path)
 int disk_read_exact(off_t where, size_t size, void *p)
 {
     unsigned char *out = p;
+    unsigned char *sector = NULL;
     while (size) {
-        ssize_t n = pread(disk_fd, out, size, where);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            return -errno;
+        size_t length = size;
+        off_t start = where;
+        void *target = out;
+        size_t inside = disk_sector ? (uint64_t)where % disk_sector : 0;
+        int bounce = disk_sector && (inside || size < disk_sector);
+        if (bounce) {
+            if (!sector) sector = malloc(disk_sector);
+            if (!sector) return -ENOMEM;
+            start -= inside;
+            length = disk_sector;
+            target = sector;
+        } else if (disk_sector) length -= length % disk_sector;
+        ssize_t n = pread(disk_fd, target, length, start);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0 || (bounce && n != (ssize_t)length)) {
+            int error = n < 0 ? -errno : -EIO;
+            free(sector);
+            return error;
         }
-        if (n == 0) return -EIO;
-        out += n;
-        where += n;
-        size -= n;
+        size_t copied = bounce ? MIN(size, disk_sector - inside) : (size_t)n;
+        if (bounce) memcpy(out, sector + inside, copied);
+        out += copied;
+        where += copied;
+        size -= copied;
     }
+    free(sector);
     return 0;
 }
 
+static int capacity_ioctl(unsigned long request, void *value)
+{
+    int ret;
+    do { ret = ioctl(disk_fd, request, value); } while (ret < 0 && errno == EINTR);
+    return ret < 0 ? -errno : 0;
+}
 int disk_check_size(uint64_t size)
 {
     struct stat st;
     if (fstat(disk_fd, &st) < 0) return -errno;
-    /* Device sizes need platform-specific ioctls; only bound regular images. */
-    if (S_ISREG(st.st_mode) && (uint64_t)st.st_size < size) return -EIO;
-    return 0;
+    uint64_t capacity;
+    if (S_ISREG(st.st_mode)) {
+        if (st.st_size < 0) return -EIO;
+        capacity = st.st_size;
+    } else if (S_ISBLK(st.st_mode) || S_ISCHR(st.st_mode)) {
+        int ret;
+#ifdef __APPLE__
+        uint32_t sector = 0;
+        uint64_t sectors = 0;
+        ret = capacity_ioctl(DKIOCGETBLOCKSIZE, &sector);
+        if (ret < 0) return ret;
+        ret = capacity_ioctl(DKIOCGETBLOCKCOUNT, &sectors);
+        if (ret < 0) return ret;
+        if (!sector || !sectors) return -EIO;
+        if (sectors > UINT64_MAX / sector) return -EOVERFLOW;
+        capacity = sectors * sector;
+#elif defined(__linux__)
+        capacity = 0;
+        ret = capacity_ioctl(BLKGETSIZE64, &capacity);
+        if (ret < 0) return ret;
+#elif defined(__FreeBSD__)
+        off_t media = 0;
+        ret = capacity_ioctl(DIOCGMEDIASIZE, &media);
+        if (ret < 0) return ret;
+        if (media <= 0) return -EIO;
+        capacity = media;
+#else
+        return -ENOTSUP;
+#endif
+        if (!capacity) return -EIO;
+    } else return -ENOTSUP;
+    return capacity < size ? -EIO : 0;
 }
 
 int __disk_read(off_t where, size_t size, void *p, const char *func, int line)

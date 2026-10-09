@@ -86,7 +86,7 @@ int checksum_directory(const void *block, uint32_t seed, int indexed, uint32_t l
             uint32_t child=checksum_u32(p+offset+i*8+4) & 0x0fffffffU;
             if (!child || child>=directory_blocks || child==logical) return -EIO;
             if (i) {
-                uint32_t hash=checksum_u32(p+offset+i*8) & ~1U;
+                uint32_t hash=checksum_u32(p+offset+i*8);
                 if (hash<previous) return -EIO;
                 previous=hash;
             }

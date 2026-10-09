@@ -26,6 +26,8 @@ int inode_get_times(const struct ext4_inode *inode, struct inode_times *times);
 int inode_get_data_pblock(struct ext4_inode *inode, uint32_t lblock,
                           uint64_t *pblock, uint32_t *extent_len);
 int inode_read_data(struct ext4_inode *inode, char *buf, size_t size, off_t offset);
+int inode_index_find(struct ext4_inode *inode, struct inode_dir_ctx *ctx,
+                     const char *name, size_t length, uint32_t *number);
 int inode_lookup(const char *path, uint32_t *number);
 
 struct inode_dir_ctx *inode_dir_ctx_get(void);

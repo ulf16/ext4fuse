@@ -260,3 +260,33 @@ The reader continues to enumerate and look up names by linear scans. Indexed loo
 acceleration and testing of multi-gigabyte populated directories are not included.
 Existing read-only, journal, ACL enforcement, Apple Silicon/FreeBSD and macFUSE
 sparse-allocation limitations remain.
+
+## Device/index milestone (0.2.8)
+
+- Capacity bounds use macOS DKIOC block count/size, Linux BLKGETSIZE64 and FreeBSD
+  DIOCGMEDIASIZE, with EINTR retry and checked multiplication. Regular files retain
+  fstat bounds; unknown input types and unavailable device capacity are rejected.
+- Sector-aligned bounce reads handle macOS/FreeBSD raw-character metadata and payload
+  ranges without changing the file bytes. Platform unit tests exercise boundary,
+  capacity query, EOF, EINTR and read error behavior. Native macOS tests attach only
+  disposable read-only images, check block/raw preflight and payload reads, reject
+  overstated geometry and detach the devices. FreeBSD native validation remains open.
+- Six filename hash variants compare with libext2fs in 8,640 cases, covering seeded
+  and default hashing, signed/unsigned high bytes and input chunk boundaries.
+- Indexed lookup tests compare all names/inode numbers against debugfs for six
+  1,100-entry UTF-8 layouts at depths one/two; dot/dotdot and missing names remain
+  correct. The 6,633 checks include repaired-CRC selected-path corruption/cycles.
+- 72 collision checks use actual equal-hash names split across leaves and index
+  nodes at depths zero/one/two, three block sizes and checksums off/on. E2fsck
+  certifies each baseline, and distinct file contents prove both names are found.
+- Test-only block-load instrumentation shows 3–4 directory reads for missing-name
+  lookup against 162–163 with linear scan on these fixtures. Production adds no
+  test counters or mutable directory cache. Enumeration remains linear/paged.
+- Native Intel Sequoia/macFUSE reads a three-level indexed directory through an
+  attached raw image device, lists every one of 1,100 names, checks contents/missing
+  paths and EROFS writes, and confirms unchanged image bytes before detach.
+
+Metadata validation is on demand; indexed lookup does not certify unvisited leaves
+or indexes. Full directory enumeration retains its own checks. Multi-gigabyte
+populated directory tests, Linux ACL enforcement, journal replay, native Apple Silicon
+and FreeBSD coverage, and the macFUSE sparse allocation reporting limitation remain.

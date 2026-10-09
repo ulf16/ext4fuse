@@ -290,6 +290,13 @@ int inode_lookup(const char *path, uint32_t *number)
         if (ret < 0) break;
         ret = inode_dir_ctx_reset(ctx, &inode);
         if (ret < 0) break;
+        if ((inode.i_flags & EXT4_INDEX_FL) &&
+            !(length==1 && path[0]=='.') && !(length==2 && path[0]=='.' && path[1]=='.')) {
+            ret=inode_index_find(&inode,ctx,path,length,&current);
+            if (ret<0) break;
+            path+=length;
+            continue;
+        }
         off_t offset = 0;
         struct ext4_dir_entry_2 *d;
         while ((ret = inode_dentry_get(&inode, offset, ctx, &d)) > 0) {
