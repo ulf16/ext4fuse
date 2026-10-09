@@ -64,6 +64,18 @@ static void *e4f_init(struct fuse_conn_info *info, struct fuse_config *config)
 #define e4f_init op_init
 #endif
 
+/* macFUSE's FUSE 2 ABI includes the resource-fork position argument. */
+#if defined(__APPLE__) && FUSE_MAJOR_VERSION < 3
+static int e4f_getxattr(const char *path, const char *name, char *value,
+                      size_t size, uint32_t position)
+{
+    if (position) return -EINVAL;
+    return op_getxattr(path, name, value, size);
+}
+#else
+#define e4f_getxattr op_getxattr
+#endif
+
 static struct fuse_operations e4f_ops = {
     .getattr    = e4f_getattr,
     .readdir    = e4f_readdir,
@@ -71,6 +83,8 @@ static struct fuse_operations e4f_ops = {
     .read       = op_read,
     .readlink   = op_readlink,
     .init       = e4f_init,
+    .listxattr  = op_listxattr,
+    .getxattr   = e4f_getxattr,
 };
 
 static struct e4f {

@@ -25,7 +25,7 @@ override CFLAGS  += -DEXT4FUSE_VERSION=\"$(VERSION)\"
 override LDFLAGS += $(shell $(PKG_CONFIG) $(FUSE_PKG) --libs)
 
 ifeq ($(shell uname), Darwin)
-# Use macFUSE's portable stat-based FUSE 3 ABI; no Darwin-specific attributes yet.
+# Use macFUSE's portable stat-based FUSE 3 ABI and portable xattr callbacks.
 ifeq ($(FUSE_API),3)
 override CFLAGS += -DFUSE_DARWIN_ENABLE_EXTENSIONS=0
 endif
@@ -42,7 +42,7 @@ endif
 
 BINARY = ext4fuse
 SOURCES += fuse-main.o logging.o extents.o disk.o checksum.o super.o inode.o dcache.o
-SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o
+SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o op_xattr.o
 
 BUILD_DIR = .build/fuse$(FUSE_API)
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(SOURCES))
@@ -135,3 +135,8 @@ test-meta-bg: test/corruption-probe test/feature-probe
 	$(PYTHON) test/meta-bg.py
 
 .PHONY: test-meta-bg
+
+test-xattrs: test/corruption-probe
+	$(PYTHON) test/xattrs.py
+
+.PHONY: test-xattrs

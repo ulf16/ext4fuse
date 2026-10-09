@@ -43,6 +43,21 @@ int main(int argc, char **argv)
         if (ret < 0 || inode_get_data_pblock(&inode, 0, &physical, NULL) < 0 || !physical) return 2;
         if (truncate(argv[1], BLOCKS2BYTES(physical) + 10) < 0) return 2;
     }
+    if (!strcmp(argv[2], "xlist") || !strcmp(argv[2], "xget")) {
+        char data[32768];
+        int get = !strcmp(argv[2], "xget");
+        size_t size = get ? (argc > 5 ? strtoul(argv[5], NULL, 10) : sizeof(data))
+                          : (argc > 4 ? strtoul(argv[4], NULL, 10) : sizeof(data));
+        if (size > sizeof(data) || (get && argc < 5)) return 2;
+        ret = get ? op_getxattr(argv[3], argv[4], data, size) : op_listxattr(argv[3], data, size);
+        printf("%d\n", ret);
+        if (ret > 0 && size) {
+            if ((size_t)ret > size) return 2;
+            for (int i = 0; i < ret; i++) printf("%02x", (unsigned char)data[i]);
+            puts("");
+        }
+        return 0;
+    }
     if (!strcmp(argv[2], "bulk")) {
         size_t size = argc > 5 ? strtoul(argv[5],NULL,10) : 8U*1024*1024;
         if (!size || size > 16U*1024*1024) return 2;

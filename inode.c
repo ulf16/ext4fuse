@@ -222,7 +222,7 @@ int inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ct
     return 1;
 }
 
-int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
+int inode_get_raw(uint32_t number, struct ext4_inode *inode, unsigned char raw[4096])
 {
     if (!number) return -ENOENT;
     if (number > super_inode_count()) return -EIO;
@@ -231,7 +231,6 @@ int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
     off += (uint64_t)(number % super_inodes_per_group()) * super_inode_size();
     memset(inode, 0, sizeof(*inode));
     /* Verify the full on-disk inode, including fields absent from our struct. */
-    unsigned char raw[4096];
     size_t length=super_inode_size();
     int ret = disk_read_exact(off, length, raw);
     if (ret < 0) return ret;
@@ -257,6 +256,12 @@ int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
     if (inode->i_flags & EXT4_INLINE_DATA_FL)
         return inode_inline_load(inode, raw, length, inum);
     return 0;
+}
+
+int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
+{
+    unsigned char raw[4096];
+    return inode_get_raw(number, inode, raw);
 }
 
 int inode_lookup(const char *path, uint32_t *number)

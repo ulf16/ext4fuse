@@ -23,7 +23,7 @@ No Linux-reference mounted comparison has been performed yet. CI results are tra
 ## FUSE 3 milestone — 2026-10-08
 
 - FUSE 3 API 31 build against macFUSE's installed `fuse3` 3.18.2 library.
-- Portable macFUSE ABI selected explicitly; no Darwin attribute extensions.
+- Portable macFUSE ABI selected explicitly; no Darwin-specific stat ABI extensions.
 - AddressSanitizer/UndefinedBehaviorSanitizer image tests pass for both API versions.
 - Mounted smoke tests check both APIs, including directory listings and reading a
   255-byte filename, alongside content, missing-path and write-rejection checks.
@@ -71,7 +71,8 @@ checks cover 256- and 257-byte components; both mounted APIs pass long-name list
   leaves/htree nodes, and traversed external extent nodes before consuming metadata.
 - Support UUID/stored seeds, 16/32-bit inode checksums, and legacy CRC16 descriptors.
 - Structural suites use non-checksummed copies to preserve independent bounds coverage.
-- No file-data, bitmap, xattr, journal, backup, or unused-subtree checksum certification.
+- No file-data, bitmap, journal, backup, or unused-subtree checksum certification;
+  xattr checksum coverage was added in the later extended-attribute milestone.
 - 75 checksum checks pass locally under ASan/UBSan for both FUSE APIs, alongside
   the existing 97 preflight and 78 structural checks. Both macFUSE mount tests pass.
 
@@ -162,4 +163,31 @@ This milestone supersedes the earlier rejection of meta_bg layouts.
   checks also pass. Temporary volumes are removed after testing.
 
 Apple Silicon and FreeBSD remain untested. No write support, journal replay, Linux ACL
-support or macFUSE sparse stat/du allocation fix is included.
+enforcement or macFUSE sparse stat/du allocation fix is included.
+
+## Extended attributes milestone
+
+- Add read-only listxattr/getxattr for inode-body and external-block attributes.
+  Preserve Linux user/trusted/security/system namespace names and binary/empty values;
+  hide internal system.data storage and omit unknown namespace indices.
+- Convert ext4 disk POSIX ACL v1 into Linux userspace xattr v2, including full named
+  UID/GID entries and ACL_UNDEFINED_ID for unnamed principals. Access/default ACLs
+  remain metadata: Linux ACL, capability and SELinux policy enforcement is not added.
+- Validate full inode/block tables before returning data: entry/name/value bounds,
+  table/value separation, duplicate exposed names, sorted external entries, header
+  fields and unexpected external-value inode references. Verify inode-body checksums
+  through the common raw-inode reader and external block CRC32C using the filesystem
+  seed and 64-bit block address. ea_inode-backed values remain unsupported.
+- 1,285 xattr checks pass for each FUSE API with ASan/UBSan, covering 1/2/4 KiB blocks,
+  128/256/512-byte inodes, checksums on/off, stored seeds, comparison with debugfs,
+  empty/binary/long-name values, ACL conversion, symlinks, size queries, ERANGE,
+  missing paths/attributes, checksum damage and checksum-repaired malformed metadata.
+  The existing image, feature, corruption, checksum, ownership, large-file, inline,
+  timestamp and meta_bg suites also pass with both APIs.
+- Actual Intel Sequoia/macFUSE mounts pass with both APIs: native Darwin list/get calls,
+  the xattr command, inline files with external attributes, ACL metadata, symlink xattrs,
+  empty values, namespace preservation and EROFS for attribute writes/removal. Every
+  fixture remains byte-identical after reads; temporary mounts are removed.
+
+Darwin resource-fork offsets, Finder namespace translation, ea_inode support and Linux
+ACL enforcement are not added. Apple Silicon and FreeBSD remain untested.

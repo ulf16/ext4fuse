@@ -68,8 +68,8 @@ and switching API versions relinks the binary. Clean before changing optimizatio
 or sanitizer flags.
 
 On macOS, FUSE 3 uses `FUSE_DARWIN_ENABLE_EXTENSIONS=0` to select macFUSE's portable
-`struct stat` API. Darwin-specific extended attributes and READDIR_PLUS optimization
-are not implemented in this milestone.
+`struct stat` API. The reader uses portable xattr callbacks; Darwin resource-fork offsets and
+READDIR_PLUS optimization are not implemented.
 
 The binary stays in the checkout; building does not replace an installed ext4fuse.
 For an older macOS target, explicitly set `MACOSX_DEPLOYMENT_TARGET` (not tested here).
@@ -138,8 +138,8 @@ read permissions. It therefore permits the mounting user to read mode-zero and f
 private files. Do not combine that recovery mode with `allow_other` when access should
 remain private. `allow_other` separately expands who can access the mount.
 See [macFUSE's mount options](https://github.com/macfuse/macfuse/wiki/Mount-Options).
-Linux ACLs are not exposed or enforced by this reader; mode checks are not full Linux
-ACL equivalence. Non-Linux inode ownership layouts remain unaudited.
+Linux ACLs are exposed as attribute metadata but are not enforced by this reader;
+mode checks are not full Linux ACL equivalence. Non-Linux inode ownership layouts remain unaudited.
 
 ```sh
 make test-attributes
@@ -165,7 +165,7 @@ Features permitted by preflight include filetype, extents, flex_bg, csum_seed, a
 64bit descriptors and checked high physical block addresses. The usual sparse_super, large_file,
 huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and project
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
-extended attributes are not exposed, and resource/address bounds still apply.
+ea_inode-backed large attributes remain unsupported, and resource/address bounds still apply.
 
 Encryption, casefold, bigalloc, largedir, ea_inode, mmp, dirdata,
 compression, external journal devices, shared_blocks, verity, and other unrecognized
@@ -198,7 +198,7 @@ documentation.
 
 When `metadata_csum` is enabled, CRC32C verification covers the primary superblock,
 all primary group descriptors, each inode read, directory leaves and htree index
-blocks, and external extent nodes traversed. The inode extent root is covered by
+blocks, external extent nodes traversed, and external xattr blocks read. The inode extent root is covered by
 its inode checksum. Stored checksum seeds, UUID-derived seeds, 16-bit inode checksums,
 and the older `gdt_csum` CRC16 descriptor format are supported. A bad superblock or
 descriptor stops preflight; bad inode/directory/extent checksums return I/O errors.
@@ -206,7 +206,7 @@ Metadata-checksummed non-Linux inode formats and unknown checksum algorithms are
 
 Verification follows the Linux kernel's
 [checksum formats](https://www.kernel.org/doc/html/latest/filesystems/ext4/checksums.html).
-It does not verify file payloads, allocation bitmaps, extended attributes, journal
+It does not verify file payloads, allocation bitmaps, journal
 contents, backup metadata, or unused extent subtrees. Filesystems without checksum
 features still receive structural validation; missing checksums cannot detect arbitrary
 byte corruption. Images must remain unmounted and unchanged while being read.
@@ -306,7 +306,7 @@ Linux inline regular files and directories are supported. File bytes come from t
 keep the two dirent regions separate and synthesize dot/parent entries from the stored
 parent inode. The bounded xattr parser requires system.data and rejects malformed,
 overlapping-table, out-of-inode, duplicate or external-value references. Inode checksums
-protect inline data where enabled. Other extended attributes and ACLs remain unexposed.
+protect inline data where enabled. Other extended attributes and Linux ACL metadata are exposed through read-only xattr callbacks.
 
 Real e2fsprogs fixtures cover 1/2/4 KiB blocks, 256/512-byte inodes, checksums on/off,
 empty files, the 60-byte boundary, larger files converted to extents, both inline directory
@@ -340,6 +340,42 @@ rule, and the tests distinguish that formatter quirk from actual inode encodings
 The meta_bg suite checks real 1/2/4 KiB, 32/64-byte descriptor, sparse-super and checksum
 variants across three descriptor blocks. Mixed classic/meta placement is also exercised
 using explicit descriptor copies; those synthetic fixtures do not certify bitmap repair.
+
+## Extended attributes
+
+`listxattr` and `getxattr` expose attributes in the inode body and its external xattr
+block. Names retain their Linux namespaces (`user.`, `trusted.`, `security.`, `system.`).
+Values are returned unchanged, including embedded NUL bytes and empty values, except
+POSIX ACLs: ext4's compact disk encoding is converted to Linux's version-2 xattr encoding.
+Access and default ACLs are metadata only; macOS does not enforce these Linux ACLs.
+The existing mode-based mount permission policy still applies. Namespace-specific
+Linux capabilities or SELinux policy are not reproduced by this recovery reader.
+
+`system.data` is internal inline file/directory storage and is hidden. Unknown namespace
+indices are checked structurally but omitted because they have no supported name mapping.
+`user.com.apple.*` names remain literal Linux names, without translating them into native
+Finder attributes or resource forks. Darwin FUSE 2 calls with a nonzero resource-fork
+position are rejected. Attribute modification remains unavailable on the read-only mount.
+
+Size queries return the required length, undersized buffers return ERANGE, and absent
+attributes return the host's missing-attribute error. Complete inode and block tables
+are validated before returning data: entry/value bounds, table separation, names,
+duplicate exposed names, external entry ordering, header fields and unexpected external-value inode
+references. Inode checksums cover inode-body attributes; external blocks use CRC32C with
+the filesystem seed and full 64-bit block address when metadata_csum is enabled.
+Shared xattr blocks and shared value storage are permitted. ea_inode remains rejected,
+so supported value capacity is limited to the inode body and one filesystem block.
+
+```sh
+make test-xattrs
+# macOS integration through native xattr APIs and the xattr command:
+./test/mount-xattrs.sh
+```
+
+The disposable fixtures compare attributes with debugfs across 1/2/4 KiB blocks,
+128/256/512-byte inodes, checksums on/off and stored checksum seeds. They cover binary,
+empty and long-name attributes, Linux ACL conversion, symlink metadata, inline files,
+size queries, missing paths and checksum-repaired malformed records.
 
 ## Remaining work
 

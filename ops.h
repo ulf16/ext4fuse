@@ -12,4 +12,7 @@ int op_readdir(const char *path, void *buf, fuse_fill_dir_t filler
 int op_getattr(const char *path, struct stat *stbuf);
 int op_open(const char *path, struct fuse_file_info *fi);
 
+int op_listxattr(const char *path, char *list, size_t size);
+int op_getxattr(const char *path, const char *name, char *value, size_t size);
+
 #endif

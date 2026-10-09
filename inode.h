@@ -34,6 +34,8 @@ int inode_dir_ctx_reset(struct inode_dir_ctx *ctx, struct ext4_inode *inode);
 int inode_dentry_get(struct ext4_inode *inode, off_t offset, struct inode_dir_ctx *ctx,
                      struct ext4_dir_entry_2 **entry);
 
+/* Full verified inode bytes; checksum fields are zeroed during validation. */
+int inode_get_raw(uint32_t number, struct ext4_inode *inode, unsigned char raw[4096]);
 int inode_get_by_number(uint32_t n, struct ext4_inode *inode);
 int inode_get_by_path(const char *path, struct ext4_inode *inode);
 uint32_t inode_get_idx_by_path(const char *path);

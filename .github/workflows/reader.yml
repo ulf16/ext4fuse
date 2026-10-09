@@ -33,3 +33,5 @@ jobs:
         run: make test-timestamps FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify distributed meta_bg descriptor layouts
         run: make test-meta-bg FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify inode and external-block extended attributes
+        run: make test-xattrs FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
