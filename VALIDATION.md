@@ -290,3 +290,25 @@ Metadata validation is on demand; indexed lookup does not certify unvisited leav
 or indexes. Full directory enumeration retains its own checks. Multi-gigabyte
 populated directory tests, Linux ACL enforcement, journal replay, native Apple Silicon
 and FreeBSD coverage, and the macFUSE sparse allocation reporting limitation remain.
+
+## Filesystem statistics and NetBSD linking — 2026-10-09
+
+- `statfs` reads total/free/reserved blocks and inode counts from the checked,
+  clean superblock, preserves 64-bit values, clamps available blocks at zero,
+  and marks the mount read-only. Impossible counters fail with `EIO`.
+- 129 callback/reference/error checks compare empty and populated ext2, ext3 and
+  ext4 fixtures at 1, 2 and 4 KiB block sizes and 0/5 percent reservations with
+  `dumpe2fs`. Separate C boundary checks cover counts above 32 bits, legacy high
+  fields, zero counts, reserved-space saturation and untouched output on error.
+- The native macFUSE fixture checks mounted `statvfs`, `df -k`, inode counts,
+  read-only flags, payload and write rejection; the source image stays unchanged.
+- Total blocks include metadata; no Linux-style metadata-overhead subtraction
+  or live bitmap recount is promised. Available blocks describe source capacity.
+- NetBSD's platform link flags include `-lexecinfo`, checked by a build dry run.
+  Native NetBSD build/runtime validation remains outstanding.
+
+- Both FUSE APIs passed the 129 statistics checks, C boundary tests, three normal
+  image suites, 97 preflight checks, 78 corruption checks and 35 ownership/path
+  checks under AddressSanitizer/UndefinedBehaviorSanitizer locally.
+- Normal optimized builds for both APIs passed the native mounted statistics test
+  on Intel Sequoia/macFUSE 5.4.0. No mounts remain active after these tests.

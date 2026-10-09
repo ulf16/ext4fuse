@@ -47,3 +47,5 @@ jobs:
         run: make test-index-collisions FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify actual read-only Linux loop-device capacity and reads
         run: python3 test/device-capacity-linux.py
+      - name: Verify filesystem space and inode reporting
+        run: make test-statfs FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

@@ -18,3 +18,5 @@ ext4fuse
 /test/disk-capacity
 /test/index-probe
 /test/lookup-batch
+
+/test/statfs-unit

@@ -67,6 +67,18 @@ int main(int argc, char **argv)
         }
         return 0;
     }
+    if (!strcmp(argv[2], "statfs")) {
+        struct statvfs st;
+        ret = op_statfs(argv[3], &st);
+        printf("%d\n", ret);
+        if (!ret) printf("%llu %llu %llu %llu %llu %llu %llu %llu %llu %llu\n",
+            (unsigned long long)st.f_bsize, (unsigned long long)st.f_frsize,
+            (unsigned long long)st.f_blocks, (unsigned long long)st.f_bfree,
+            (unsigned long long)st.f_bavail, (unsigned long long)st.f_files,
+            (unsigned long long)st.f_ffree, (unsigned long long)st.f_favail,
+            (unsigned long long)st.f_namemax, (unsigned long long)(st.f_flag & ST_RDONLY));
+        return 0;
+    }
     if (!strcmp(argv[2], "bulk")) {
         size_t size = argc > 5 ? strtoul(argv[5],NULL,10) : 8U*1024*1024;
         if (!size || size > 16U*1024*1024) return 2;

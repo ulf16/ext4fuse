@@ -78,6 +78,7 @@ static int e4f_getxattr(const char *path, const char *name, char *value,
 
 static struct fuse_operations e4f_ops = {
     .getattr    = e4f_getattr,
+    .statfs     = op_statfs,
     .readdir    = e4f_readdir,
     .open       = op_open,
     .read       = op_read,

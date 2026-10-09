@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <sys/statvfs.h>
 
 #include "common.h"
 
@@ -24,6 +25,7 @@ uint32_t super_inode_count(void);
 uint32_t super_inodes_per_group(void);
 uint32_t super_inode_size(void);
 int super_fill(void);
+int super_statfs(struct statvfs *st);
 int super_metadata_csum(void);
 int super_linux_inode_format(void);
 int super_huge_file(void);

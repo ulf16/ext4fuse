@@ -498,3 +498,28 @@ Native macOS tests cover both block and raw device preflight, payload reads, ove
 rejection and a raw-device macFUSE mount. Device tests never target user disks.
 FreeBSD capacity/alignment implementation is not validated on a real FreeBSD device.
 All previously documented read-only, journal, ACL enforcement and platform limits remain.
+
+## Filesystem space reporting
+
+The `statfs` callback supplies `df` and filesystem space queries with a snapshot
+of the clean ext4 superblock: block size, total and free blocks, free blocks after
+subtracting the reserved allowance (clamped at zero), and total/free inode counts.
+The mount is marked read-only; reported available space describes the source
+filesystem and does not permit writing through this reader. Counts are not refreshed
+while mounted: modifying the backing filesystem concurrently is unsupported.
+
+Total blocks include filesystem metadata. This is the on-disk geometry, rather
+than Linux ext4's default `df` total after subtracting its calculated metadata
+overhead. Thus the totals need not match Linux `df` exactly. Impossible free or
+reserved counts return `EIO`; values too large for the host's `statvfs` counters
+return `EOVERFLOW`. The 64-bit count fields are used only with the `64bit` feature.
+No block bitmap scan is performed. See the [ext4 superblock specification](https://www.kernel.org/doc/html/next/filesystems/ext4/super.html).
+
+Run `make test-statfs` with e2fsprogs in PATH for callback/reference checks, and
+`python3 test/mount-statfs.py` on macOS/macFUSE for a disposable mounted `statvfs`
+and `df` check. Both FUSE APIs are covered by the portable CI suite.
+
+NetBSD builds now link `libexecinfo`, as required by its
+[backtrace(3) implementation](https://man.netbsd.org/backtrace.3). This addresses the
+missing-library cause reported in upstream issue #67. A native NetBSD build and
+mount have not been validated; this is not a claim of complete NetBSD support.

@@ -278,3 +278,38 @@ int super_directory_hash(unsigned version, const char *name, size_t length, uint
     if (version<=2 && (super.s_flags & 2)) version+=3;
     return directory_hash(version,name,length,super.s_hash_seed,hash);
 }
+
+/* Snapshot counts from the clean, checked superblock. No bitmap scan or writes. */
+int super_statfs(struct statvfs *st)
+{
+    int wide = !!(super.s_feature_incompat & INCOMPAT_64BIT);
+    uint64_t blocks = super_block_count();
+    uint64_t free_blocks = super.s_free_blocks_count_lo;
+    uint64_t reserved = super.s_r_blocks_count_lo;
+    if (wide) {
+        free_blocks |= (uint64_t)super.s_free_blocks_count_hi << 32;
+        reserved |= (uint64_t)super.s_r_blocks_count_hi << 32;
+    }
+    if (free_blocks > blocks || reserved > blocks ||
+        super.s_free_inodes_count > super.s_inodes_count)
+        return -EIO;
+    uint64_t available = free_blocks > reserved ? free_blocks - reserved : 0;
+    struct statvfs result = {0};
+    result.f_bsize = result.f_frsize = super_block_size();
+    result.f_blocks = blocks;
+    result.f_bfree = free_blocks;
+    result.f_bavail = available;
+    result.f_files = super.s_inodes_count;
+    result.f_ffree = result.f_favail = super.s_free_inodes_count;
+    /* Some hosts have narrower statvfs counters; never silently truncate. */
+    if ((uint64_t)result.f_blocks != blocks ||
+        (uint64_t)result.f_bfree != free_blocks ||
+        (uint64_t)result.f_bavail != available ||
+        (uint64_t)result.f_files != super.s_inodes_count ||
+        (uint64_t)result.f_ffree != super.s_free_inodes_count)
+        return -EOVERFLOW;
+    result.f_flag = ST_RDONLY;
+    result.f_namemax = 255;
+    *st = result;
+    return 0;
+}

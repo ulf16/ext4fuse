@@ -1,5 +1,6 @@
 PKG_CONFIG ?= pkg-config
 FUSE_API ?= 3
+HOST_OS ?= $(shell uname)
 ifeq ($(filter $(FUSE_API),2 3),)
 $(error FUSE_API must be 2 or 3)
 endif
@@ -24,7 +25,7 @@ override CFLAGS  += $(shell $(PKG_CONFIG) $(FUSE_PKG) --cflags) -DFUSE_USE_VERSI
 override CFLAGS  += -DEXT4FUSE_VERSION=\"$(VERSION)\"
 override LDFLAGS += $(shell $(PKG_CONFIG) $(FUSE_PKG) --libs)
 
-ifeq ($(shell uname), Darwin)
+ifeq ($(HOST_OS), Darwin)
 # Use macFUSE's portable stat-based FUSE 3 ABI and portable xattr callbacks.
 ifeq ($(FUSE_API),3)
 override CFLAGS += -DFUSE_DARWIN_ENABLE_EXTENSIONS=0
@@ -35,14 +36,19 @@ override LDFLAGS += -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
 
 endif
 
-ifeq ($(shell uname), FreeBSD)
+ifeq ($(HOST_OS), FreeBSD)
 override CFLAGS  += -I/usr/local/include -L/usr/local/lib
+override LDFLAGS += -lexecinfo
+endif
+
+ifeq ($(HOST_OS), NetBSD)
+# NetBSD provides backtrace(3) in libexecinfo, not libc.
 override LDFLAGS += -lexecinfo
 endif
 
 BINARY = ext4fuse
 SOURCES += fuse-main.o logging.o extents.o disk.o checksum.o dirhash.o dirindex.o super.o inode.o dcache.o
-SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o op_xattr.o
+SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o op_xattr.o op_statfs.o
 
 BUILD_DIR = .build/fuse$(FUSE_API)
 OBJECTS = $(addprefix $(BUILD_DIR)/,$(SOURCES))
@@ -67,7 +73,7 @@ test: $(BINARY)
 	@for T in test/[0-9][0-9][0-9][0-9]-*; do SKIP_SLOW_TESTS=1 ./$$T || exit $$?; done
 
 clean:
-	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch
+	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch test/statfs-unit
 	rm -rf test/logs .build
 
 .PHONY: test
@@ -174,3 +180,12 @@ test-index-collisions: test/corruption-probe
 	$(PYTHON) test/index-collisions.py
 
 .PHONY: test-index-collisions
+
+test/statfs-unit: test/statfs-unit.c super.c $(filter-out $(BUILD_DIR)/super.o,$(READER_OBJECTS)) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/statfs-unit.c $(filter-out $(BUILD_DIR)/super.o,$(READER_OBJECTS)) $(LDFLAGS)
+
+test-statfs: test/corruption-probe test/statfs-unit
+	./test/statfs-unit
+	$(PYTHON) test/statfs.py
+
+.PHONY: test-statfs
