@@ -5,7 +5,7 @@ permissions:
 jobs:
   images:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     strategy:
       matrix:
         fuse: [2, 3]
@@ -29,3 +29,7 @@ jobs:
         run: make test-large FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Verify inline files and directories
         run: make test-inline FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify signed extended timestamps and field presence
+        run: make test-timestamps FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify distributed meta_bg descriptor layouts
+        run: make test-meta-bg FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'

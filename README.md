@@ -167,7 +167,7 @@ huge_file, gdt_csum, dir_nlink, extra_isize, quota, metadata_csum, readonly and 
 flags are accepted for read-only access. Acceptance is not exhaustive feature certification:
 extended attributes are not exposed, and resource/address bounds still apply.
 
-Encryption, casefold, meta_bg, bigalloc, largedir, ea_inode, mmp, dirdata,
+Encryption, casefold, bigalloc, largedir, ea_inode, mmp, dirdata,
 compression, external journal devices, shared_blocks, verity, and other unrecognized
 layouts are refused in this milestone. Some could be supported with further work;
 rejection means this reader has not established support.
@@ -287,7 +287,7 @@ extent depths, or legacy file-size limits.
 Physical extent addresses (48-bit on disk), extent index pointers, inode-table addresses
 and the 64-bit superblock block count retain their high words. Preflight rejects byte
 sizes beyond signed 64-bit offsets, invalid group counts and out-of-volume metadata.
-The 256 MiB descriptor-table resource limit remains; meta_bg is still refused. This is
+The 256 MiB descriptor-table resource limit remains. This is
 expanded addressing support, not a guarantee that every large ext4 layout is supported.
 
 ```sh
@@ -311,6 +311,35 @@ protect inline data where enabled. Other extended attributes and ACLs remain une
 Real e2fsprogs fixtures cover 1/2/4 KiB blocks, 256/512-byte inodes, checksums on/off,
 empty files, the 60-byte boundary, larger files converted to extents, both inline directory
 regions, missing names, dot/parent traversal, symlinks and corrupted inline metadata.
+
+## Timestamps and meta_bg descriptors
+
+Timestamp decoding follows Linux ext4: signed 32-bit base seconds plus two extra epoch
+bits, and nanoseconds in the remaining extra bits. Extra fields are consumed only when
+both the inode size and i_extra_isize declare them. Invalid nanoseconds fail with EIO;
+unrepresentable host time values fail with EOVERFLOW. Creation time is exposed as
+birthtime on macOS and FreeBSD; ordinary Linux POSIX stat has no birthtime field.
+
+meta_bg primary descriptors are located at their meta-group boundaries, with the proper
+superblock offset for sparse_super, sparse_super2 or full backup-super layouts. Early
+blocks below s_first_meta_bg retain the classic contiguous placement. Descriptor
+checksums, inode-table bounds and the 256 MiB memory cap still apply. Corrupt primary
+metadata is rejected; the reader does not repair it from backup copies.
+
+```sh
+make test-timestamps
+make test-meta-bg
+# macOS/macFUSE integration with exact native timespecs, including birthtime:
+./test/mount-metadata.sh
+```
+
+Timestamp fixtures cover old and extended inodes, negative seconds, epoch boundaries,
+all four time fields, nanoseconds and malformed/present-only extensions. Some debugfs
+versions display high-bit base seconds unsigned; the reader follows Linux's signed
+rule, and the tests distinguish that formatter quirk from actual inode encodings.
+The meta_bg suite checks real 1/2/4 KiB, 32/64-byte descriptor, sparse-super and checksum
+variants across three descriptor blocks. Mixed classic/meta placement is also exercised
+using explicit descriptor copies; those synthetic fixtures do not certify bitmap repair.
 
 ## Remaining work
 

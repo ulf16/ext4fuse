@@ -56,9 +56,22 @@ int op_getattr(const char *path, struct stat *stbuf)
         stbuf->st_uid |= (uint32_t)inode.osd2.linux2.l_i_uid_high << 16;
         stbuf->st_gid |= (uint32_t)inode.osd2.linux2.l_i_gid_high << 16;
     }
-    stbuf->st_atime = inode.i_atime;
-    stbuf->st_mtime = inode.i_mtime;
-    stbuf->st_ctime = inode.i_ctime;
+    struct inode_times times;
+    ret = inode_get_times(&inode, &times);
+    if (ret < 0) return ret;
+#ifdef __APPLE__
+    stbuf->st_atimespec = times.access;
+    stbuf->st_mtimespec = times.modify;
+    stbuf->st_ctimespec = times.change;
+    if (times.has_create) stbuf->st_birthtimespec = times.create;
+#else
+    stbuf->st_atim = times.access;
+    stbuf->st_mtim = times.modify;
+    stbuf->st_ctim = times.change;
+#ifdef __FreeBSD__
+    if (times.has_create) stbuf->st_birthtim = times.create;
+#endif
+#endif
 
     return 0;
 }

@@ -92,6 +92,43 @@ static int inode_inline_load(struct ext4_inode *inode, const unsigned char *raw,
     return 0;
 }
 
+static int inode_field_fits(const struct ext4_inode *inode, size_t end)
+{
+    return super_linux_inode_format() && super_inode_size() > 128 &&
+           end <= super_inode_size() && end <= 128U + inode->i_extra_isize;
+}
+
+static int inode_decode_time(uint32_t base, uint32_t extra, struct timespec *time)
+{
+    int64_t seconds = (int64_t)(int32_t)base + ((int64_t)(extra & 3) << 32);
+    uint32_t nanos = extra >> 2;
+    if (nanos >= 1000000000U) return -EIO;
+    time->tv_sec = seconds;
+    if ((int64_t)time->tv_sec != seconds) return -EOVERFLOW;
+    time->tv_nsec = nanos;
+    return 0;
+}
+
+int inode_get_times(const struct ext4_inode *inode, struct inode_times *times)
+{
+    memset(times, 0, sizeof(*times));
+#define DECODE_TIME(field, target) do { \
+    uint32_t extra = inode_field_fits(inode, offsetof(struct ext4_inode, field##_extra) + 4) \
+                   ? inode->field##_extra : 0; \
+    int ret = inode_decode_time(inode->field, extra, &times->target); \
+    if (ret < 0) return ret; \
+} while (0)
+    DECODE_TIME(i_atime, access);
+    DECODE_TIME(i_mtime, modify);
+    DECODE_TIME(i_ctime, change);
+    if (inode_field_fits(inode, offsetof(struct ext4_inode, i_crtime) + 4)) {
+        DECODE_TIME(i_crtime, create);
+        times->has_create = 1;
+    }
+#undef DECODE_TIME
+    return 0;
+}
+
 int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
                           uint64_t *physical, uint32_t *run)
 {
@@ -198,6 +235,8 @@ int inode_get_by_number(uint32_t number, struct ext4_inode *inode)
     size_t length=super_inode_size();
     int ret = disk_read_exact(off, length, raw);
     if (ret < 0) return ret;
+    if (super_linux_inode_format() && length > 128 &&
+        (checksum_u16(raw + 128) > length - 128 || checksum_u16(raw + 128) % 4)) return -EIO;
     memcpy(inode, raw, MIN(length, offsetof(struct ext4_inode,reader_csum_seed)));
     uint32_t inum=number+1;
     uint32_t seed=checksum_crc32c(super_checksum_seed(),&inum,4);

@@ -39,6 +39,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
     check(base)
     check(make_image("32bit.img", ["-O", "^64bit"]))
     check(make_image("inline.img", ["-O", "inline_data"]))
+    check(make_image("meta.img", ["-O", "meta_bg,^resize_inode"]))
     original_header = base.read_bytes()[:8192]
     def mutate(offset, fmt, value, expected=None):
         with base.open("r+b") as file:
@@ -54,7 +55,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
 
     incompat = struct.unpack_from("<I", original_header, 1024 + 0x60)[0]
     ro_compat = struct.unpack_from("<I", original_header, 1024 + 0x64)[0]
-    for bit, name in [(1,"compression"),(4,"needs_recovery"),(8,"journal_dev"),(16,"meta_bg"),
+    for bit, name in [(1,"compression"),(4,"needs_recovery"),(8,"journal_dev"),
                       (0x100,"mmp"),(0x400,"ea_inode"),(0x1000,"dirdata"),(0x4000,"largedir"),
                       (0x10000,"encrypt"),(0x20000,"casefold"),
                       (0x80000000,"unknown=0x80000000")]:
@@ -95,7 +96,7 @@ with tempfile.TemporaryDirectory(prefix="ext4fuse-features-") as temp:
 
         ("encrypt.img", ["-O","encrypt"], "encrypt"),
         ("casefold.img", ["-O","casefold","-E","encoding=utf8"], "casefold"),
-        ("meta-bg.img", ["-O","meta_bg,^resize_inode"], "meta_bg"),
+
         ("bigalloc.img", ["-O","bigalloc","-C","8192"], "bigalloc")]:
         image = make_image(name, options)
         check(image, reason)

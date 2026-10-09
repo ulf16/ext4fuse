@@ -125,3 +125,13 @@ test-addresses: test/corruption-probe
 	$(PYTHON) test/addresses.py
 
 .PHONY: test-addresses
+
+test-timestamps: test/corruption-probe
+	$(PYTHON) test/timestamps.py
+
+.PHONY: test-timestamps
+
+test-meta-bg: test/corruption-probe test/feature-probe
+	$(PYTHON) test/meta-bg.py
+
+.PHONY: test-meta-bg

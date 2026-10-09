@@ -20,7 +20,7 @@
 
 #define GROUP_DESC_MIN_SIZE         0x20
 #define INCOMPAT_64BIT              0x0080
-#define INCOMPAT_SUPPORTED         (0x0002 | 0x0040 | 0x0080 | 0x0200 | 0x2000 | 0x8000)
+#define INCOMPAT_SUPPORTED         (0x0002 | 0x0010 | 0x0040 | 0x0080 | 0x0200 | 0x2000 | 0x8000)
 #define RO_COMPAT_SUPPORTED        (0x0001 | 0x0002 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0100 | 0x0400 | 0x1000 | 0x2000)
 
 struct feature_name { uint32_t bit; const char *name; };
@@ -181,17 +181,43 @@ off_t super_group_inode_table_offset(uint32_t inode_num)
     return BLOCKS2BYTES(((uint64_t)gdesc_table[n_group].bg_inode_table_hi << 32) | gdesc_table[n_group].bg_inode_table_lo);
 }
 
+/* Linux's primary descriptor placement; backup tables are not used. */
+static int group_has_super(uint32_t group)
+{
+    if (!group) return 1;
+    if (super.s_feature_compat & 0x200) {
+        const unsigned char *raw = (const void *)&super;
+        return group == checksum_u32(raw + 0x24c) || group == checksum_u32(raw + 0x250);
+    }
+    if (group == 1 || !(super.s_feature_ro_compat & 1)) return 1;
+    const unsigned bases[] = {3, 5, 7};
+    for (size_t i = 0; i < sizeof(bases) / sizeof(bases[0]); i++) {
+        uint32_t value = group;
+        while (value > 1 && value % bases[i] == 0) value /= bases[i];
+        if (value == 1) return 1;
+    }
+    return 0;
+}
+
+static uint64_t descriptor_block(uint32_t index)
+{
+    if (!(super.s_feature_incompat & 0x10) || index < super.s_first_meta_bg)
+        return (uint64_t)super.s_first_data_block + 1 + index;
+    uint32_t group = index * (BLOCK_SIZE / super_group_desc_size());
+    return (uint64_t)super.s_first_data_block + (uint64_t)group * super.s_blocks_per_group
+         + group_has_super(group);
+}
+
 /* struct ext4_group_desc might be bigger than on disk structure, if we are not
  * using big ones.  That info is in the superblock.  Be careful when allocating
  * or manipulating this pointers. */
 int super_group_fill(void)
 {
     uint32_t groups = super_n_block_groups();
-    uint64_t table_start = ALIGN_TO_BLOCKSIZE(BOOT_SECTOR_SIZE + sizeof(super));
-    uint64_t table_size = (uint64_t)groups * super_group_desc_size();
-    uint64_t filesystem_size = super_block_count() * BLOCK_SIZE;
-    if (table_start > filesystem_size || table_size > filesystem_size - table_start)
-        return invalid("group descriptor table exceeds filesystem bounds");
+    uint32_t per_block = BLOCK_SIZE / super_group_desc_size();
+    uint32_t blocks = ((uint64_t)groups + per_block - 1) / per_block;
+    if ((super.s_feature_incompat & 0x10) && super.s_first_meta_bg > blocks)
+        return invalid("first meta block group exceeds descriptor block count");
     if ((uint64_t)groups * sizeof(struct ext4_group_desc) > 256U * 1024 * 1024)
         return invalid("group descriptor allocation exceeds this reader's 256 MiB limit");
     struct ext4_group_desc *table = calloc(groups, sizeof(*table));
@@ -199,8 +225,13 @@ int super_group_fill(void)
     uint64_t inode_blocks = ((uint64_t)super.s_inodes_per_group * super_inode_size()
                             + BLOCK_SIZE - 1) / BLOCK_SIZE;
     for (uint32_t i = 0; i < groups; i++) {
-        int ret = disk_read_exact(table_start + (uint64_t)i * super_group_desc_size(),
-                                  super_group_desc_size(), &table[i]);
+        uint64_t block = descriptor_block(i / per_block);
+        if (block >= super_block_count()) {
+            free(table);
+            return invalid("group descriptor table exceeds filesystem bounds");
+        }
+        uint64_t offset = BLOCKS2BYTES(block) + (i % per_block) * super_group_desc_size();
+        int ret = disk_read_exact(offset, super_group_desc_size(), &table[i]);
         if (ret < 0) {
             free(table);
             return invalid("cannot read complete group descriptor table (truncated image or I/O error)");

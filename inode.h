@@ -2,6 +2,7 @@
 #define INODE_H
 
 #include <sys/types.h>
+#include <time.h>
 
 #include "types/ext4_inode.h"
 #include "types/ext4_dentry.h"
@@ -15,6 +16,12 @@ static inline uint64_t inode_get_size(struct ext4_inode *inode)
 {
     return ((uint64_t)inode->i_size_high << 32) | inode->i_size_lo;
 }
+
+struct inode_times {
+    struct timespec access, modify, change, create;
+    int has_create;
+};
+int inode_get_times(const struct ext4_inode *inode, struct inode_times *times);
 
 int inode_get_data_pblock(struct ext4_inode *inode, uint32_t lblock,
                           uint64_t *pblock, uint32_t *extent_len);

@@ -133,3 +133,33 @@ This milestone supersedes the earlier 32-bit physical-address and inline-data li
 
 meta_bg and other documented unsupported layouts remain refused. No journal replay,
 write support, Linux ACL enforcement or macFUSE sparse stat/du allocation fix is added.
+
+## Timestamps and meta_bg — 2026-10-09
+
+This milestone supersedes the earlier rejection of meta_bg layouts.
+
+- Decode timestamps with Linux's signed base seconds, two epoch bits and nanoseconds.
+  Extended fields require valid inode-size/i_extra_isize bounds. Reject invalid nanos
+  and unrepresentable host time values. Populate macOS/FreeBSD birthtime where present;
+  ordinary Linux POSIX stat does not expose creation time.
+- 53 timestamp checks cover 128/256-byte inodes, checksum variants, negative seconds,
+  2038 and later epoch boundaries, all time fields, nanoseconds, partial field presence
+  and invalid encodings. Tests recognize debugfs's unsigned-base display quirk while
+  retaining Linux's signed decoding semantics.
+- Locate primary meta_bg descriptor blocks according to the Linux placement rule,
+  including classic early descriptor blocks, sparse_super, sparse_super2 and complete
+  backup-super layouts. Retain descriptor checksums, inode bounds and the memory cap.
+- 108 meta_bg checks cover real 1/2/4 KiB filesystems and 32/64-byte descriptors across
+  three descriptor blocks, content comparison with debugfs/dumpe2fs, checksum damage,
+  invalid transition indices and explicit mixed-layout fixtures. The latter do not
+  certify bitmap consistency or repair. No fallback to damaged-primary backups is added.
+- All portable suites pass with ASan/UBSan for both FUSE APIs: normal images, 95 feature
+  checks, 78 corruption checks, 75 checksum checks, 35 ownership/path checks, 89 large-file
+  checks, 817 inline checks, 53 timestamp checks and 108 meta_bg checks.
+- Both macFUSE APIs pass mounted meta_bg + inline reads and native stat comparison for
+  exact access/modification/change/creation seconds and nanoseconds. Negative access
+  time and modification time beyond 2038 are exercised. Strict path/permission smoke
+  checks also pass. Temporary volumes are removed after testing.
+
+Apple Silicon and FreeBSD remain untested. No write support, journal replay, Linux ACL
+support or macFUSE sparse stat/du allocation fix is included.

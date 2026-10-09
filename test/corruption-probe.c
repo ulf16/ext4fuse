@@ -56,6 +56,31 @@ int main(int argc, char **argv)
         free(data);
         return 0;
     }
+    if (!strcmp(argv[2], "times")) {
+        struct stat st;
+        struct ext4_inode inode;
+        struct inode_times times;
+        ret = op_getattr(argv[3], &st);
+        if (!ret) ret = inode_get_by_path(argv[3], &inode);
+        if (!ret) ret = inode_get_times(&inode, &times);
+        printf("%d\n", ret);
+        if (!ret) {
+#ifdef __APPLE__
+            struct timespec a = st.st_atimespec, m = st.st_mtimespec, c = st.st_ctimespec;
+            times.create = st.st_birthtimespec;
+#else
+            struct timespec a = st.st_atim, m = st.st_mtim, c = st.st_ctim;
+#ifdef __FreeBSD__
+            times.create = st.st_birthtim;
+#endif
+#endif
+            printf("%lld %ld %lld %ld %lld %ld %lld %ld %d\n",
+                   (long long)a.tv_sec, a.tv_nsec, (long long)m.tv_sec, m.tv_nsec,
+                   (long long)c.tv_sec, c.tv_nsec, (long long)times.create.tv_sec,
+                   times.create.tv_nsec, times.has_create);
+        }
+        return 0;
+    }
     if (!strcmp(argv[2], "allocation")) {
         struct stat st;
         ret = op_getattr(argv[3], &st);
