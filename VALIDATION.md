@@ -210,14 +210,16 @@ support and Linux ACL enforcement were not added. Apple Silicon and FreeBSD rema
 - Read value payloads on demand, including ACL values required for decoding, rather
   than allocating every large attribute in a list. No recursive EA metadata traversal
   or production write path is introduced.
-- 943 EA checks pass with ASan/UBSan for each FUSE API: real 1/2/4 KiB layouts,
+- 1,012 EA checks pass with ASan/UBSan for each FUSE API: real 1/2/4 KiB layouts,
   128/256/512-byte inodes, checksums on/off/stored seeds, inline owners, extent and
   classic indirect storage, values crossing block boundaries and complete 64 KiB
   binary values. Compare bytes with debugfs and certify base/shared-value layouts
   with e2fsck. Exercise repaired-CRC state/reference/hash corruption, payload damage,
   empty/unwritten extents, actual short reads, resource limits and inode isolation.
 - Use a libext2fs fixture writer because debugfs -f reads only one block of value input;
-  e2fsck reconciles parent EA allocation charging before reader checks. All fixture
+  e2fsck reconciles parent EA allocation charging before reader checks. Fast symlink
+  fixtures include an external xattr block to avoid an e2fsck 1.47.0 bug that treats
+  EA-charged inline target bytes as block pointers. All fixture
   images are disposable. Reads leave valid fixtures byte-identical.
 - Both APIs pass all existing sanitizer suites, including 98 feature preflight checks
   and 1,285 prior xattr checks. Both macFUSE APIs pass actual mounted 64 KiB retrieval

@@ -48,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-ea-inode-') as temp:
     for size,value in values.items():(tree/('f'+str(size))).write_bytes(b'payload');(root/('v'+str(size))).write_bytes(value)
     (tree/'link').symlink_to('f65536')
     variants=[(b,256,mode,inline) for b in [1024,2048,4096] for mode in ['plain','checksum','seed'] for inline in [False,True]]+[(4096,128,'checksum',False),(4096,512,'seed',True)]+[(b,128,'indirect',False) for b in [1024,2048,4096]]
-    seen=set();longname='user.'+'n'*200
+    seen=set();longname='user.'+'n'*200;linkname='user.'+'m'*200
     for block,isize,mode,inline in variants:
         image=root/'image'
         with image.open('wb') as f:f.truncate(32*1024**2)
@@ -59,6 +59,10 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-ea-inode-') as temp:
         for name,number in numbers.items():
             size=65536 if name=='link' else int(name[1:]);args += [str(number),'user.big',str(root/('v'+str(size)))]
             args += [str(number),longname,str(root/'v4097')]
+            # e2fsck 1.47.0 misreads EA-charged fast symlinks without an external
+            # xattr block as block pointers. Force that block while keeping the
+            # fast symlink and its large EA value in every fixture.
+            if name=='link':args += [str(number),linkname,str(root/'v4097')]
         subprocess.run(args,capture_output=True,check=True)
         # libext2fs/debugfs may leave parent EA-block charging for fsck to reconcile.
         fixed=subprocess.run([fsck,'-fy',str(image)],capture_output=True)
@@ -82,8 +86,12 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-ea-inode-') as temp:
             return out
         for name,number in numbers.items():
             size=65536 if name=='link' else int(name[1:]);path='/'+name
-            n,names=probe(image,'xlist',path);assert set(names.rstrip(b'\0').split(b'\0'))=={b'user.big',longname.encode()},(opts,name,names)
-            for attr,value in [('user.big',values[size]),(longname,values[4097])]:
+            attrs=[('user.big',values[size]),(longname,values[4097])]
+            if name=='link':
+                attrs.append((linkname,values[4097]))
+                assert struct.unpack_from('<I',original,inodeoff(number)+104)[0]
+            n,names=probe(image,'xlist',path);assert set(names.rstrip(b'\0').split(b'\0'))=={attr.encode() for attr,_ in attrs},(opts,name,names)
+            for attr,value in attrs:
                 assert probe(image,'xget',path,attr,0)==(len(value),b'')
                 assert probe(image,'xget',path,attr,len(value))==(len(value),value)
                 assert probe(image,'xget',path,attr,len(value)-1)[0]==-errno.ERANGE
