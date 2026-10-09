@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <stdio.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <fuse.h>
@@ -65,6 +66,17 @@ int main(int argc, char **argv)
             for (int i = 0; i < ret; i++) printf("%02x", (unsigned char)data[i]);
             puts("");
         }
+        return 0;
+    }
+    if (!strcmp(argv[2], "map")) {
+        struct ext4_inode inode;
+        uint64_t physical = 0;
+        uint32_t run = 0;
+        ret = inode_get_by_path(argv[3], &inode);
+        if (!ret && (offset < 0 || (uint64_t)offset > UINT32_MAX)) ret = -EINVAL;
+        if (!ret) ret = inode_get_data_pblock(&inode, offset, &physical, &run);
+        printf("%d\n", ret);
+        if (!ret) printf("%llu %u\n", (unsigned long long)physical, run);
         return 0;
     }
     if (!strcmp(argv[2], "statfs")) {

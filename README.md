@@ -523,3 +523,23 @@ NetBSD builds now link `libexecinfo`, as required by its
 [backtrace(3) implementation](https://man.netbsd.org/backtrace.3). This addresses the
 missing-library cause reported in upstream issue #67. A native NetBSD build and
 mount have not been validated; this is not a claim of complete NetBSD support.
+
+## Bulk-read profiling and classic mapping runs
+
+Classic direct/indirect maps now coalesce contiguous physical blocks and hole
+runs within a pointer array or absent subtree. Multi-block requests read one
+checked indirect leaf rather than fetching a four-byte pointer for every data
+block. Discontinuities, holes and leaf boundaries delimit runs; invalid requested
+pointers retain error handling. Single-block requests avoid lookahead. No mapping
+cache or mount-default change is introduced.
+
+See [BENCHMARKS.md](BENCHMARKS.md) for the reproducible tools, before/after counts,
+measured rates, actual macFUSE callback profile and limitations. The 64 MiB classic
+fixture with 64 KiB requests drops from 49,128 to 4,077 preads. This is a reader
+optimization; the tested macFUSE first-pass path still issues 4 KiB callbacks and
+is not certified to inherit that throughput improvement.
+
+`make test-indirect-runs` compares direct/single/double/triple mapping runs and
+content with debugfs on disposable images, including sparse high-offset data,
+fragmentation, EOF/unaligned reads and invalid next pointers. Existing reader
+checks continue to cover checksum, extent, directory, inline and xattr handling.

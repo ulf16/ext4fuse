@@ -312,3 +312,22 @@ and FreeBSD coverage, and the macFUSE sparse allocation reporting limitation rem
   checks under AddressSanitizer/UndefinedBehaviorSanitizer locally.
 - Normal optimized builds for both APIs passed the native mounted statistics test
   on Intel Sequoia/macFUSE 5.4.0. No mounts remain active after these tests.
+
+## Bulk-read profiling and classic mapping coalescing — 2026-10-09
+
+- Disposable fsck-checked ext4 fixtures compare extent and classic mapping reads
+  with raw host reads and libext2fs. Warm-cache results, sample ranges, before/
+  after I/O counts and reproduction instructions are saved in BENCHMARKS.md.
+- The classic 64 MiB/64 KiB reader case drops from 49,128 to 4,077 preads; 1 MiB
+  requests drop from 48,168 to 297. Single-block paths retain their I/O counts.
+- 519 mapping/content/error checks compare direct/single/double/triple classic
+  maps with debugfs at 1/2/4 KiB block sizes. They cover holes, reallocation/
+  fragmentation, unaligned and EOF reads, sparse offsets beyond 4 GiB, and an
+  invalid next pointer that must fail when requested without poisoning the
+  preceding valid block. Fixture filesystem accounting is checked with e2fsck.
+- Native macFUSE profiling observes 4 KiB callbacks on first-pass transfers.
+  Warm mounted-file-cache rates are recorded separately. No mounted speedup,
+  cold-disk throughput result or FreeBSD resolution is claimed.
+- An optimized CI job compares the same payload with native Linux ext4 using
+  disposable read-only loop devices and ro,noload mounts; it saves raw JSON.
+- No mutable block-map cache, inode cache or production mount-default change.

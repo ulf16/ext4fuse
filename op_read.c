@@ -24,9 +24,11 @@ int inode_read_data(struct ext4_inode *inode, char *buf, size_t size, off_t offs
     while (done < size) {
         uint64_t position = (uint64_t)offset + done;
         if (position / BLOCK_SIZE > UINT32_MAX) return -EIO;
-        uint32_t within = position % BLOCK_SIZE, run;
+        uint32_t within = position % BLOCK_SIZE, run = 1;
         uint64_t physical;
-        int ret = inode_get_data_pblock(inode, position / BLOCK_SIZE, &physical, &run);
+        /* Single-block requests do not need lookahead through an indirect leaf. */
+        uint32_t *length = size - done > BLOCK_SIZE - within ? &run : NULL;
+        int ret = inode_get_data_pblock(inode, position / BLOCK_SIZE, &physical, length);
         if (ret < 0) return ret;
         if (!run) return -EIO;
         uint64_t available = (uint64_t)run * BLOCK_SIZE - within;

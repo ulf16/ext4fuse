@@ -1,0 +1,551 @@
+{
+  "samples": 3,
+  "cache": "warm backing images; cached mounts additionally warm kernel file cache; noubc,noreadahead disables mounted-file UBC and readahead",
+  "note": "client pread counters count application calls, not backing-image daemon I/O",
+  "results": [
+    {
+      "layout": "extents",
+      "cache": "cached",
+      "chunk": 65536,
+      "phase": "first-pass",
+      "median_mib_s": 41.456,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.543804,
+          "mib_per_second": 41.456,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "cache": "cached",
+      "chunk": 65536,
+      "phase": "warm",
+      "median_mib_s": 7846.984,
+      "min_mib_s": 6919.667,
+      "max_mib_s": 8071.636,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.008156,
+          "mib_per_second": 7846.984,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007929,
+          "mib_per_second": 8071.636,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.009249,
+          "mib_per_second": 6919.667,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "cache": "cached",
+      "chunk": 1048576,
+      "phase": "warm",
+      "median_mib_s": 8163.265,
+      "min_mib_s": 8162.224,
+      "max_mib_s": 8169.517,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007841,
+          "mib_per_second": 8162.224,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.00784,
+          "mib_per_second": 8163.265,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007834,
+          "mib_per_second": 8169.517,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "cache": "noubc",
+      "chunk": 65536,
+      "phase": "first-pass",
+      "median_mib_s": 47.624,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.343864,
+          "mib_per_second": 47.624,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "cache": "noubc",
+      "chunk": 65536,
+      "phase": "warm",
+      "median_mib_s": 47.365,
+      "min_mib_s": 47.285,
+      "max_mib_s": 47.47,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.353501,
+          "mib_per_second": 47.285,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.351198,
+          "mib_per_second": 47.365,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.348217,
+          "mib_per_second": 47.47,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "cache": "noubc",
+      "chunk": 1048576,
+      "phase": "warm",
+      "median_mib_s": 46.543,
+      "min_mib_s": 46.113,
+      "max_mib_s": 47.222,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 1.355292,
+          "mib_per_second": 47.222,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 1.387893,
+          "mib_per_second": 46.113,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 1.375083,
+          "mib_per_second": 46.543,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "cache": "cached",
+      "chunk": 65536,
+      "phase": "first-pass",
+      "median_mib_s": 46.587,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.373764,
+          "mib_per_second": 46.587,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "cache": "cached",
+      "chunk": 65536,
+      "phase": "warm",
+      "median_mib_s": 7869.175,
+      "min_mib_s": 7798.221,
+      "max_mib_s": 8051.327,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007949,
+          "mib_per_second": 8051.327,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.008133,
+          "mib_per_second": 7869.175,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.008207,
+          "mib_per_second": 7798.221,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "cache": "cached",
+      "chunk": 1048576,
+      "phase": "warm",
+      "median_mib_s": 8291.229,
+      "min_mib_s": 8227.279,
+      "max_mib_s": 8309.53,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007719,
+          "mib_per_second": 8291.229,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007702,
+          "mib_per_second": 8309.53,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007779,
+          "mib_per_second": 8227.279,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "cache": "noubc",
+      "chunk": 65536,
+      "phase": "first-pass",
+      "median_mib_s": 45.623,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.402805,
+          "mib_per_second": 45.623,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "cache": "noubc",
+      "chunk": 65536,
+      "phase": "warm",
+      "median_mib_s": 44.767,
+      "min_mib_s": 44.64,
+      "max_mib_s": 45.502,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.43369,
+          "mib_per_second": 44.64,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.406525,
+          "mib_per_second": 45.502,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 1.429614,
+          "mib_per_second": 44.767,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "cache": "noubc",
+      "chunk": 1048576,
+      "phase": "warm",
+      "median_mib_s": 44.754,
+      "min_mib_s": 44.518,
+      "max_mib_s": 44.988,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 1.422614,
+          "mib_per_second": 44.988,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 1.430052,
+          "mib_per_second": 44.754,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 1.437611,
+          "mib_per_second": 44.518,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    }
+  ]
+}

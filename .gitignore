@@ -20,3 +20,7 @@ ext4fuse
 /test/lookup-batch
 
 /test/statfs-unit
+
+/test/bulk-reader
+
+/test/bulk-mount-profile

@@ -134,6 +134,22 @@ int inode_get_times(const struct ext4_inode *inode, struct inode_times *times)
     return 0;
 }
 
+/* Coalesce only within one checked pointer array. Stop before a hole, physical
+ * discontinuity or invalid next pointer; that pointer is checked if requested. */
+static uint32_t indirect_run(const uint32_t *pointers, uint32_t slot, uint32_t count)
+{
+    uint32_t first = pointers[slot], length = 1;
+    while (length < count - slot) {
+        uint32_t next = pointers[slot + length];
+        if (!first) {
+            if (next) break;
+        } else if ((uint64_t)first + length >= super_block_count() ||
+                   next != (uint64_t)first + length) break;
+        length++;
+    }
+    return length;
+}
+
 int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
                           uint64_t *physical, uint32_t *run)
 {
@@ -146,6 +162,8 @@ int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
     uint64_t per_block = BLOCK_SIZE / sizeof(uint32_t);
     if (index < EXT4_NDIR_BLOCKS) {
         *physical = inode->i_block[index];
+        if (*physical >= super_block_count()) return -EIO;
+        if (run) *run = indirect_run(inode->i_block, index, EXT4_NDIR_BLOCKS);
     } else {
         index -= EXT4_NDIR_BLOCKS;
         uint64_t capacity = per_block;
@@ -158,13 +176,28 @@ int inode_get_data_pblock(struct ext4_inode *inode, uint32_t logical,
         if (level > 3) return -EIO;
         uint32_t pointer = inode->i_block[EXT4_IND_BLOCK + level - 1];
         while (level--) {
-            if (!pointer) return 0;
+            if (!pointer) {
+                /* This absent subtree contains only holes up to its boundary. */
+                uint64_t length = capacity - index;
+                if (run) *run = length > UINT32_MAX ? UINT32_MAX : length;
+                return 0;
+            }
             if (pointer >= super_block_count()) return -EIO;
             capacity /= per_block;
             uint64_t slot = index / capacity;
             index %= capacity;
-            int ret = disk_read_exact(BLOCKS2BYTES(pointer) + slot * sizeof(pointer), sizeof(pointer), &pointer);
-            if (ret < 0) return ret;
+            if (!level && run) {
+                /* A full leaf read replaces one tiny I/O per data block. */
+                uint32_t pointers[4096 / sizeof(uint32_t)];
+                int ret = disk_read_exact(BLOCKS2BYTES(pointer), BLOCK_SIZE, pointers);
+                if (ret < 0) return ret;
+                pointer = pointers[slot];
+                if (pointer >= super_block_count()) return -EIO;
+                *run = indirect_run(pointers, slot, per_block);
+            } else {
+                int ret = disk_read_exact(BLOCKS2BYTES(pointer) + slot * sizeof(pointer), sizeof(pointer), &pointer);
+                if (ret < 0) return ret;
+            }
         }
         *physical = pointer;
     }

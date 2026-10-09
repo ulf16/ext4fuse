@@ -1,0 +1,1204 @@
+{
+  "platform": "macOS-15.8.1-x86_64-i386-64bit-Mach-O",
+  "bytes": 67108864,
+  "samples": 3,
+  "cache": "warm; no global cache eviction",
+  "initialization": "excluded",
+  "reference": "libext2fs userspace; raw APFS/host file, not native Linux ext4",
+  "results": [
+    {
+      "layout": "extents",
+      "mode": "raw",
+      "chunk": 4096,
+      "median_mib_s": 3563.276,
+      "min_mib_s": 3492.115,
+      "max_mib_s": 3635.95,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.017602,
+          "mib_per_second": 3635.95,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.018327,
+          "mib_per_second": 3492.115,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.017961,
+          "mib_per_second": 3563.276,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "reader",
+      "chunk": 4096,
+      "median_mib_s": 1513.217,
+      "min_mib_s": 1499.813,
+      "max_mib_s": 1559.188,
+      "measurements": [
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.041047,
+          "mib_per_second": 1559.188,
+          "pread_calls": 32768,
+          "pread_bytes": 71303168,
+          "pread_4": 0,
+          "pread_256": 16384,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.042294,
+          "mib_per_second": 1513.217,
+          "pread_calls": 32768,
+          "pread_bytes": 71303168,
+          "pread_4": 0,
+          "pread_256": 16384,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.042672,
+          "mib_per_second": 1499.813,
+          "pread_calls": 32768,
+          "pread_bytes": 71303168,
+          "pread_4": 0,
+          "pread_256": 16384,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "snapshot",
+      "chunk": 4096,
+      "median_mib_s": 3333.507,
+      "min_mib_s": 3298.289,
+      "max_mib_s": 3489.26,
+      "measurements": [
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.018342,
+          "mib_per_second": 3489.26,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.019199,
+          "mib_per_second": 3333.507,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.019404,
+          "mib_per_second": 3298.289,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "libext2fs",
+      "chunk": 4096,
+      "median_mib_s": 2459.268,
+      "min_mib_s": 2451.262,
+      "max_mib_s": 2491.533,
+      "measurements": [
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.026024,
+          "mib_per_second": 2459.268
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.026109,
+          "mib_per_second": 2451.262
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.025687,
+          "mib_per_second": 2491.533
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "raw",
+      "chunk": 65536,
+      "median_mib_s": 8776.742,
+      "min_mib_s": 8564.164,
+      "max_mib_s": 8931.063,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007292,
+          "mib_per_second": 8776.742,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007473,
+          "mib_per_second": 8564.164,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007166,
+          "mib_per_second": 8931.063,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "reader",
+      "chunk": 65536,
+      "median_mib_s": 6781.098,
+      "min_mib_s": 6748.919,
+      "max_mib_s": 6783.973,
+      "measurements": [
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.009434,
+          "mib_per_second": 6783.973,
+          "pread_calls": 2048,
+          "pread_bytes": 67371008,
+          "pread_4": 0,
+          "pread_256": 1024,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.009438,
+          "mib_per_second": 6781.098,
+          "pread_calls": 2048,
+          "pread_bytes": 67371008,
+          "pread_4": 0,
+          "pread_256": 1024,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.009483,
+          "mib_per_second": 6748.919,
+          "pread_calls": 2048,
+          "pread_bytes": 67371008,
+          "pread_4": 0,
+          "pread_256": 1024,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "snapshot",
+      "chunk": 65536,
+      "median_mib_s": 7851.797,
+      "min_mib_s": 7430.628,
+      "max_mib_s": 8038.181,
+      "measurements": [
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.008151,
+          "mib_per_second": 7851.797,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007962,
+          "mib_per_second": 8038.181,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.008613,
+          "mib_per_second": 7430.628,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "libext2fs",
+      "chunk": 65536,
+      "median_mib_s": 2533.349,
+      "min_mib_s": 2393.418,
+      "max_mib_s": 2547.264,
+      "measurements": [
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.025125,
+          "mib_per_second": 2547.264
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.02674,
+          "mib_per_second": 2393.418
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.025263,
+          "mib_per_second": 2533.349
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "raw",
+      "chunk": 1048576,
+      "median_mib_s": 9303.678,
+      "min_mib_s": 8599.839,
+      "max_mib_s": 9449.284,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.006879,
+          "mib_per_second": 9303.678,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.006773,
+          "mib_per_second": 9449.284,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007442,
+          "mib_per_second": 8599.839,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "reader",
+      "chunk": 1048576,
+      "median_mib_s": 8229.394,
+      "min_mib_s": 8221.994,
+      "max_mib_s": 8303.062,
+      "measurements": [
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007777,
+          "mib_per_second": 8229.394,
+          "pread_calls": 128,
+          "pread_bytes": 67125248,
+          "pread_4": 0,
+          "pread_256": 64,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007708,
+          "mib_per_second": 8303.062,
+          "pread_calls": 128,
+          "pread_bytes": 67125248,
+          "pread_4": 0,
+          "pread_256": 64,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007784,
+          "mib_per_second": 8221.994,
+          "pread_calls": 128,
+          "pread_bytes": 67125248,
+          "pread_4": 0,
+          "pread_256": 64,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "snapshot",
+      "chunk": 1048576,
+      "median_mib_s": 8283.717,
+      "min_mib_s": 7072.605,
+      "max_mib_s": 8310.609,
+      "measurements": [
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007701,
+          "mib_per_second": 8310.609,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.009049,
+          "mib_per_second": 7072.605,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.007726,
+          "mib_per_second": 8283.717,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "extents",
+      "mode": "libext2fs",
+      "chunk": 1048576,
+      "median_mib_s": 2489.013,
+      "min_mib_s": 2391.004,
+      "max_mib_s": 2507.64,
+      "measurements": [
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.026767,
+          "mib_per_second": 2391.004
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.025522,
+          "mib_per_second": 2507.64
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.025713,
+          "mib_per_second": 2489.013
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "raw",
+      "chunk": 4096,
+      "median_mib_s": 3546.689,
+      "min_mib_s": 3368.953,
+      "max_mib_s": 3681.334,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.018045,
+          "mib_per_second": 3546.689,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.018997,
+          "mib_per_second": 3368.953,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.017385,
+          "mib_per_second": 3681.334,
+          "pread_calls": 16384,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "reader",
+      "chunk": 4096,
+      "median_mib_s": 988.539,
+      "min_mib_s": 921.022,
+      "max_mib_s": 997.522,
+      "measurements": [
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.064159,
+          "mib_per_second": 997.522,
+          "pread_calls": 64488,
+          "pread_bytes": 71430048,
+          "pread_4": 31720,
+          "pread_256": 16384,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.069488,
+          "mib_per_second": 921.022,
+          "pread_calls": 64488,
+          "pread_bytes": 71430048,
+          "pread_4": 31720,
+          "pread_256": 16384,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.064742,
+          "mib_per_second": 988.539,
+          "pread_calls": 64488,
+          "pread_bytes": 71430048,
+          "pread_4": 31720,
+          "pread_256": 16384,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "snapshot",
+      "chunk": 4096,
+      "median_mib_s": 1510.895,
+      "min_mib_s": 1490.105,
+      "max_mib_s": 1515.116,
+      "measurements": [
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.042241,
+          "mib_per_second": 1515.116,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.042359,
+          "mib_per_second": 1510.895,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.04295,
+          "mib_per_second": 1490.105,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 16384
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "libext2fs",
+      "chunk": 4096,
+      "median_mib_s": 2459.268,
+      "min_mib_s": 2343.035,
+      "max_mib_s": 2637.435,
+      "measurements": [
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.027315,
+          "mib_per_second": 2343.035
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.026024,
+          "mib_per_second": 2459.268
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 4096,
+          "reps": 1,
+          "seconds": 0.024266,
+          "mib_per_second": 2637.435
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "raw",
+      "chunk": 65536,
+      "median_mib_s": 8805.724,
+      "min_mib_s": 8437.706,
+      "max_mib_s": 8986.24,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007585,
+          "mib_per_second": 8437.706,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007122,
+          "mib_per_second": 8986.24,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.007268,
+          "mib_per_second": 8805.724,
+          "pread_calls": 1024,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 1024,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "reader",
+      "chunk": 65536,
+      "median_mib_s": 1449.702,
+      "min_mib_s": 1339.501,
+      "max_mib_s": 1476.151,
+      "measurements": [
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.044147,
+          "mib_per_second": 1449.702,
+          "pread_calls": 49128,
+          "pread_bytes": 67497888,
+          "pread_4": 31720,
+          "pread_256": 1024,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 1024
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.047779,
+          "mib_per_second": 1339.501,
+          "pread_calls": 49128,
+          "pread_bytes": 67497888,
+          "pread_4": 31720,
+          "pread_256": 1024,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 1024
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.043356,
+          "mib_per_second": 1476.151,
+          "pread_calls": 49128,
+          "pread_bytes": 67497888,
+          "pread_4": 31720,
+          "pread_256": 1024,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "snapshot",
+      "chunk": 65536,
+      "median_mib_s": 1472.856,
+      "min_mib_s": 1465.638,
+      "max_mib_s": 1503.583,
+      "measurements": [
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.042565,
+          "mib_per_second": 1503.583,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 1024
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.043667,
+          "mib_per_second": 1465.638,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 1024
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.043453,
+          "mib_per_second": 1472.856,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 1024
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "libext2fs",
+      "chunk": 65536,
+      "median_mib_s": 2672.345,
+      "min_mib_s": 2576.075,
+      "max_mib_s": 2686.592,
+      "measurements": [
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.023949,
+          "mib_per_second": 2672.345
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.023822,
+          "mib_per_second": 2686.592
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 65536,
+          "reps": 1,
+          "seconds": 0.024844,
+          "mib_per_second": 2576.075
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "raw",
+      "chunk": 1048576,
+      "median_mib_s": 7933.557,
+      "min_mib_s": 6285.602,
+      "max_mib_s": 9303.678,
+      "measurements": [
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.008067,
+          "mib_per_second": 7933.557,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.010182,
+          "mib_per_second": 6285.602,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        },
+        {
+          "mode": "raw",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.006879,
+          "mib_per_second": 9303.678,
+          "pread_calls": 64,
+          "pread_bytes": 67108864,
+          "pread_4": 0,
+          "pread_256": 0,
+          "pread_4096": 0,
+          "pread_large": 64,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "reader",
+      "chunk": 1048576,
+      "median_mib_s": 1445.25,
+      "min_mib_s": 1436.04,
+      "max_mib_s": 1486.195,
+      "measurements": [
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.044283,
+          "mib_per_second": 1445.25,
+          "pread_calls": 48168,
+          "pread_bytes": 67252128,
+          "pread_4": 31720,
+          "pread_256": 64,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 64
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.044567,
+          "mib_per_second": 1436.04,
+          "pread_calls": 48168,
+          "pread_bytes": 67252128,
+          "pread_4": 31720,
+          "pread_256": 64,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 64
+        },
+        {
+          "mode": "reader",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.043063,
+          "mib_per_second": 1486.195,
+          "pread_calls": 48168,
+          "pread_bytes": 67252128,
+          "pread_4": 31720,
+          "pread_256": 64,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "snapshot",
+      "chunk": 1048576,
+      "median_mib_s": 1470.352,
+      "min_mib_s": 818.624,
+      "max_mib_s": 1485.608,
+      "measurements": [
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.04308,
+          "mib_per_second": 1485.608,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 64
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.07818,
+          "mib_per_second": 818.624,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 64
+        },
+        {
+          "mode": "snapshot",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.043527,
+          "mib_per_second": 1470.352,
+          "pread_calls": 48104,
+          "pread_bytes": 67235744,
+          "pread_4": 31720,
+          "pread_256": 0,
+          "pread_4096": 16384,
+          "pread_large": 0,
+          "callbacks": 64
+        }
+      ]
+    },
+    {
+      "layout": "classic",
+      "mode": "libext2fs",
+      "chunk": 1048576,
+      "median_mib_s": 2381.041,
+      "min_mib_s": 2371.864,
+      "max_mib_s": 2417.375,
+      "measurements": [
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.026475,
+          "mib_per_second": 2417.375
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.026879,
+          "mib_per_second": 2381.041
+        },
+        {
+          "mode": "libext2fs",
+          "bytes": 67108864,
+          "chunk": 1048576,
+          "reps": 1,
+          "seconds": 0.026983,
+          "mib_per_second": 2371.864
+        }
+      ]
+    }
+  ]
+}

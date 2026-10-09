@@ -49,3 +49,22 @@ jobs:
         run: python3 test/device-capacity-linux.py
       - name: Verify filesystem space and inode reporting
         run: make test-statfs FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify classic block-map run boundaries, holes and errors
+        run: make test-indirect-runs FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+
+  bulk-benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install benchmark dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev pkg-config e2fsprogs libext2fs-dev
+      - name: Build optimized profiling harness
+        run: make -j2 test/bulk-reader FUSE_API=3 CFLAGS=-O2
+      - name: Compare warm reader, raw host, e2fsprogs and native ext4 reads
+        run: python3 test/bulk-benchmark.py --native-linux --output bulk-benchmark.json
+      - name: Save benchmark measurements
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bulk-benchmark
+          path: bulk-benchmark.json

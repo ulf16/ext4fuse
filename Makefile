@@ -73,7 +73,7 @@ test: $(BINARY)
 	@for T in test/[0-9][0-9][0-9][0-9]-*; do SKIP_SLOW_TESTS=1 ./$$T || exit $$?; done
 
 clean:
-	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch test/statfs-unit
+	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch test/statfs-unit test/bulk-reader test/bulk-mount-profile
 	rm -rf test/logs .build
 
 .PHONY: test
@@ -189,3 +189,15 @@ test-statfs: test/corruption-probe test/statfs-unit
 	$(PYTHON) test/statfs.py
 
 .PHONY: test-statfs
+
+# Optional performance harness, with I/O counters confined to this test binary.
+test/bulk-reader: test/bulk-reader.c disk.c $(filter-out $(BUILD_DIR)/disk.o,$(READER_OBJECTS)) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/bulk-reader.c $(filter-out $(BUILD_DIR)/disk.o,$(READER_OBJECTS)) $(LDFLAGS)
+
+test-indirect-runs: test/corruption-probe
+	$(PYTHON) test/indirect-runs.py
+
+.PHONY: test-indirect-runs
+
+test/bulk-mount-profile: test/bulk-mount-profile.c fuse-main.c $(READER_OBJECTS) FORCE
+	$(CC) $(CFLAGS) -I. -o $@ test/bulk-mount-profile.c $(READER_OBJECTS) $(LDFLAGS)
