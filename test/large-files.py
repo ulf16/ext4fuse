@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-large-') as tmp:
     if last>first:expected[first-offset:last-offset]=content[first-logical*block:last-logical*block]
    assert int(header)==len(expected) and contents==expected,(kind,offset,header)
    checks+=1
-  assert allocation(image,'/large')[2]==block
+  assert allocation(image,'/large')[2]==(0 if os.uname().sysname=='Darwin' else block)
   assert before==hashlib.sha256(image.read_bytes()).digest()
   if kind=='ext4' and os.environ.get('LARGE_FIXTURE'):
    shutil.copyfile(image,os.environ['LARGE_FIXTURE'])
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-large-') as tmp:
     debug(image,'set_inode_field /large flags %d'%(0x80000|(0x40000 if huge else 0)))
     lines=probe(image,'allocation','/large');assert lines[0]=='0'
     values=list(map(int,lines[1].split()));expected=(high*2**32+low)*(block//512 if huge else 1)
-    assert values==[size,expected,block],values
+    assert values==[size,expected,0 if os.uname().sysname=='Darwin' else block],values
     image.write_bytes(original)
    debug(image,'set_inode_field /large size 18446744073709551615')
    assert probe(image,'allocation','/large')==[str(-errno.EOVERFLOW)]
