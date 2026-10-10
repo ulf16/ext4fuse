@@ -340,3 +340,10 @@ callbacks. This optional native macFUSE check requires the profiling daemon;
 Linux image CI cannot exercise macFUSE request sizing. Mounted contents and
 source-image hashes are checked for extent and classic block-map fixtures, with
 both cached and cache-disabled mount modes. No throughput threshold is used.
+
+The unpatched daemon fails the callback-size assertion; the patched daemon
+passes for FUSE 2 and FUSE 3 with both cache modes. Strict and recovery-mode
+mount smoke checks pass for both APIs, including small files, long/hidden/colon
+names, missing paths, preserved ownership, permission denial and write rejection.
+Large-file allocation tests distinguish the macOS I/O hint from ext4 allocation
+units; the byte-count and debugfs allocation comparisons remain in place.

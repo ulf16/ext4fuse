@@ -74,7 +74,10 @@ assert list(map(int,backend.stdout.splitlines()[1].split()))[:2]==[size,expected
 mounted=source.stat()
 if mounted.st_blocks!=expected_blocks:
     # macFUSE 5.4.0 derives mounted allocation from logical size (upstream #1121).
-    rounded=(size+mounted.st_blksize-1)//mounted.st_blksize*mounted.st_blksize//512
+    # st_blksize is an I/O hint, not the allocation unit. The fixture uses 4 KiB
+    # blocks; macFUSE retains that rounding even when its I/O hint is 64 KiB.
+    allocation_unit=4096
+    rounded=(size+allocation_unit-1)//allocation_unit*allocation_unit//512
     assert mounted.st_blocks==rounded,(mounted.st_blocks,expected_blocks,rounded)
     print('NOTE: macFUSE mounted allocation uses logical size; callback matches debugfs (upstream #1121)')
 assert before==hashlib.sha256((root/'image').read_bytes()).digest()
