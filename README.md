@@ -163,6 +163,8 @@ make test-mounted-permissions
 # Cross-user matrix: launch as a normal user through sudo. Only child-process
 # credentials change; no accounts or group memberships are modified.
 sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user
+# Linux FUSE 3: require ACL enforcement and compare a native ext4 mount:
+sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user --expect-posix-acl --native-reference
 ./test/mount-smoke.sh
 MOUNT_OPTIONS=ro,default_permissions ./test/mount-smoke.sh
 # Test an installed package instead of the checkout binary:

@@ -204,7 +204,7 @@ test/bulk-mount-profile: test/bulk-mount-profile.c fuse-main.c $(READER_OBJECTS)
 
 # Optional native mount matrix; sudo enables child-only cross-user probes.
 test-mounted-permissions: $(BINARY)
-	$(PYTHON) test/mount-permissions.py
+	$(PYTHON) test/mount-permissions.py $(if $(and $(filter Linux,$(HOST_OS)),$(filter 3,$(FUSE_API))),--expect-posix-acl)
 
 .PHONY: test-mounted-permissions
 

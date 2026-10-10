@@ -410,3 +410,10 @@ when group-class mode bits are zero, generic_permission skips ACL lookup. A
 separate nonzero-mask fixture verifies actual named-user denial despite readable
 other bits. Kernel behavior is preserved rather than replaced by a userspace
 interpretation. This native comparison does not certify other kernel versions.
+
+Validated results: Linux FUSE 3 and native ext4 pass 1,032 mounted checks with
+zero mismatches. Native macFUSE owner matrices pass 352 checks per API; the
+xattr/image regression suite passes 1,285 checks, and standalone ACL validation
+passes 70 checks under AddressSanitizer/UndefinedBehaviorSanitizer. Read-only
+source-image hashes remain unchanged. Full native macOS cross-user results from
+v0.2.12 are retained; the new expanded matrix was run as owner on macOS.
