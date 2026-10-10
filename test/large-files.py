@@ -6,6 +6,8 @@ mkfs=os.environ.get('MKE2FS') or shutil.which('mke2fs')
 debugfs=os.environ.get('DEBUGFS') or shutil.which('debugfs')
 assert mkfs and debugfs, 'e2fsprogs sbin must be in PATH'
 checks=0
+# macFUSE selects the mount I/O size; other platforms retain the ext4 block hint.
+def io_hint(block): return 0 if os.uname().sysname=='Darwin' else block
 # Optional fixture destination lets the separate mounted test reuse the ext4 file.
 with tempfile.TemporaryDirectory(prefix='ext4fuse-large-') as tmp:
  root=Path(tmp); host=root/'payload'; marker=b'large fixture payload\n'; host.write_bytes(marker)
@@ -64,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-large-') as tmp:
     if last>first:expected[first-offset:last-offset]=content[first-logical*block:last-logical*block]
    assert int(header)==len(expected) and contents==expected,(kind,offset,header)
    checks+=1
-  assert allocation(image,'/large')[2]==(0 if os.uname().sysname=='Darwin' else block)
+  assert allocation(image,'/large')[2]==(io_hint(block))
   assert before==hashlib.sha256(image.read_bytes()).digest()
   if kind=='ext4' and os.environ.get('LARGE_FIXTURE'):
    shutil.copyfile(image,os.environ['LARGE_FIXTURE'])
@@ -77,7 +79,7 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-large-') as tmp:
     debug(image,'set_inode_field /large flags %d'%(0x80000|(0x40000 if huge else 0)))
     lines=probe(image,'allocation','/large');assert lines[0]=='0'
     values=list(map(int,lines[1].split()));expected=(high*2**32+low)*(block//512 if huge else 1)
-    assert values==[size,expected,0 if os.uname().sysname=='Darwin' else block],values
+    assert values==[size,expected,io_hint(block)],values
     image.write_bytes(original)
    debug(image,'set_inode_field /large size 18446744073709551615')
    assert probe(image,'allocation','/large')==[str(-errno.EOVERFLOW)]
@@ -110,5 +112,5 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-large-') as tmp:
   debug(image,'set_inode_field /units blocks_lo 7')
   debug(image,'set_inode_field /units flags %d'%(0x80000|0x40000))
   lines=probe(image,'allocation','/units');assert lines[0]=='0'
-  assert list(map(int,lines[1].split()))==[len(marker),(3*2**32+7)*(block//512),block]
+  assert list(map(int,lines[1].split()))==[len(marker),(3*2**32+7)*(block//512),io_hint(block)]
 print('PASS: %d large-file/allocation/deep-extent checks'%checks)
