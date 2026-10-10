@@ -15,6 +15,8 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libfuse-dev libfuse3-dev pkg-config e2fsprogs libext2fs-dev
       - name: Build with AddressSanitizer and UndefinedBehaviorSanitizer
         run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Validate ACL structure and conversion
+        run: make test-acl FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Test disposable ext4 images without mounting
         run: make test-images FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Reject unsupported features and malformed metadata
@@ -89,7 +91,10 @@ jobs:
       - name: Build daemon
         run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS=-O2
       - name: Verify owner, supplementary groups and cross-user permission caches
-        run: sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user --output permissions.json
+        run: |
+          acl_flag=
+          if [ '${{ matrix.fuse }}' = 3 ]; then acl_flag=--expect-posix-acl; fi
+          sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user $acl_flag --output permissions.json
       - name: Save credential and permission results
         uses: actions/upload-artifact@v4
         with:

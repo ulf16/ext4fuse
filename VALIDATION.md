@@ -388,3 +388,18 @@ Private mounts deny peer access with either EACCES/EPERM or macFUSE's ENOENT
 isolation response; ENOENT is accepted only for peers outside a private mount.
 Both source-image hashes remain unchanged, and all disposable mounts are removed.
 No production permission change was needed.
+
+## Linux kernel POSIX ACL enforcement — v0.2.13
+
+Linux FUSE 3 requests the kernel POSIX ACL capability and refuses to mount when
+the kernel cannot provide it. Both access and default ACL exports validate
+required owner/group/other entries, ordering, sorted unique named principals,
+permission bits, IDs and the mask required by named entries. Conversion emits
+explicit little-endian Linux v2 bytes on all host architectures.
+
+The mounted matrix requires actual ACL enforcement on Linux FUSE 3: named-user
+grants/denials, masked grants, named supplementary-group grants, group unions,
+group denial before other fallback, owner/user precedence and named-user
+directory enumeration/traversal. Repeated probes and owner-after-peer checks
+exercise the kernel ACL cache. FUSE 2 and macOS retain mode-based behavior.
+Native macOS ACL translation is not implemented by this release.

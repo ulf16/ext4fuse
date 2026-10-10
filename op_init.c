@@ -19,6 +19,18 @@ void *op_init(struct fuse_conn_info *info)
 {
     INFO("Using FUSE protocol %d.%d", info->proto_major, info->proto_minor);
 
+#if defined(__linux__) && defined(FUSE_CAP_POSIX_ACL)
+    /* Read-only: the kernel enforces our validated access ACL xattrs, including
+     * supplementary groups and traversal. No ACL mutation/inheritance occurs. */
+    if (info->capable & FUSE_CAP_POSIX_ACL) {
+        info->want |= FUSE_CAP_POSIX_ACL;
+        INFO("Kernel POSIX ACL enforcement enabled");
+    } else {
+        ERR("Kernel lacks POSIX ACL support; refusing a mode-only mount")
+        abort();
+    }
+#endif
+
     if (inode_init() != 0) {
         ERR("inode initialization failed")
         abort();

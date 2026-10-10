@@ -111,9 +111,11 @@ def main():
     parser.add_argument('--reader', default=os.environ.get('READER', './ext4fuse'))
     parser.add_argument('--require-cross-user', action='store_true',
                         help='fail rather than skip peer probes when not run via sudo')
+    parser.add_argument('--expect-posix-acl', action='store_true', help='require Linux FUSE 3 kernel ACL enforcement')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     assert sys.platform in ('darwin', 'linux'), 'requires macFUSE or Linux FUSE'
+    assert not args.expect_posix_acl or sys.platform == 'linux', 'kernel POSIX ACL test requires Linux'
     privileged = os.geteuid() == 0
     assert not args.require_cross_user or privileged, 'cross-user probes require sudo (only child credentials change)'
     uid = int(os.environ.get('SUDO_UID', os.getuid()))
@@ -162,12 +164,30 @@ def main():
         'group-precedence': (foreign_uid, gid, 0o004),
         'acl-grant': (uid, foreign_gid, 0o440),
         'acl-deny': (foreign_uid, foreign_gid, 0o004),
+        'acl-mask-deny': (foreign_uid, foreign_gid, 0o000),
+        'acl-group-grant': (foreign_uid, foreign_gid, 0o040),
+        'acl-group-union': (foreign_uid, gid, 0o040),
+        'acl-group-deny': (foreign_uid, supplementary, 0o004),
+        'acl-user-precedence': (foreign_uid, foreign_gid, 0o044),
+        'acl-owner-precedence': (uid, foreign_gid, 0o040),
     }
     for name in entries: debug(f'write {payload} /{name}')
     acls = {}
-    for name, perms in [('acl-grant', (4,4,0,4,0)), ('acl-deny', (0,0,0,0,4))]:
-        acls[name] = struct.pack('<I', 2) + b''.join(struct.pack('<HHI', tag, perm, ident) for tag, perm, ident in
-            zip((1,2,4,16,32), perms, (0xffffffff,peer_uid,0xffffffff,0xffffffff,0xffffffff)))
+    undefined = 0xffffffff
+    def acl_entries(owner_perm, users, group_perm, groups, mask, other):
+        return [(1,owner_perm,undefined)] + [(2,p,i) for i,p in sorted(users)] + [(4,group_perm,undefined)] + [(8,p,i) for i,p in sorted(groups)] + [(16,mask,undefined),(32,other,undefined)]
+    acl_specs = {
+        'acl-grant': acl_entries(4,[(peer_uid,4)],0,[],4,0),
+        'acl-deny': acl_entries(0,[(peer_uid,0)],0,[],0,4),
+        'acl-mask-deny': acl_entries(0,[(peer_uid,4)],0,[],0,0),
+        'acl-group-grant': acl_entries(0,[],0,[(supplementary,4)],4,0),
+        'acl-group-union': acl_entries(0,[],0,[(gid,0),(supplementary,4)],4,0),
+        'acl-group-deny': acl_entries(0,[],0,[(supplementary,0)],0,4),
+        'acl-user-precedence': acl_entries(0,[(peer_uid,0)],0,[(supplementary,4)],4,4),
+        'acl-owner-precedence': acl_entries(0,[(uid,4)],0,[],4,0),
+    }
+    for name, spec in acl_specs.items():
+        acls[name] = struct.pack('<I', 2) + b''.join(struct.pack('<HHI', *entry) for entry in spec)
         host = root/(name+'.acl'); host.write_bytes(acls[name])
         debug(f'ea_set -f {host} /{name} system.posix_acl_access')
     for name, (owner_uid, owner_gid, mode) in entries.items():
@@ -179,6 +199,15 @@ def main():
         for field, value in [('uid',foreign_uid), ('gid',supplementary), ('mode',0o040000|mode)]:
             debug(f'set_inode_field /{name} {field} {value}')
         debug(f'set_inode_field /{name}/payload mode {0o100004}')
+    # A named-user directory grant must permit both enumeration and traversal.
+    debug('mkdir /acl-traverse')
+    debug(f'write {payload} /acl-traverse/payload')
+    for field,value in [('uid',foreign_uid),('gid',foreign_gid),('mode',0o040050)]:
+        debug(f'set_inode_field /acl-traverse {field} {value}')
+    debug(f'set_inode_field /acl-traverse/payload mode {0o100004}')
+    directory_acl = struct.pack('<I',2) + b''.join(struct.pack('<HHI',*e) for e in acl_entries(0,[(peer_uid,5)],0,[],5,0))
+    host = root/'directory.acl'; host.write_bytes(directory_acl)
+    debug(f'ea_set -f {host} /acl-traverse system.posix_acl_access')
     debug('symlink /link owner')
     # Mount-owner isolation may deny even root stat() access. Inspect the mount
     # inventory instead of using ismount(), which stats the protected root.
@@ -215,18 +244,36 @@ def main():
                         return bool(mode & (bit << shift))
                     cases = []
                     for name,(owner_uid,owner_gid,mode) in entries.items():
-                        cases.append(dict(op='read', path=name, allow=permitted(owner_uid,owner_gid,mode,4)))
+                        allowed = permitted(owner_uid,owner_gid,mode,4)
+                        if args.expect_posix_acl and visible and name in acl_specs:
+                            spec = acl_specs[name]
+                            mask = next(p for tag,p,i in spec if tag==16)
+                            if identity['uid']==owner_uid: permission = spec[0][1]
+                            else:
+                                user_matches = [p for tag,p,i in spec if tag==2 and i==identity['uid']]
+                                group_matches = [p for tag,p,i in spec if (tag==4 and owner_gid in identity['groups']+[identity['gid']]) or (tag==8 and i in identity['groups']+[identity['gid']])]
+                                if user_matches: permission = user_matches[0] & mask
+                                elif group_matches:
+                                    permission = 0
+                                    for p in group_matches: permission |= p & mask
+                                else: permission = spec[-1][1]
+                            allowed = bool(permission & 4)
+                        cases.append(dict(op='read', path=name, allow=allowed))
                         cases.append(dict(op='stat', path=name, allow=visible, uid=owner_uid, gid=owner_gid, mode=mode))
                     for name,mode in [('traverse',0o050),('list-only',0o040),('search-only',0o010)]:
                         cases.append(dict(op='list',path=name,allow=permitted(foreign_uid,supplementary,mode,4)))
                         cases.append(dict(op='read',path=name+'/payload',allow=permitted(foreign_uid,supplementary,mode,1)))
-                    cases.append(dict(op='read',path='link',allow=permitted(uid,foreign_gid,0o600,4)))
+                    directory_allowed = visible and (recovery or (args.expect_posix_acl and identity['uid']==peer_uid))
+                    cases.append(dict(op='list',path='acl-traverse',allow=directory_allowed))
+                    cases.append(dict(op='read',path='acl-traverse/payload',allow=directory_allowed))
+                    cases.append(dict(op='read',path='link' ,allow=permitted(uid,foreign_gid,0o600,4)))
                     cases.append(dict(op='write',path='public',allow=False))
                     # ACL retrieval is checked as owner, independently of named-rule enforcement.
                     if role=='owner':
-                        for name,value in acls.items():
+                        for name in ('acl-grant','acl-deny'):
+                            value = acls[name]
                             cases.append(dict(op='xattr',path=name,allow=True,value=value.hex(),
-                                              allow_absent=sys.platform=='linux' and position>0))
+                                              allow_absent=sys.platform=='linux' and not args.expect_posix_acl and position>0))
                     for case in cases: case['hidden'] = not visible
                     command = [sys.executable,str(helper),str(mount),json.dumps(cases),json.dumps(identity)]
                     result = subprocess.run(command, capture_output=True, text=True, timeout=30,
@@ -254,7 +301,7 @@ def main():
         if not privileged: print('SKIP: cross-user/allow_other probes require sudo; owner/group checks ran',flush=True)
         data = dict(platform=sys.platform, cross_user=privileged, supplementary_gid=supplementary,
                     checks=sum(r['checks'] for r in results), results=results,
-                    acl='metadata-only: named ACL grants/denials are intentionally not enforced')
+                    acl='kernel-enforced' if args.expect_posix_acl else 'metadata-only')
         if args.output: args.output.write_text(json.dumps(data,indent=2)+'\n')
         failures = sum(len(row['failures']) for row in results)
         assert failures==0, f'{failures} permission mismatches; see complete matrix above'

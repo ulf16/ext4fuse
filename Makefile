@@ -47,7 +47,7 @@ override LDFLAGS += -lexecinfo
 endif
 
 BINARY = ext4fuse
-SOURCES += fuse-main.o logging.o extents.o disk.o checksum.o dirhash.o dirindex.o super.o inode.o dcache.o
+SOURCES += fuse-main.o acl.o logging.o extents.o disk.o checksum.o dirhash.o dirindex.o super.o inode.o dcache.o
 SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o op_xattr.o op_statfs.o
 
 BUILD_DIR = .build/fuse$(FUSE_API)
@@ -73,7 +73,7 @@ test: $(BINARY)
 	@for T in test/[0-9][0-9][0-9][0-9]-*; do SKIP_SLOW_TESTS=1 ./$$T || exit $$?; done
 
 clean:
-	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch test/statfs-unit test/bulk-reader test/bulk-mount-profile
+	rm -f *.o $(BINARY) test/image-reader test/feature-probe test/corruption-probe test/disk-capacity test/index-probe test/lookup-batch test/statfs-unit test/bulk-reader test/bulk-mount-profile test/acl-unit
 	rm -rf test/logs .build
 
 .PHONY: test
@@ -207,3 +207,12 @@ test-mounted-permissions: $(BINARY)
 	$(PYTHON) test/mount-permissions.py
 
 .PHONY: test-mounted-permissions
+
+# Pure ACL wire-format validation, independent of a mount or backing image.
+test/acl-unit: test/acl-unit.c acl.c acl.h
+	$(CC) $(CFLAGS) -I. -o $@ test/acl-unit.c acl.c
+
+test-acl: test/acl-unit
+	./test/acl-unit
+
+.PHONY: test-acl

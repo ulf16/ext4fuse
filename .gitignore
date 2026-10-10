@@ -24,3 +24,5 @@ ext4fuse
 /test/bulk-reader
 
 /test/bulk-mount-profile
+
+/test/acl-unit

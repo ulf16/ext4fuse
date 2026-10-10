@@ -142,15 +142,19 @@ read permissions. It therefore permits the mounting user to read mode-zero and f
 private files. Do not combine that recovery mode with `allow_other` when access should
 remain private. `allow_other` separately expands who can access the mount.
 See [macFUSE's mount options](https://github.com/macfuse/macfuse/wiki/Mount-Options).
-The matrix includes named ACL grant/deny fixtures and verifies their metadata.
-These deliberately characterize the existing limitation: named grants do not
-add access beyond mode bits, and named denials do not restrict mode-bit grants.
-Linux ACLs are exposed as attribute metadata but are not enforced by this reader;
-mode checks are not full Linux ACL equivalence. On Linux FUSE, a denied access
-can cache an absent POSIX ACL when ACL enforcement is disabled; subsequent native
-`getxattr` calls may report no data despite the stored ACL. Fresh-mount metadata
-and direct-reader xattr checks verify the stored bytes. Non-Linux inode ownership
-layouts remain unaudited.
+Linux FUSE 3 enables kernel POSIX ACL enforcement: named users and groups,
+owner/user/group precedence, group unions, masks, and directory traversal are
+checked by the kernel using the reader's validated ACL attributes. A kernel
+without that capability is rejected instead of silently mounting with mode-only
+checks. The filesystem remains read-only; default ACLs are exposed but cannot
+be inherited through creation because creation is unsupported.
+
+FUSE 2 and macOS still use mode-bit checks and expose Linux ACLs as metadata.
+macOS requires a separate native ACL translation before these rules can be
+enforced. Linux FUSE 2 can cache absent ACL metadata after denied permission
+checks. The matrix distinguishes these platform behaviors; use
+`--expect-posix-acl` on Linux FUSE 3 to require actual ACL grants and denials.
+Non-Linux inode ownership layouts remain unaudited.
 
 ```sh
 make test-attributes
@@ -363,8 +367,9 @@ using explicit descriptor copies; those synthetic fixtures do not certify bitmap
 block. Names retain their Linux namespaces (`user.`, `trusted.`, `security.`, `system.`).
 Values are returned unchanged, including embedded NUL bytes and empty values, except
 POSIX ACLs: ext4's compact disk encoding is converted to Linux's version-2 xattr encoding.
-Access and default ACLs are metadata only; macOS does not enforce these Linux ACLs.
-The existing mode-based mount permission policy still applies. Namespace-specific
+Linux FUSE 3 enforces access ACLs through its kernel ACL capability. FUSE 2 and
+macOS expose them as metadata only. Default ACLs are metadata only because the
+reader cannot create filesystem objects. Namespace-specific
 Linux capabilities or SELinux policy are not reproduced by this recovery reader.
 
 `system.data` is internal inline file/directory storage and is hidden. Unknown namespace
@@ -432,7 +437,7 @@ uses disposable images, not real disks.
 
 ## Remaining work
 
-- Reproduce remaining upstream reports; implement Linux ACL enforcement if required, and broaden native permission validation.
+- Reproduce remaining upstream reports; implement native macOS ACL translation and broaden platform validation.
 - Expand malformed-metadata coverage and physical large-volume validation.
 - Expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.

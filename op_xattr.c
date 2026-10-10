@@ -1,3 +1,4 @@
+#include "acl.h"
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include <errno.h>
 #include <stdlib.h>
@@ -205,36 +206,7 @@ static int load(const char *path, struct attributes *attrs)
  * ACL v2 uses eight bytes for every entry. Return the userspace encoding. */
 static int acl_value(const struct attribute *attr, char *value, size_t size)
 {
-    if (attr->size < 4 || checksum_u32(attr->value) != 1) return -EIO;
-    size_t cursor = 4, count = 0;
-    while (cursor < attr->size) {
-        if (attr->size - cursor < 4) return -EIO;
-        unsigned tag = checksum_u16(attr->value + cursor);
-        unsigned perm = checksum_u16(attr->value + cursor + 2);
-        size_t step;
-        switch (tag) {
-        case 1: case 4: case 16: case 32: step = 4; break;
-        case 2: case 8: step = 8; break;
-        default: return -EIO;
-        }
-        if (perm > 7 || step > attr->size - cursor) return -EIO;
-        if (step == 8 && checksum_u32(attr->value + cursor + 4) == UINT32_MAX) return -EIO;
-        cursor += step; count++;
-    }
-    size_t needed = 4 + count * 8;
-    if (!size) return needed;
-    if (size < needed) return -ERANGE;
-    uint32_t version = 2, undefined = UINT32_MAX;
-    memcpy(value, &version, 4);
-    cursor = 4;
-    for (size_t i = 0; i < count; i++) {
-        unsigned tag = checksum_u16(attr->value + cursor);
-        size_t step = (tag == 2 || tag == 8) ? 8 : 4;
-        memcpy(value + 4 + i * 8, attr->value + cursor, 4);
-        memcpy(value + 8 + i * 8, step == 8 ? attr->value + cursor + 4 : (const unsigned char *)&undefined, 4);
-        cursor += step;
-    }
-    return needed;
+    return ext4_acl_to_xattr(attr->value, attr->size, value, size);
 }
 
 static int operation(const char *path, const char *name, char *buf, size_t size)
