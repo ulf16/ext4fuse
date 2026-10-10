@@ -17,7 +17,7 @@ import time
 # The helper lives inside the public disposable fixture directory so another
 # user never needs access to the checkout (which may be in a private home).
 PROBE = r'''
-import ctypes, errno, json, os, sys
+import ctypes, errno, json, os, sys, traceback
 def xattr(path):
     if hasattr(os, 'getxattr'): return os.getxattr(path, 'system.posix_acl_access')
     libc = ctypes.CDLL(None, use_errno=True)
@@ -46,36 +46,42 @@ actual_groups = kernel_groups()
 assert set(identity['groups']).issubset(actual_groups), (actual_groups, identity)
 count = 0
 acl_absent = 0
+failures = []
+def check(case):
+    path = root + '/' + case['path']
+    try:
+        if case['op'] == 'read':
+            with open(path, 'rb') as file: assert file.read() == b'permission fixture\n'
+        elif case['op'] == 'list':
+            assert 'payload' in os.listdir(path)
+        elif case['op'] == 'stat':
+            st = os.stat(path)
+            assert st.st_uid == case['uid'] and st.st_gid == case['gid']
+            assert st.st_mode & 0o777 == case['mode'] & ~0o222
+        elif case['op'] == 'xattr':
+            assert xattr(path).hex() == case['value']
+        elif case['op'] == 'write':
+            fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+            os.close(fd)  # Do not write even if the read-only check fails.
+        else: raise AssertionError(case)
+    except OSError as error:
+        if case.get('allow_absent') and error.errno == errno.ENODATA:
+            return True
+        assert not case['allow'], (case, error)
+        expected = (errno.EACCES, errno.EPERM, errno.EROFS) if case['op']=='write' else (errno.EACCES, errno.EPERM)
+        if case.get('hidden') and sys.platform=='darwin': expected += (errno.ENOENT,)
+        assert error.errno in expected, (case, error)
+    else:
+        assert case['allow'], ('unexpected permission grant', case, identity)
+    return False
 for repeat in range(2):
     for case in cases:
-        path = root + '/' + case['path']
         try:
-            if case['op'] == 'read':
-                with open(path, 'rb') as file: assert file.read() == b'permission fixture\n'
-            elif case['op'] == 'list':
-                assert 'payload' in os.listdir(path)
-            elif case['op'] == 'stat':
-                st = os.stat(path)
-                assert st.st_uid == case['uid'] and st.st_gid == case['gid']
-                assert st.st_mode & 0o777 == case['mode'] & ~0o222
-            elif case['op'] == 'xattr':
-                assert xattr(path).hex() == case['value']
-            elif case['op'] == 'write':
-                fd = os.open(path, os.O_WRONLY | os.O_APPEND)
-                os.close(fd)  # Do not write even if the read-only check fails.
-            else: raise AssertionError(case)
-        except OSError as error:
-            if case.get('allow_absent') and error.errno == errno.ENODATA:
-                acl_absent += 1
-                count += 1
-                continue
-            assert not case['allow'], (case, error)
-            expected = (errno.EACCES, errno.EPERM, errno.EROFS) if case['op']=='write' else (errno.EACCES, errno.EPERM)
-            assert error.errno in expected, (case, error)
-        else:
-            assert case['allow'], ('unexpected permission grant', case, identity)
+            acl_absent += bool(check(case))
+        except (AssertionError, OSError) as error:
+            failures.append(dict(case=case, error=str(error)))
         count += 1
-print(json.dumps(dict(checks=count, uid=os.getuid(), gid=os.getgid(), groups=actual_groups, acl_absent=acl_absent)))
+print(json.dumps(dict(checks=count, uid=os.getuid(), gid=os.getgid(), groups=actual_groups, acl_absent=acl_absent, failures=failures)))
 '''
 
 
@@ -221,12 +227,15 @@ def main():
                         for name,value in acls.items():
                             cases.append(dict(op='xattr',path=name,allow=True,value=value.hex(),
                                               allow_absent=sys.platform=='linux' and position>0))
+                    for case in cases: case['hidden'] = not visible
                     command = [sys.executable,str(helper),str(mount),json.dumps(cases),json.dumps(identity)]
                     result = subprocess.run(command, capture_output=True, text=True, timeout=30,
                                             **(credentials(identity) if privileged else {}))
-                    assert result.returncode==0, (label,role,result.stdout,result.stderr)
+                    assert result.returncode==0, ('credential/driver failure',label,role,result.stdout,result.stderr)
                     row = dict(mode=label,role=role,**json.loads(result.stdout));results.append(row)
-                    print(f'PASS: {label} {role}: {row["checks"]} permission checks',flush=True)
+                    state = 'FAIL' if row['failures'] else 'PASS'
+                    print(f'{state}: {label} {role}: {row["checks"]} permission checks',flush=True)
+                    for failure in row['failures']: print(json.dumps(failure),flush=True)
                     if row['acl_absent']: print('NOTE: Linux FUSE cached ACL absence after permission probes',flush=True)
             except BaseException:
                 log.flush();log.seek(0);print(log.read(),file=sys.stderr)
@@ -247,6 +256,8 @@ def main():
                     checks=sum(r['checks'] for r in results), results=results,
                     acl='metadata-only: named ACL grants/denials are intentionally not enforced')
         if args.output: args.output.write_text(json.dumps(data,indent=2)+'\n')
+        failures = sum(len(row['failures']) for row in results)
+        assert failures==0, f'{failures} permission mismatches; see complete matrix above'
         print(f'PASS: {data["checks"]} mounted permission checks; source image unchanged')
     finally:
         assert not mounted(), f'mount remains; retaining {root}'
