@@ -17,6 +17,7 @@
 #include "inode.h"
 #include "logging.h"
 #include "super.h"
+#include "ops.h"
 
 int op_getattr(const char *path, struct stat *stbuf)
 {
@@ -79,5 +80,11 @@ int op_getattr(const char *path, struct stat *stbuf)
 #endif
 #endif
 
+#ifdef __APPLE__
+    /* An unrepresentable/corrupt ACL must not become a mode-only fallback
+     * when the kernel asks for security metadata. Fail lookup itself. */
+    ret=op_macos_acl(path,NULL,0);
+    if (ret < 0 && ret != -ENOATTR) return ret;
+#endif
     return 0;
 }

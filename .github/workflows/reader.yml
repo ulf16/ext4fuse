@@ -17,6 +17,8 @@ jobs:
         run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Validate ACL structure and conversion
         run: make test-acl FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
+      - name: Verify ordered native ACL translation against Linux semantics
+        run: make test-native-acl FUSE_API=${{ matrix.fuse }}
       - name: Test disposable ext4 images without mounting
         run: make test-images FUSE_API=${{ matrix.fuse }} CFLAGS='-O1 -g -fsanitize=address,undefined'
       - name: Reject unsupported features and malformed metadata

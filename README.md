@@ -149,9 +149,11 @@ without that capability is rejected instead of silently mounting with mode-only
 checks. The filesystem remains read-only; default ACLs are exposed but cannot
 be inherited through creation because creation is unsupported.
 
-FUSE 2 and macOS still use mode-bit checks and expose Linux ACLs as metadata.
-macOS requires a separate native ACL translation before these rules can be
-enforced. Linux FUSE 2 can cache absent ACL metadata after denied permission
+macOS translates access ACLs to ordered native allow/deny rules exposed through
+`com.apple.system.Security`; both macFUSE APIs enable `extended_security`.
+Native mode-bit ownership is preserved. Named-user precedence, masked named
+users/groups, owning groups, and other fallback are enforced by the kernel.
+FUSE 2 on Linux still uses mode-bit checks and exposes ACLs as metadata. Linux FUSE 2 can cache absent ACL metadata after denied permission
 checks. The matrix distinguishes these platform behaviors; use
 `--expect-posix-acl` on Linux FUSE 3 to require actual ACL grants and denials.
 Non-Linux inode ownership layouts remain unaudited.
@@ -369,9 +371,20 @@ using explicit descriptor copies; those synthetic fixtures do not certify bitmap
 block. Names retain their Linux namespaces (`user.`, `trusted.`, `security.`, `system.`).
 Values are returned unchanged, including embedded NUL bytes and empty values, except
 POSIX ACLs: ext4's compact disk encoding is converted to Linux's version-2 xattr encoding.
-Linux FUSE 3 enforces access ACLs through its kernel ACL capability. FUSE 2 and
-macOS expose them as metadata only. Default ACLs are metadata only because the
-reader cannot create filesystem objects. Namespace-specific
+Linux FUSE 3 enforces access ACLs through its kernel ACL capability. macOS
+translates access ACLs into native security attributes, using Apple's UUID
+membership APIs and portable big-endian filesec format. Linux FUSE 2 exposes
+ACLs as metadata only. Default ACLs remain metadata because creation is unsupported.
+
+Native translation fails lookup for malformed ACLs, more than 128 generated
+Apple entries, identity mapping errors, and numeric identities resolving to
+reserved Apple principals. It also rejects ACLs containing both read-only and
+execute-only group grants: Apple can combine these for a multi-right request,
+while Linux requires one matching group to cover the whole request. These
+rejections prevent mode-only fallback or broader native grants. The translator
+preserves the tested Linux zero-mask mode fast path and owner mode precedence.
+Recovery `defer_permissions` explicitly bypasses kernel permission checks;
+`auto_xattr` and `noapplexattr` are rejected because they disable ACL delivery. Namespace-specific
 Linux capabilities or SELinux policy are not reproduced by this recovery reader.
 
 `system.data` is internal inline file/directory storage and is hidden. Unknown namespace
@@ -439,7 +452,7 @@ uses disposable images, not real disks.
 
 ## Remaining work
 
-- Reproduce remaining upstream reports; implement native macOS ACL translation and broaden platform validation.
+- Reproduce remaining upstream reports; broaden native ACL validation and investigate unrepresentable group rules.
 - Expand malformed-metadata coverage and physical large-volume validation.
 - Expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.

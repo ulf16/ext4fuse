@@ -1,5 +1,5 @@
-#include "acl.h"
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "acl.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +11,7 @@
 #include "checksum.h"
 
 #ifdef __APPLE__
+#include <membership.h>
 #define NO_ATTRIBUTE ENOATTR
 #else
 #define NO_ATTRIBUTE ENODATA
@@ -209,8 +210,17 @@ static int acl_value(const struct attribute *attr, char *value, size_t size)
     return ext4_acl_to_xattr(attr->value, attr->size, value, size);
 }
 
+#ifdef __APPLE__
+static int native_uuid(int group, unsigned id, unsigned char uuid[16])
+{ return group ? mbr_gid_to_uuid(id,uuid) : mbr_uid_to_uuid(id,uuid); }
+#endif
+
 static int operation(const char *path, const char *name, char *buf, size_t size)
 {
+#ifdef __APPLE__
+    int native = name && !strcmp(name,"com.apple.system.Security");
+    if (native) name="system.posix_acl_access";
+#endif
     struct attributes *attrs = calloc(1, sizeof(*attrs));
     if (!attrs) return -ENOMEM;
     int ret = load(path, attrs);
@@ -230,6 +240,13 @@ static int operation(const char *path, const char *name, char *buf, size_t size)
             if (strcmp(name, attr->name)) continue;
             ret = read_value(attrs, attr);
             if (ret < 0) goto done;
+#ifdef __APPLE__
+            if (native) {
+                struct ext4_inode inode;
+                ret=inode_get_by_number(attrs->parent,&inode);
+                if (!ret) ret=ext4_acl_to_macos(attr->value,attr->size,inode.i_mode,buf,size,native_uuid);
+            } else
+#endif
             if (attr->index == 2 || attr->index == 3) ret = acl_value(attr, buf, size);
             else if (size && size < attr->size) ret = -ERANGE;
             else {
@@ -263,5 +280,13 @@ int op_listxattr(const char *path, char *list, size_t size)
 int op_getxattr(const char *path, const char *name, char *value, size_t size)
 {
     if (!name || !*name) return -EINVAL;
+#ifdef __APPLE__
+    if (!strcmp(name,"com.apple.system.Security")) return op_macos_acl(path,value,size);
+#endif
     return operation(path, name, value, size);
 }
+
+#ifdef __APPLE__
+int op_macos_acl(const char *path, char *value, size_t size)
+{ return operation(path,"com.apple.system.Security",value,size); }
+#endif

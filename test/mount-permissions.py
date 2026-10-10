@@ -17,7 +17,7 @@ import time
 # The helper lives inside the public disposable fixture directory so another
 # user never needs access to the checkout (which may be in a private home).
 PROBE = r'''
-import ctypes, errno, json, os, sys, traceback
+import ctypes, errno, json, os, struct, sys, traceback
 def xattr(path):
     if hasattr(os, 'getxattr'): return os.getxattr(path, 'system.posix_acl_access')
     libc = ctypes.CDLL(None, use_errno=True)
@@ -61,6 +61,23 @@ def check(case):
             assert st.st_mode & 0o777 == expected_mode
         elif case['op'] == 'xattr':
             assert xattr(path).hex() == case['value']
+        elif case['op'] == 'nativeacl':
+            libc = ctypes.CDLL(None, use_errno=True)
+            libc.acl_get_file.argtypes = [ctypes.c_char_p,ctypes.c_int]
+            libc.acl_get_file.restype = ctypes.c_void_p
+            libc.acl_copy_ext.argtypes = [ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ssize_t]
+            libc.acl_copy_ext.restype = ctypes.c_ssize_t
+            libc.acl_free.argtypes = [ctypes.c_void_p]
+            acl = libc.acl_get_file(os.fsencode(path),0x100)
+            if not acl: raise OSError(ctypes.get_errno(),'acl_get_file')
+            try:
+                buf = ctypes.create_string_buffer(4096)
+                n = libc.acl_copy_ext(buf,acl,len(buf))
+                if n<0: raise OSError(ctypes.get_errno(),'acl_copy_ext')
+                assert struct.unpack_from('>I',buf.raw)[0]==0x012cc16d
+                count = struct.unpack_from('>I',buf.raw,36)[0]
+                assert 0<count<=128 and n==44+24*count
+            finally: libc.acl_free(acl)
         elif case['op'] == 'write':
             fd = os.open(path, os.O_WRONLY | os.O_APPEND)
             os.close(fd)  # Do not write even if the read-only check fails.
@@ -112,12 +129,11 @@ def main():
     parser.add_argument('--reader', default=os.environ.get('READER', './ext4fuse'))
     parser.add_argument('--require-cross-user', action='store_true',
                         help='fail rather than skip peer probes when not run via sudo')
-    parser.add_argument('--expect-posix-acl', action='store_true', help='require Linux FUSE 3 kernel ACL enforcement')
+    parser.add_argument('--expect-posix-acl', action='store_true', default=sys.platform=='darwin', help='require kernel ACL enforcement (default on macOS)')
     parser.add_argument('--native-reference', action='store_true', help='also verify a disposable read-only native Linux ext4 mount')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     assert sys.platform in ('darwin', 'linux'), 'requires macFUSE or Linux FUSE'
-    assert not args.expect_posix_acl or sys.platform == 'linux', 'kernel POSIX ACL test requires Linux'
     privileged = os.geteuid() == 0
     assert not args.native_reference or (privileged and sys.platform=='linux' and args.expect_posix_acl), 'native reference requires root Linux ACL mode'
     assert not args.require_cross_user or privileged, 'cross-user probes require sudo (only child credentials change)'
@@ -256,7 +272,7 @@ def main():
                     cases = []
                     for name,(owner_uid,owner_gid,mode) in entries.items():
                         allowed = permitted(owner_uid,owner_gid,mode,4)
-                        if args.expect_posix_acl and visible and name in acl_specs:
+                        if args.expect_posix_acl and visible and not recovery and name in acl_specs:
                             spec = acl_specs[name]
                             mask = next(p for tag,p,i in spec if tag==16)
                             if identity['uid']==owner_uid: permission = spec[0][1]
@@ -287,6 +303,7 @@ def main():
                             value = acls[name]
                             cases.append(dict(op='xattr',path=name,allow=True,value=value.hex(),
                                               allow_absent=sys.platform=='linux' and not args.expect_posix_acl and position>0))
+                            if sys.platform=='darwin': cases.append(dict(op='nativeacl',path=name,allow=True))
                     for case in cases: case['hidden'] = not visible
                     command = [sys.executable,str(helper),str(mount),json.dumps(cases),json.dumps(identity)]
                     result = subprocess.run(command, capture_output=True, text=True, timeout=30,

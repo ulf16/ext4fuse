@@ -17,4 +17,8 @@ int op_open(const char *path, struct fuse_file_info *fi);
 int op_listxattr(const char *path, char *list, size_t size);
 int op_getxattr(const char *path, const char *name, char *value, size_t size);
 
+#ifdef __APPLE__
+int op_macos_acl(const char *path, char *value, size_t size);
+#endif
+
 #endif

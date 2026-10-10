@@ -4,6 +4,9 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+static int resolve(int group, unsigned id, unsigned char uuid[16])
+{ memset(uuid,0,16); uuid[0]=group+1; uuid[12]=id>>24; uuid[13]=id>>16; uuid[14]=id>>8; uuid[15]=id; return 0; }
 
 int main(void)
 {
@@ -40,5 +43,20 @@ int main(void)
     assert(ext4_acl_to_xattr(bad,48,NULL,0)==-EIO); checks++;
     const unsigned char basic[]={1,0,0,0,1,0,4,0,4,0,4,0,32,0,0,0};
     assert(ext4_acl_to_xattr(basic,sizeof(basic),NULL,0)==28); checks++;
+    /* Exhaustive byte mutations exercise the native converter under sanitizers.
+     * Accepted values must retain a bounded, complete portable filesec header. */
+    unsigned char native[44+128*24+32];
+    for(size_t at=0;at<sizeof(disk);at++) for(unsigned value=0;value<256;value++) {
+        unsigned char input[sizeof(disk)]; memcpy(input,disk,sizeof(input));input[at]=value;
+        memset(native,0xa5,sizeof(native));
+        int result=ext4_acl_to_macos(input,sizeof(input),0670,(char *)native,sizeof(native)-32,resolve);
+        if(result>0) {
+            assert(result>=44 && result<=44+128*24 && (result-44)%24==0);
+            assert(native[0]==1 && native[1]==0x2c && native[2]==0xc1 && native[3]==0x6d);
+        }
+        for(size_t i=sizeof(native)-32;i<sizeof(native);i++) assert(native[i]==0xa5);
+        checks++;
+    }
+    assert(ext4_acl_to_macos(disk,sizeof(disk),0670,NULL,0,NULL)==-EINVAL); checks++;
     printf("PASS: %u ACL structure and wire-format checks\n",checks);
 }

@@ -106,6 +106,12 @@ static int e4f_opt_proc(void *data, const char *arg, int key,
 
     switch (key) {
     case FUSE_OPT_KEY_OPT:
+#ifdef __APPLE__
+        if (!strcmp(arg,"auto_xattr") || !strcmp(arg,"noapplexattr")) {
+            fprintf(stderr,"%s disables native ACL delivery and is unsupported\n",arg);
+            return -1;
+        }
+#endif
         return 1;
     case FUSE_OPT_KEY_NONOPT:
         if (!e4f.disk) {
@@ -181,6 +187,11 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+#ifdef __APPLE__
+    if (fuse_opt_add_arg(&args,"-oextended_security") < 0) {
+        fuse_opt_free_args(&args); free(e4f.disk); return EXIT_FAILURE;
+    }
+#endif
     res = fuse_main(args.argc, args.argv, &e4f_ops, NULL);
 
     fuse_opt_free_args(&args);

@@ -417,3 +417,27 @@ xattr/image regression suite passes 1,285 checks, and standalone ACL validation
 passes 70 checks under AddressSanitizer/UndefinedBehaviorSanitizer. Read-only
 source-image hashes remain unchanged. Full native macOS cross-user results from
 v0.2.12 are retained; the new expanded matrix was run as owner on macOS.
+
+## Native macOS access ACL translation — v0.2.14
+
+Both macFUSE APIs enable extended_security and expose a derived, read-only
+com.apple.system.Security attribute. Apple UUID membership calls map numeric
+named identities; well-known owner/group/everybody principals preserve POSIX
+precedence. Metadata permissions precede data rules because Apple's deny
+evaluator checks requested rather than residual rights. Group allows precede
+group denies; other fallback follows the complete group class. Mutation rights
+are denied. The portable filesec format is big-endian with no inheritance.
+
+Lookup fails closed for corrupt ACLs, identity errors, reserved-principal
+collisions, native entry overflow and mixed read-only/execute-only group grants
+that Apple could combine into a broader multi-right grant than Linux permits.
+Recovery defer_permissions retains its explicit bypass; auto_xattr and
+noapplexattr cannot disable native ACL delivery. Default ACL inheritance is
+not implemented because this reader cannot create filesystem objects.
+
+The portable translation oracle compares identity/group combinations, masks,
+owner/user/group precedence and combined read/execute requests with Linux ACL
+semantics. Native Apple ACL import/export verifies serialization. Mounted
+checks use Apple's ACL API and cover named-user grants/denials plus corruption,
+reserved identities, unrepresentable group rules and overflow rejection.
+Full native cross-user enforcement remains required before release.

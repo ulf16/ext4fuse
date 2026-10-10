@@ -47,7 +47,7 @@ override LDFLAGS += -lexecinfo
 endif
 
 BINARY = ext4fuse
-SOURCES += fuse-main.o acl.o logging.o extents.o disk.o checksum.o dirhash.o dirindex.o super.o inode.o dcache.o
+SOURCES += fuse-main.o acl.o acl-macos.o logging.o extents.o disk.o checksum.o dirhash.o dirindex.o super.o inode.o dcache.o
 SOURCES += op_read.o op_readdir.o op_readlink.o op_init.o op_getattr.o op_open.o op_xattr.o op_statfs.o
 
 BUILD_DIR = .build/fuse$(FUSE_API)
@@ -204,15 +204,21 @@ test/bulk-mount-profile: test/bulk-mount-profile.c fuse-main.c $(READER_OBJECTS)
 
 # Optional native mount matrix; sudo enables child-only cross-user probes.
 test-mounted-permissions: $(BINARY)
-	$(PYTHON) test/mount-permissions.py $(if $(and $(filter Linux,$(HOST_OS)),$(filter 3,$(FUSE_API))),--expect-posix-acl)
+	$(PYTHON) test/mount-permissions.py $(if $(or $(filter Darwin,$(HOST_OS)),$(and $(filter Linux,$(HOST_OS)),$(filter 3,$(FUSE_API)))),--expect-posix-acl)
 
 .PHONY: test-mounted-permissions
 
 # Pure ACL wire-format validation, independent of a mount or backing image.
-test/acl-unit: test/acl-unit.c acl.c acl.h
-	$(CC) $(CFLAGS) -I. -o $@ test/acl-unit.c acl.c
+test/acl-unit: test/acl-unit.c acl.c acl-macos.c acl.h
+	$(CC) $(CFLAGS) -I. -o $@ test/acl-unit.c acl.c acl-macos.c
 
 test-acl: test/acl-unit
 	./test/acl-unit
 
 .PHONY: test-acl
+
+# Portable Apple ACL translation oracle plus native libacl round trips on macOS.
+test-native-acl:
+	$(PYTHON) test/acl-native.py
+
+.PHONY: test-native-acl
