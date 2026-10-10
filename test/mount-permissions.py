@@ -82,7 +82,10 @@ print(json.dumps(dict(checks=count, uid=os.getuid(), gid=os.getgid(), groups=act
 def credentials(identity):
     # Popen's POSIX credential parameters report errors in the parent instead
     # of hiding them behind a generic preexec_fn failure.
-    return dict(user=identity['uid'], group=identity['gid'], extra_groups=identity['groups'])
+    # Darwin stores the effective GID in slot zero. Include it first so the
+    # later setregid call does not replace the sole supplementary group.
+    groups = [identity['gid']] + [g for g in identity['groups'] if g != identity['gid']]
+    return dict(user=identity['uid'], group=identity['gid'], extra_groups=groups)
 
 
 def subprocess_groups():
