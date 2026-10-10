@@ -62,12 +62,10 @@ print(json.dumps(dict(checks=count, uid=os.getuid(), gid=os.getgid(), groups=os.
 '''
 
 
-def drop(identity):
-    def apply():
-        os.setgroups(identity['groups'])
-        os.setgid(identity['gid'])
-        os.setuid(identity['uid'])
-    return apply
+def credentials(identity):
+    # Popen's POSIX credential parameters report errors in the parent instead
+    # of hiding them behind a generic preexec_fn failure.
+    return dict(user=identity['uid'], group=identity['gid'], extra_groups=identity['groups'])
 
 
 def main():
@@ -84,7 +82,12 @@ def main():
     gid = int(os.environ.get('SUDO_GID', os.getgid()))
     assert uid != 0, 'run sudo as a normal user so mount/probes retain that user as owner'
     groups = os.getgrouplist(pwd.getpwuid(uid).pw_name, gid) if privileged else os.getgroups()
-    groups = sorted(set(groups + [gid]))
+    groups = [gid] + sorted(set(groups) - {gid})
+    if privileged:
+        # Darwin accepts at most NGROUPS_MAX groups in setgroups(), even when
+        # account lookup reports a larger membership list. Only child creds
+        # are bounded; persistent account membership stays untouched.
+        groups = groups[:os.sysconf('SC_NGROUPS_MAX')]
     supplementary = next((g for g in groups if g not in (gid, 12) and g < 1000000), None)
     assert supplementary is not None, 'mount owner needs a supplementary group for this test'
     owner = dict(uid=uid, gid=gid, groups=groups)
@@ -102,6 +105,7 @@ def main():
     root.chmod(0o755)
     image, mount = root/'image', root/'mount'
     mount.mkdir(mode=0o755)
+    if privileged: os.chown(mount, uid, gid)
     helper = root/'probe.py'; helper.write_text(PROBE); helper.chmod(0o644)
     payload = root/'payload'; payload.write_bytes(b'permission fixture\n')
     with image.open('wb') as file: file.truncate(32*1024**2)
@@ -155,7 +159,7 @@ def main():
         for label, options, shared, recovery in modes:
             log = (root/(label+'.log')).open('w+')
             process = subprocess.Popen([reader,str(image),str(mount),'-f','-s','-o',options], stdout=log, stderr=log,
-                                       preexec_fn=drop(owner) if privileged else None)
+                                       **(credentials(owner) if privileged else {}))
             try:
                 for attempt in range(80):
                     if mounted(): break
@@ -186,7 +190,7 @@ def main():
                             cases.append(dict(op='xattr',path=name,allow=True,value=value.hex()))
                     command = [sys.executable,str(helper),str(mount),json.dumps(cases),json.dumps(identity)]
                     result = subprocess.run(command, capture_output=True, text=True, timeout=30,
-                                            preexec_fn=drop(identity) if privileged else None)
+                                            **(credentials(identity) if privileged else {}))
                     assert result.returncode==0, (label,role,result.stdout,result.stderr)
                     row = dict(mode=label,role=role,**json.loads(result.stdout));results.append(row)
                     print(f'PASS: {label} {role}: {row["checks"]} permission checks',flush=True)
