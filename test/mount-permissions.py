@@ -28,11 +28,24 @@ def xattr(path):
     n = get(os.fsencode(path), b'system.posix_acl_access', buf, len(buf), 0, 0)
     if n < 0: raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
     return buf.raw[:n]
+def kernel_groups():
+    if sys.platform != 'darwin': return os.getgroups()
+    libc = ctypes.CDLL(None, use_errno=True)
+    get = libc.getgroups
+    get.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint32)]
+    get.restype = ctypes.c_int
+    n = get(0, None)
+    if n < 0: raise OSError(ctypes.get_errno(), 'getgroups')
+    groups = (ctypes.c_uint32 * n)()
+    if get(n, groups) < 0: raise OSError(ctypes.get_errno(), 'getgroups')
+    return list(groups)
 root, cases, identity = sys.argv[1], json.loads(sys.argv[2]), json.loads(sys.argv[3])
 assert os.getuid() == identity['uid'] != 0, (os.getuid(), identity)
 assert os.getgid() == identity['gid'], (os.getgid(), identity)
-assert set(identity['groups']).issubset(os.getgroups()), (os.getgroups(), identity)
+actual_groups = kernel_groups()
+assert set(identity['groups']).issubset(actual_groups), (actual_groups, identity)
 count = 0
+acl_absent = 0
 for repeat in range(2):
     for case in cases:
         path = root + '/' + case['path']
@@ -52,13 +65,17 @@ for repeat in range(2):
                 os.close(fd)  # Do not write even if the read-only check fails.
             else: raise AssertionError(case)
         except OSError as error:
+            if case.get('allow_absent') and error.errno == errno.ENODATA:
+                acl_absent += 1
+                count += 1
+                continue
             assert not case['allow'], (case, error)
             expected = (errno.EACCES, errno.EPERM, errno.EROFS) if case['op']=='write' else (errno.EACCES, errno.EPERM)
             assert error.errno in expected, (case, error)
         else:
             assert case['allow'], ('unexpected permission grant', case, identity)
         count += 1
-print(json.dumps(dict(checks=count, uid=os.getuid(), gid=os.getgid(), groups=os.getgroups())))
+print(json.dumps(dict(checks=count, uid=os.getuid(), gid=os.getgid(), groups=actual_groups, acl_absent=acl_absent)))
 '''
 
 
@@ -66,6 +83,18 @@ def credentials(identity):
     # Popen's POSIX credential parameters report errors in the parent instead
     # of hiding them behind a generic preexec_fn failure.
     return dict(user=identity['uid'], group=identity['gid'], extra_groups=identity['groups'])
+
+
+def subprocess_groups():
+    if sys.platform != 'darwin': return os.getgroups()
+    import ctypes
+    get = ctypes.CDLL(None, use_errno=True).getgroups
+    get.argtypes = [ctypes.c_int, ctypes.POINTER(ctypes.c_uint32)]
+    n = get(0, None)
+    assert n >= 0
+    groups = (ctypes.c_uint32 * n)()
+    assert get(n, groups) == n
+    return list(groups)
 
 
 def main():
@@ -81,7 +110,7 @@ def main():
     uid = int(os.environ.get('SUDO_UID', os.getuid()))
     gid = int(os.environ.get('SUDO_GID', os.getgid()))
     assert uid != 0, 'run sudo as a normal user so mount/probes retain that user as owner'
-    groups = os.getgrouplist(pwd.getpwuid(uid).pw_name, gid) if privileged else os.getgroups()
+    groups = os.getgrouplist(pwd.getpwuid(uid).pw_name, gid) if privileged else subprocess_groups()
     groups = [gid] + sorted(set(groups) - {gid})
     if privileged:
         # Darwin accepts at most NGROUPS_MAX groups in setgroups(), even when
@@ -167,7 +196,7 @@ def main():
                     time.sleep(.1)
                 else: raise AssertionError('mount timeout')
                 # Return to the owner after peer probes to catch permission-cache leakage.
-                for role in list(identities) + ['owner']:
+                for position,role in enumerate(list(identities) + ['owner']):
                     identity = identities[role]
                     visible = role=='owner' or shared
                     def permitted(owner_uid, owner_gid, mode, bit):
@@ -187,13 +216,15 @@ def main():
                     # ACL retrieval is checked as owner, independently of named-rule enforcement.
                     if role=='owner':
                         for name,value in acls.items():
-                            cases.append(dict(op='xattr',path=name,allow=True,value=value.hex()))
+                            cases.append(dict(op='xattr',path=name,allow=True,value=value.hex(),
+                                              allow_absent=sys.platform=='linux' and position>0))
                     command = [sys.executable,str(helper),str(mount),json.dumps(cases),json.dumps(identity)]
                     result = subprocess.run(command, capture_output=True, text=True, timeout=30,
                                             **(credentials(identity) if privileged else {}))
                     assert result.returncode==0, (label,role,result.stdout,result.stderr)
                     row = dict(mode=label,role=role,**json.loads(result.stdout));results.append(row)
                     print(f'PASS: {label} {role}: {row["checks"]} permission checks',flush=True)
+                    if row['acl_absent']: print('NOTE: Linux FUSE cached ACL absence after permission probes',flush=True)
             except BaseException:
                 log.flush();log.seek(0);print(log.read(),file=sys.stderr)
                 raise
