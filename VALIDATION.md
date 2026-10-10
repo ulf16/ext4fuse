@@ -369,3 +369,15 @@ Named ACL grant/deny fixtures and exported ACL bytes characterize the current
 metadata-only behavior. These checks do not add Linux ACL enforcement or claim
 macOS ACL equivalence. macFUSE mount-owner isolation remains distinct from Unix
 mode checks, and recovery plus allow_other deliberately permits peer reads.
+
+Both native Linux FUSE APIs pass 432 checks across private and shared mounts.
+Named ACL rules do not grant or deny access beyond mode bits. On Linux FUSE,
+peer permission checks can cache an absent POSIX ACL when enforcement is
+disabled; subsequent mounted getxattr calls may report ENODATA. The matrix
+requires exact ACL bytes on fresh mounts and explicitly records this later
+cache limitation without permitting an unexpected read or permission error.
+
+macOS child-credential audits use the native getgroups API: modern Python's
+os.getgroups reports account memberships rather than the group list assigned
+to a child. Explicit group assignments respect Darwin's 16-group limit. The
+owner/group subset passes 224 checks per API without sudo.

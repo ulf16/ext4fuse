@@ -146,7 +146,11 @@ The matrix includes named ACL grant/deny fixtures and verifies their metadata.
 These deliberately characterize the existing limitation: named grants do not
 add access beyond mode bits, and named denials do not restrict mode-bit grants.
 Linux ACLs are exposed as attribute metadata but are not enforced by this reader;
-mode checks are not full Linux ACL equivalence. Non-Linux inode ownership layouts remain unaudited.
+mode checks are not full Linux ACL equivalence. On Linux FUSE, a denied access
+can cache an absent POSIX ACL when ACL enforcement is disabled; subsequent native
+`getxattr` calls may report no data despite the stored ACL. Fresh-mount metadata
+and direct-reader xattr checks verify the stored bytes. Non-Linux inode ownership
+layouts remain unaudited.
 
 ```sh
 make test-attributes
