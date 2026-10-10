@@ -93,7 +93,7 @@ jobs:
       - name: Verify owner, supplementary groups and cross-user permission caches
         run: |
           acl_flag=
-          if [ '${{ matrix.fuse }}' = 3 ]; then acl_flag=--expect-posix-acl; fi
+          if [ '${{ matrix.fuse }}' = 3 ]; then acl_flag="--expect-posix-acl --native-reference"; fi
           sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user $acl_flag --output permissions.json
       - name: Save credential and permission results
         uses: actions/upload-artifact@v4

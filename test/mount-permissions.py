@@ -57,7 +57,8 @@ def check(case):
         elif case['op'] == 'stat':
             st = os.stat(path)
             assert st.st_uid == case['uid'] and st.st_gid == case['gid']
-            assert st.st_mode & 0o777 == case['mode'] & ~0o222
+            expected_mode = case['mode'] if case.get('native') else case['mode'] & ~0o222
+            assert st.st_mode & 0o777 == expected_mode
         elif case['op'] == 'xattr':
             assert xattr(path).hex() == case['value']
         elif case['op'] == 'write':
@@ -112,11 +113,13 @@ def main():
     parser.add_argument('--require-cross-user', action='store_true',
                         help='fail rather than skip peer probes when not run via sudo')
     parser.add_argument('--expect-posix-acl', action='store_true', help='require Linux FUSE 3 kernel ACL enforcement')
+    parser.add_argument('--native-reference', action='store_true', help='also verify a disposable read-only native Linux ext4 mount')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     assert sys.platform in ('darwin', 'linux'), 'requires macFUSE or Linux FUSE'
     assert not args.expect_posix_acl or sys.platform == 'linux', 'kernel POSIX ACL test requires Linux'
     privileged = os.geteuid() == 0
+    assert not args.native_reference or (privileged and sys.platform=='linux' and args.expect_posix_acl), 'native reference requires root Linux ACL mode'
     assert not args.require_cross_user or privileged, 'cross-user probes require sudo (only child credentials change)'
     uid = int(os.environ.get('SUDO_UID', os.getuid()))
     gid = int(os.environ.get('SUDO_GID', os.getgid()))
@@ -222,15 +225,21 @@ def main():
     if sys.platform == 'darwin':
         modes.append(('recovery-private', 'ro,defer_permissions', False, True))
         if privileged: modes.append(('recovery-shared', 'ro,defer_permissions,allow_other', True, True))
+    if args.native_reference: modes.append(('native-ext4','ro,noload',True,False))
     try:
         for label, options, shared, recovery in modes:
             log = (root/(label+'.log')).open('w+')
-            process = subprocess.Popen([reader,str(image),str(mount),'-f','-s','-o',options], stdout=log, stderr=log,
-                                       **(credentials(owner) if privileged else {}))
+            native = label=='native-ext4'
+            process = None
+            if native:
+                subprocess.run(['mount','-t','ext4','-o',options,str(image),str(mount)],check=True)
+            else:
+                process = subprocess.Popen([reader,str(image),str(mount),'-f','-s','-o',options], stdout=log, stderr=log,
+                                           **(credentials(owner) if privileged else {}))
             try:
                 for attempt in range(80):
                     if mounted(): break
-                    if process.poll() is not None: raise AssertionError('daemon exited before mounting')
+                    if process is not None and process.poll() is not None: raise AssertionError('daemon exited before mounting')
                     time.sleep(.1)
                 else: raise AssertionError('mount timeout')
                 # Return to the owner after peer probes to catch permission-cache leakage.
@@ -259,7 +268,7 @@ def main():
                                 else: permission = spec[-1][1]
                             allowed = bool(permission & 4)
                         cases.append(dict(op='read', path=name, allow=allowed))
-                        cases.append(dict(op='stat', path=name, allow=visible, uid=owner_uid, gid=owner_gid, mode=mode))
+                        cases.append(dict(op='stat', path=name, allow=visible, uid=owner_uid, gid=owner_gid, mode=mode,native=native))
                     for name,mode in [('traverse',0o050),('list-only',0o040),('search-only',0o010)]:
                         cases.append(dict(op='list',path=name,allow=permitted(foreign_uid,supplementary,mode,4)))
                         cases.append(dict(op='read',path=name+'/payload',allow=permitted(foreign_uid,supplementary,mode,1)))
@@ -295,8 +304,10 @@ def main():
                         assert helper_unmount, 'fusermount needed for non-root cleanup'
                         unmount = [helper_unmount, '-u', str(mount)]
                     subprocess.run(unmount,check=True)
-                if process.poll() is None: process.terminate()
-                process.wait(timeout=10);log.close()
+                if process is not None:
+                    if process.poll() is None: process.terminate()
+                    process.wait(timeout=10)
+                log.close()
             assert hashlib.sha256(image.read_bytes()).digest()==before, 'source image changed'
         if not privileged: print('SKIP: cross-user/allow_other probes require sudo; owner/group checks ran',flush=True)
         data = dict(platform=sys.platform, cross_user=privileged, supplementary_gid=supplementary,
