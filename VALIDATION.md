@@ -440,4 +440,11 @@ owner/user/group precedence and combined read/execute requests with Linux ACL
 semantics. Native Apple ACL import/export verifies serialization. Mounted
 checks use Apple's ACL API and cover named-user grants/denials plus corruption,
 reserved identities, unrepresentable group rules and overflow rejection.
-Full native cross-user enforcement remains required before release.
+Full native cross-user enforcement passes 1,408 checks per FUSE API (2,816
+total), with zero failures across private/shared strict and recovery mounts.
+Controlled peer credentials exercise owner, group and other access; all source
+image hashes remain unchanged. Owner-only matrices pass 368 checks per API,
+and native grant/deny and rejection fixtures pass 22 checks per API. The
+translation oracle passes 245,454 comparisons including native serialization;
+ACL sanitizer mutation testing passes 13,383 checks. The existing extended
+attribute and corruption regression suite passes 1,285 checks.
