@@ -48,7 +48,13 @@ int op_getattr(const char *path, struct stat *stbuf)
     }
     /* POSIX st_blocks always counts 512-byte units, even for huge-file inodes. */
     stbuf->st_blocks = blocks;
+#ifdef __APPLE__
+    /* macFUSE uses this hint to size read callbacks. Zero defers to the mount's
+     * I/O size; the ext4 allocation block size would force tiny IPC requests. */
+    stbuf->st_blksize = 0;
+#else
     stbuf->st_blksize = BLOCK_SIZE;
+#endif
     stbuf->st_ino = number;
     stbuf->st_uid = inode.i_uid;
     stbuf->st_gid = inode.i_gid;

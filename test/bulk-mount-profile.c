@@ -5,11 +5,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "ops.h"
-static uint64_t reads, bytes, small, medium, large;
+static uint64_t reads, bytes, small, medium, large, largest;
 static int observed_read(const char *path, char *buf, size_t size, off_t offset,
                          struct fuse_file_info *fi)
 {
     reads++; bytes += size;
+    if (size > largest) largest = size;
     small += size <= 4096; medium += size > 4096 && size <= 65536;
     large += size > 65536;
     return op_read(path, buf, size, offset, fi);
@@ -33,9 +34,10 @@ static void *observed_init(struct fuse_conn_info *info)
 #undef main
 static void report(void)
 {
-    fprintf(stderr, "PROFILE: reads=%llu requested=%llu <=4K=%llu 4K..64K=%llu >64K=%llu\n",
+    fprintf(stderr, "PROFILE: reads=%llu requested=%llu <=4K=%llu 4K..64K=%llu >64K=%llu largest=%llu\n",
         (unsigned long long)reads, (unsigned long long)bytes,
-        (unsigned long long)small, (unsigned long long)medium, (unsigned long long)large);
+        (unsigned long long)small, (unsigned long long)medium, (unsigned long long)large,
+        (unsigned long long)largest);
 }
 int main(int argc, char **argv)
 {

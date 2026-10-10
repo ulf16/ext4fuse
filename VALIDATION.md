@@ -331,3 +331,12 @@ and FreeBSD coverage, and the macFUSE sparse allocation reporting limitation rem
 - An optimized CI job compares the same payload with native Linux ext4 using
   disposable read-only loop devices and ro,noload mounts; it saves raw JSON.
 - No mutable block-map cache, inode cache or production mount-default change.
+
+## macOS bulk callback regression — v0.2.11
+
+The mount profiler and `test/mount-bulk.py --require-bulk-callbacks` verify that
+aligned bulk reads reach at least 64 KiB callbacks and do not regress to 4 KiB
+callbacks. This optional native macFUSE check requires the profiling daemon;
+Linux image CI cannot exercise macFUSE request sizing. Mounted contents and
+source-image hashes are checked for extent and classic block-map fixtures, with
+both cached and cache-disabled mount modes. No throughput threshold is used.

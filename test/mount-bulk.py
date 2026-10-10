@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import statistics
 import subprocess
@@ -18,6 +19,8 @@ parser.add_argument('--samples', type=int, default=3)
 parser.add_argument('--layouts', nargs='+', choices=['extents', 'classic'], default=['extents', 'classic'])
 parser.add_argument('--cache-modes', nargs='+', choices=['cached', 'noubc'], default=['cached', 'noubc'])
 parser.add_argument('--mount-options', default='', help='extra options, e.g. iosize=1048576')
+parser.add_argument('--require-bulk-callbacks', action='store_true',
+    help='regression check: requires bulk-mount-profile; aligned payload reads must reach 64 KiB callbacks')
 args = parser.parse_args()
 assert sys.platform == 'darwin' and 1 <= args.samples <= 20
 reader = os.environ.get('READER', './ext4fuse')
@@ -73,11 +76,18 @@ for layout in args.layouts:
             if process.poll() is None: process.terminate()
             process.wait(timeout=10)
             log.flush(); log.seek(0)
+            profile = None
             for line in log:
                 if line.startswith('PROFILE:'): print(line.strip(), flush=True)
+                match = re.fullmatch(r'PROFILE: reads=(\d+) requested=(\d+) <=4K=(\d+) 4K..64K=(\d+) >64K=(\d+) largest=(\d+)\n', line)
+                if match: profile = dict(zip(('reads', 'bytes', 'small', 'medium', 'large', 'largest'), map(int, match.groups())))
             log.close()
         assert not os.path.ismount(mount), f'mount remains; keeping {root}'
         assert digest(image) == before, 'reader changed source image'
+        if args.require_bulk_callbacks:
+            assert profile is not None, 'callback profiler required; set READER=./test/bulk-mount-profile'
+            assert profile['reads'] > 0 and profile['small'] == 0 and profile['largest'] >= 65536, f'bulk callback regression: {profile}'
+        results.append(dict(layout=layout, cache=cache, phase='daemon-callbacks', profile=profile))
         import shutil
         shutil.rmtree(root)
 args.output.write_text(json.dumps(dict(samples=args.samples,

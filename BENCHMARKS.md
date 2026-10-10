@@ -57,12 +57,36 @@ first-pass/cache-disabled results remain subject to the callback-size/IPC limit.
 The documented `iosize=1048576` option did not change the observed callback sizes
 in this setup. Profiling-daemon experiments with per-file direct I/O and matched
 session/connection maximum-read settings also retained 4 KiB callbacks; production
-mount defaults were not changed. The cause needs provider-level investigation.
+mount defaults were not changed. The follow-up investigation below identifies and fixes the cause.
 
 See the [macFUSE mount-option documentation](https://github.com/macfuse/macfuse/wiki/Mount-Options)
 for cache and I/O-size options. This benchmark does not recommend disabling caches
 for normal use. Raw baseline measurements are in
 [mounted-before](benchmarks/2026-10-09-sequoia-mounted-before.json).
+
+## macOS callback-size correction — v0.2.11
+
+The earlier 4 KiB callback limit came from our `getattr` response: it reported
+ext4's allocation block size as `st_blksize`. macFUSE 5.4.0 uses that hint for
+read request sizing, although its portable FUSE 3 header describes the field as
+ignored. An independent in-memory filesystem reproduced the behavior with
+`read`, `pread`, and `dd`: 4 KiB hints caused 16,384 callbacks for 64 MiB; zero or
+64 KiB hints caused 1,024 callbacks. A 1 MiB hint produced 64 callbacks.
+
+On macOS we now report zero, allowing macFUSE's mount I/O size to apply. Other
+platforms retain the ext4 block-size hint. This preserves normal mounted-file
+caching and does not force direct I/O or disable readahead.
+
+Exploratory first-pass measurements on the same disposable ext4 images improved
+from 46.3 to 501.3 MiB/s for extents and from 45.0 to 413.8 MiB/s for classic
+block maps with FUSE 3. FUSE 2 also delivered 64 KiB callbacks, with first-pass
+rates of 513.5 and 466.9 MiB/s respectively. These single-pass measurements use
+warm backing images and fresh mounted-file caches; they are not cold-device
+performance guarantees. Both APIs passed mounted content and unchanged-image
+checks. Release-validation measurements for both APIs and both cache modes are
+saved in [mounted-after](benchmarks/2026-10-10-sequoia-mounted-after.json).
+The mounted regression command below checks actual callback sizes rather
+than imposing a timing threshold.
 
 ## Reproduce
 
@@ -89,7 +113,7 @@ make -j2 CFLAGS=-O2
 python3 test/mount-bulk.py --fixtures /tmp/ext4-bulk-fixtures --output /tmp/mounted.json
 make test/bulk-mount-profile CFLAGS=-O2
 READER=./test/bulk-mount-profile python3 test/mount-bulk.py \
-  --fixtures /tmp/ext4-bulk-fixtures --output /tmp/profile.json --samples 1
+  --fixtures /tmp/ext4-bulk-fixtures --output /tmp/profile.json --samples 1 --require-bulk-callbacks
 ```
 
 The mount profiler reports actual daemon callback sizes. Client pread counters
