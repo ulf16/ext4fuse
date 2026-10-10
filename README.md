@@ -130,7 +130,11 @@ Write mode bits are cleared, and mounts remain read-only. Numeric Linux owners o
 have no matching macOS account. Use `default_permissions` to have the kernel enforce
 reported Unix owner/group/mode bits. The mounted tests verify access to the mounting
 user's private file and rejection of foreign-owned private files, mode-zero files,
-and traversal through mode-zero directories.
+and traversal through mode-zero directories. The additional mounted permission
+matrix checks primary and supplementary groups, owner/group/other precedence,
+read versus search permission on directories, symlink target permissions, and
+repeated opens across identities. Cross-user probes also distinguish macFUSE's
+mount-owner isolation from `allow_other` plus ordinary mode checks.
 
 For intentional data recovery where Linux permissions prevent access, macOS's
 `defer_permissions` bypasses kernel checks; this reader does not independently enforce
@@ -138,11 +142,19 @@ read permissions. It therefore permits the mounting user to read mode-zero and f
 private files. Do not combine that recovery mode with `allow_other` when access should
 remain private. `allow_other` separately expands who can access the mount.
 See [macFUSE's mount options](https://github.com/macfuse/macfuse/wiki/Mount-Options).
+The matrix includes named ACL grant/deny fixtures and verifies their metadata.
+These deliberately characterize the existing limitation: named grants do not
+add access beyond mode bits, and named denials do not restrict mode-bit grants.
 Linux ACLs are exposed as attribute metadata but are not enforced by this reader;
 mode checks are not full Linux ACL equivalence. Non-Linux inode ownership layouts remain unaudited.
 
 ```sh
 make test-attributes
+# Native owner/group matrix; all fixtures are disposable.
+make test-mounted-permissions
+# Cross-user matrix: launch as a normal user through sudo. Only child-process
+# credentials change; no accounts or group memberships are modified.
+sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user
 ./test/mount-smoke.sh
 MOUNT_OPTIONS=ro,default_permissions ./test/mount-smoke.sh
 # Test an installed package instead of the checkout binary:
@@ -416,7 +428,7 @@ uses disposable images, not real disks.
 
 ## Remaining work
 
-- Reproduce remaining upstream reports; expand supplementary-group, ACL and cross-user tests.
+- Reproduce remaining upstream reports; implement Linux ACL enforcement if required, and broaden native permission validation.
 - Expand malformed-metadata coverage and physical large-volume validation.
 - Expand support for explicitly rejected features.
 - Expand sparse-file, symlink, directory and large-volume tests; compare against Linux tools.

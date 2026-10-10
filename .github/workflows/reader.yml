@@ -68,3 +68,29 @@ jobs:
         with:
           name: linux-bulk-benchmark
           path: bulk-benchmark.json
+
+  mounted-permissions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        fuse: [2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native FUSE and fixture tools
+        run: |
+          if [ '${{ matrix.fuse }}' = 2 ]; then helper=fuse; else helper=fuse3; fi
+          sudo apt-get update
+          sudo apt-get install -y libfuse-dev libfuse3-dev "$helper" pkg-config e2fsprogs
+          test -c /dev/fuse || sudo modprobe fuse
+          # Disposable CI runner: permit the normal mounting user to test sharing.
+          echo user_allow_other | sudo tee -a /etc/fuse.conf
+      - name: Build daemon
+        run: make -j2 FUSE_API=${{ matrix.fuse }} CFLAGS=-O2
+      - name: Verify owner, supplementary groups and cross-user permission caches
+        run: sudo env PATH="$PATH" python3 test/mount-permissions.py --require-cross-user --output permissions.json
+      - name: Save credential and permission results
+        uses: actions/upload-artifact@v4
+        with:
+          name: mounted-permissions-fuse${{ matrix.fuse }}
+          path: permissions.json

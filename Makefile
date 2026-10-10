@@ -201,3 +201,9 @@ test-indirect-runs: test/corruption-probe
 
 test/bulk-mount-profile: test/bulk-mount-profile.c fuse-main.c $(READER_OBJECTS) FORCE
 	$(CC) $(CFLAGS) -I. -o $@ test/bulk-mount-profile.c $(READER_OBJECTS) $(LDFLAGS)
+
+# Optional native mount matrix; sudo enables child-only cross-user probes.
+test-mounted-permissions: $(BINARY)
+	$(PYTHON) test/mount-permissions.py
+
+.PHONY: test-mounted-permissions

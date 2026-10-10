@@ -347,3 +347,25 @@ mount smoke checks pass for both APIs, including small files, long/hidden/colon
 names, missing paths, preserved ownership, permission denial and write rejection.
 Large-file allocation tests distinguish the macOS I/O hint from ext4 allocation
 units; the byte-count and debugfs allocation comparisons remain in place.
+
+## Mounted permission matrix — v0.2.12
+
+`test/mount-permissions.py` builds a disposable 32 MiB ext4 image and checks
+owner, primary-group, supplementary-group and other permissions. Fixtures cover
+owner/group precedence over permissive other bits, directory read/search
+separation, symlink target access, preserved UID/GID/modes and write rejection.
+Each probe repeats its cases, and the owner runs again after peer identities to
+exercise cached attributes and permissions. Source-image hashes must stay equal.
+
+Without sudo, native owner/group tests run and cross-user checks are explicitly
+skipped. Via sudo from a normal user, the daemon still mounts as that original
+user; child probes drop to the existing nobody UID with controlled group sets.
+No local account, persistent group membership or system policy is changed by the
+script. On macOS it tests strict private/shared and recovery private/shared
+mounts; Linux tests strict private/shared mounts. The Linux CI matrix exercises
+both FUSE APIs on disposable runners configured to allow FUSE sharing.
+
+Named ACL grant/deny fixtures and exported ACL bytes characterize the current
+metadata-only behavior. These checks do not add Linux ACL enforcement or claim
+macOS ACL equivalence. macFUSE mount-owner isolation remains distinct from Unix
+mode checks, and recovery plus allow_other deliberately permits peer reads.
