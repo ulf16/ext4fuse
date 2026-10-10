@@ -403,3 +403,10 @@ group denial before other fallback, owner/user precedence and named-user
 directory enumeration/traversal. Repeated probes and owner-after-peer checks
 exercise the kernel ACL cache. FUSE 2 and macOS retain mode-based behavior.
 Native macOS ACL translation is not implemented by this release.
+
+A native read-only Linux ext4 reference mount checks the same image and child
+identities. The zero-mask/other-readable fixture records Linux's mode fast path:
+when group-class mode bits are zero, generic_permission skips ACL lookup. A
+separate nonzero-mask fixture verifies actual named-user denial despite readable
+other bits. Kernel behavior is preserved rather than replaced by a userspace
+interpretation. This native comparison does not certify other kernel versions.

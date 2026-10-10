@@ -166,7 +166,8 @@ def main():
         'owner-precedence': (uid, foreign_gid, 0o004),
         'group-precedence': (foreign_uid, gid, 0o004),
         'acl-grant': (uid, foreign_gid, 0o440),
-        'acl-deny': (foreign_uid, foreign_gid, 0o004),
+        'acl-deny': (foreign_uid, foreign_gid, 0o044),
+        'acl-zero-mask-other': (foreign_uid, foreign_gid, 0o004),
         'acl-mask-deny': (foreign_uid, foreign_gid, 0o000),
         'acl-group-grant': (foreign_uid, foreign_gid, 0o040),
         'acl-group-union': (foreign_uid, gid, 0o040),
@@ -181,7 +182,8 @@ def main():
         return [(1,owner_perm,undefined)] + [(2,p,i) for i,p in sorted(users)] + [(4,group_perm,undefined)] + [(8,p,i) for i,p in sorted(groups)] + [(16,mask,undefined),(32,other,undefined)]
     acl_specs = {
         'acl-grant': acl_entries(4,[(peer_uid,4)],0,[],4,0),
-        'acl-deny': acl_entries(0,[(peer_uid,0)],0,[],0,4),
+        'acl-deny': acl_entries(0,[(peer_uid,0)],0,[],4,4),
+        'acl-zero-mask-other': acl_entries(0,[(peer_uid,0)],0,[],0,4),
         'acl-mask-deny': acl_entries(0,[(peer_uid,4)],0,[],0,0),
         'acl-group-grant': acl_entries(0,[],0,[(supplementary,4)],4,0),
         'acl-group-union': acl_entries(0,[],0,[(gid,0),(supplementary,4)],4,0),
@@ -266,7 +268,9 @@ def main():
                                     permission = 0
                                     for p in group_matches: permission |= p & mask
                                 else: permission = spec[-1][1]
-                            allowed = bool(permission & 4)
+                            # Linux generic_permission skips ACL lookup when the
+                            # inode group/mask bits are zero; native ext4 agrees.
+                            allowed = bool(permission & 4) if mask else permitted(owner_uid,owner_gid,mode,4)
                         cases.append(dict(op='read', path=name, allow=allowed))
                         cases.append(dict(op='stat', path=name, allow=visible, uid=owner_uid, gid=owner_gid, mode=mode,native=native))
                     for name,mode in [('traverse',0o050),('list-only',0o040),('search-only',0o010)]:
