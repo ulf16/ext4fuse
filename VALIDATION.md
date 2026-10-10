@@ -381,3 +381,10 @@ macOS child-credential audits use the native getgroups API: modern Python's
 os.getgroups reports account memberships rather than the group list assigned
 to a child. Explicit group assignments respect Darwin's 16-group limit. The
 owner/group subset passes 224 checks per API without sudo.
+
+The full native macOS matrix passes 864 checks per API (1,728 total), with
+zero permission mismatches across strict/recovery and private/shared mounts.
+Private mounts deny peer access with either EACCES/EPERM or macFUSE's ENOENT
+isolation response; ENOENT is accepted only for peers outside a private mount.
+Both source-image hashes remain unchanged, and all disposable mounts are removed.
+No production permission change was needed.
