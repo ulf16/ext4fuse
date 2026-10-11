@@ -1,0 +1,128 @@
+{
+  "platform": "macOS-15.8.1-x86_64-i386-64bit-Mach-O",
+  "libext2fs": "1.47.4",
+  "reader": "ulf16/ext4fuse v0.2.14 unchanged; test-only pread interception",
+  "scope": "serialized offline in-memory overlay; atomic new-image export, no in-place writes or journal integration",
+  "configurations": [
+    {
+      "block_size": 1024,
+      "layout": "extents",
+      "metadata_checksum": true,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 61 staged pages"
+    },
+    {
+      "block_size": 1024,
+      "layout": "extents",
+      "metadata_checksum": false,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 1024,
+      "layout": "classic",
+      "metadata_checksum": true,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 63 staged pages"
+    },
+    {
+      "block_size": 1024,
+      "layout": "classic",
+      "metadata_checksum": false,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 64 staged pages"
+    },
+    {
+      "block_size": 2048,
+      "layout": "extents",
+      "metadata_checksum": true,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 2048,
+      "layout": "extents",
+      "metadata_checksum": false,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 2048,
+      "layout": "classic",
+      "metadata_checksum": true,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 2048,
+      "layout": "classic",
+      "metadata_checksum": false,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 4096,
+      "layout": "extents",
+      "metadata_checksum": true,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 4096,
+      "layout": "extents",
+      "metadata_checksum": false,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 62 staged pages"
+    },
+    {
+      "block_size": 4096,
+      "layout": "classic",
+      "metadata_checksum": true,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 63 staged pages"
+    },
+    {
+      "block_size": 4096,
+      "layout": "classic",
+      "metadata_checksum": false,
+      "base_unchanged": true,
+      "fsck_clean": true,
+      "new_file_verified": true,
+      "existing_file_preserved": true,
+      "result": "PASS: 99 shared-reader, libext2fs mutation, publication, rollback and injected-failure checks; 63 staged pages"
+    }
+  ]
+}

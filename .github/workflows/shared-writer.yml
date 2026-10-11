@@ -1,0 +1,32 @@
+name: Experimental shared writer
+on:
+  push:
+    paths:
+      - 'experimental/shared-writer/**'
+      - '.github/workflows/shared-writer.yml'
+  pull_request:
+    paths:
+      - 'experimental/shared-writer/**'
+      - '.github/workflows/shared-writer.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  shared-writer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build existing reader and experimental overlay with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Check overlay publication, randomized reads and resource limits
+        run: '"$RUNNER_TEMP/shared-writer/overlay-unit"'
+      - name: Verify mutations, rollback and independent filesystem integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: shared-writer-validation
+          path: ${{ runner.temp }}/shared-writer/matrix-results.json
