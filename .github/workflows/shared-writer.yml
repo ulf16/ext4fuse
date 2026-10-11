@@ -25,8 +25,12 @@ jobs:
         run: '"$RUNNER_TEMP/shared-writer/overlay-unit"'
       - name: Verify mutations, rollback and independent filesystem integrity
         run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify durable image transactions and interrupted recovery
+        run: python3 experimental/shared-writer/test-durable.py --work "$RUNNER_TEMP/shared-writer"
       - name: Save validation summary
         uses: actions/upload-artifact@v4
         with:
           name: shared-writer-validation
-          path: ${{ runner.temp }}/shared-writer/matrix-results.json
+          path: |
+            ${{ runner.temp }}/shared-writer/matrix-results.json
+            ${{ runner.temp }}/shared-writer/durable-results.json

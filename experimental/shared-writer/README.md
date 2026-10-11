@@ -33,6 +33,7 @@ work="$(mktemp -d /private/tmp/ext4-shared-writer.XXXXXX)"
 python3 experimental/shared-writer/build.py --work "$work" --sanitize
 "$work/overlay-unit"
 python3 experimental/shared-writer/run-matrix.py --work "$work"
+python3 experimental/shared-writer/test-durable.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -63,7 +64,8 @@ performance have not been benchmarked for this backend.
 
 ## Required before mounted writes
 
-- Durable transactions and crash recovery; libext2fs flush is not an ext4 journal commit.
+- Incremental durable transactions and in-place crash recovery; the full-image redo
+  experiment below is not an ext4 journal commit.
 - Feature admission, corruption handling and complete mutation semantics, including
   unlink, directory rename, ownership, ACLs, attributes and open-but-deleted files.
 - Concurrency, reader/writer cache invalidation and stable inode/file-handle lifetime.
@@ -73,3 +75,32 @@ performance have not been benchmarked for this backend.
 
 No in-place commits, physical-device writes, FUSE write frontend or release change
 is introduced by this experiment.
+
+## Durable full-image redo experiment
+
+`durable.py prepare SOURCE CANDIDATE TARGET JOURNAL` copies a completed overlay
+export into a private journal directory next to the intended target. It records
+SHA-256 hashes of both images, syncs the snapshot and manifest, and seals the
+manifest with a rename followed by directory fsync. On Darwin regular-file sync
+also requests F_FULLFSYNC. `durable.py recover JOURNAL` validates the entire
+snapshot and unchanged source before atomically linking the snapshot as TARGET
+and syncing the parent directory. Existing unrelated targets are never replaced.
+Recovery after publication is idempotent only for the same snapshot inode.
+
+Preparation interrupted before sealing is deliberately rejected; leave the source
+unchanged and discard that incomplete private directory. A sealed transaction can
+be recovered repeatedly. The journal is retained for inspection; the target and
+snapshot are hard links, so do not mutate either while retaining it for recovery.
+Use trusted private directories and immutable offline inputs. Locks coordinate
+only cooperating processes; this is not protection against an external writer,
+hostile directory changes, or concurrent Linux mounts. No filesystem feature
+admission is added by this transport: use only the validated prototype exports.
+
+The test kills subprocesses at seven explicit persistence boundaries, repeats
+recovery, checks source/result hashes and e2fsck, and rejects truncated or damaged
+snapshots, changed sources, broken manifests and target collisions across all
+12 filesystem configurations. These are process-interruption tests, not physical
+power-cut certification. This full-image approach uses one complete extra image
+and hashes the complete images; it establishes the offline recovery protocol,
+not an efficient journal for mounted writes. There are still no in-place writes,
+JBD2 integration, physical-device writes or changes to the installed reader.
