@@ -36,6 +36,7 @@ python3 experimental/shared-writer/run-matrix.py --work "$work"
 python3 experimental/shared-writer/test-durable.py --work "$work"
 python3 experimental/shared-writer/test-block-log.py --work "$work"
 python3 experimental/shared-writer/test-overlay-log.py --work "$work"
+python3 experimental/shared-writer/test-inplace.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -168,3 +169,43 @@ bounds, preimages, trailing bytes, producer failure, and preparation/recovery
 interruptions across all 12 filesystem configurations. Recovered files are checked
 with debugfs and e2fsck; the C unit suite independently compares stream pages with
 its randomized reference model. Installed reader and Homebrew packaging are unchanged.
+
+## Disposable in-place commits
+
+`inplace.py prepare SOURCE SESSION PRODUCER` creates a new private session and
+copies SOURCE into `SESSION/image.img`. SOURCE is never opened for writing. It
+captures the C overlay directly and creates a version-2 undo/redo log with fixed
+8200-byte records (little-endian page index, original page, replacement page).
+The synced transaction binds the log and original/result hashes to the disposable
+copy's size, device and inode. The earlier version-1 export logs are unchanged.
+
+`inplace.py recover SESSION` commits only this fixed disposable image path. It
+requires a private owned session, a regular single-link image with matching
+identity, exclusive transaction/image locks and a valid complete log. Before any
+write it hashes the full image with saved original and replacement pages
+substituted into the dirty ranges. Both reconstructed hashes must match, so
+corrupt logs, wrong images and changes outside logged ranges fail before writes.
+Before the first commit the actual image must also match the original hash.
+
+A synced `started` marker is published before the first image write. Once started,
+redo may repair old, new, or torn data within logged pages. Each page is written in
+two halves for fault-injection coverage; this makes no claim of page-write
+atomicity. The image is synced and its complete result hash checked before a
+synced `complete` marker. Recovery can be repeated. A completed image that was
+subsequently edited is rejected, rather than silently overwritten. Incomplete
+preparation lacks a sealed transaction and cannot commit.
+
+This is an external undo/redo protocol, not JBD2. Keep the session and log until
+recovery has completed; do not mount an interrupted image before recovery. Tests
+exercise first/middle torn pages, durability boundaries, repeated recovery,
+corrupt records, invalid counts and offsets, altered identity, aliases, markers,
+clean-range changes and competing locks on all 12 ext4 configurations. e2fsck and
+debugfs independently verify recovered contents and filesystem consistency.
+
+Only new disposable copies created by preparation are supported. There is no API
+to commit to an arbitrary existing image, block device, or mounted filesystem.
+Private directories and cooperating-process locks remain assumptions; concurrent
+external writers are unsupported. Tests simulate process termination and torn
+pages, not physical power loss or failed hardware. Mounted write support, native
+Linux journal interoperability, transaction chaining and log retirement are still
+future work. The installed read-only reader and Homebrew package are unchanged.
