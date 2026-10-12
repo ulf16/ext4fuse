@@ -37,6 +37,7 @@ python3 experimental/shared-writer/test-durable.py --work "$work"
 python3 experimental/shared-writer/test-block-log.py --work "$work"
 python3 experimental/shared-writer/test-overlay-log.py --work "$work"
 python3 experimental/shared-writer/test-inplace.py --work "$work"
+python3 experimental/shared-writer/test-chain.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -209,3 +210,35 @@ external writers are unsupported. Tests simulate process termination and torn
 pages, not physical power loss or failed hardware. Mounted write support, native
 Linux journal interoperability, transaction chaining and log retirement are still
 future work. The installed read-only reader and Homebrew package are unchanged.
+
+## Managed transaction chains and reader refresh
+
+`chain.py init SOURCE ROOT PRODUCER` creates and commits the first disposable
+image transaction. `chain.py append ROOT PRODUCER` adds a generation to the same
+image inode; `chain.py recover ROOT` finishes an interrupted generation. A stable
+chain lock serializes preparation, commit, recovery and head publication. The
+chain-state file records image identity, completed head hash and a pending
+successor. Every successor must use the completed head hash as its preimage.
+
+Pending intent is synced before generation preparation. Recovery retains and
+renames incomplete preparation as an aborted directory if the image still matches
+the completed head. A sealed generation is recovered in place before the head
+advances. Crashes after image commit but before head publication recover through
+the pending generation's log and completed marker. The previous logs are retained;
+old-generation logs are not replayed once the chain has advanced. Log retirement
+and reconstruction of a lost chain-state file are not implemented.
+
+The `step-writer` test producer modifies and grows the same ext4 file each generation.
+The `reader-watch` harness keeps one production-reader instance and base descriptor
+alive across the chain. Its explicit pause gate rejects reads during mutation;
+resume republishes its empty overlay and refreshes reader geometry before content
+checks. This is a serialized offline coordination test, not automatic FUSE
+concurrency or kernel-cache invalidation. Caller coordination remains mandatory.
+
+The chain matrix covers aborted preparation, partial writes, completed transactions
+with unpublished heads, head publication interruption, repeated recovery,
+predecessor mismatch and lock exclusion on all 12 configurations. Each successful
+head is checked by the resident reader and e2fsck. Image inode and original-source
+hash are preserved throughout. The earlier single-transaction interface and its
+recovery tests remain supported. Physical devices, mounted writes and packaging
+remain unchanged.

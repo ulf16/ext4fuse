@@ -190,6 +190,7 @@ int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *b) {
   }
   return 0;
 }
+void overlay_suspend(struct overlay *t) { t->published = 0; }
 int overlay_publish(struct overlay *t) {
   if (t->poisoned)
     return EIO;

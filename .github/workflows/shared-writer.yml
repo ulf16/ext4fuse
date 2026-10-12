@@ -33,6 +33,8 @@ jobs:
         run: python3 experimental/shared-writer/test-overlay-log.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify disposable in-place commits and torn-page recovery
         run: python3 experimental/shared-writer/test-inplace.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify transaction chains and resident reader refresh
+        run: python3 experimental/shared-writer/test-chain.py --work "$RUNNER_TEMP/shared-writer"
       - name: Save validation summary
         uses: actions/upload-artifact@v4
         with:
@@ -43,3 +45,4 @@ jobs:
             ${{ runner.temp }}/shared-writer/block-log-results.json
             ${{ runner.temp }}/shared-writer/overlay-log-results.json
             ${{ runner.temp }}/shared-writer/inplace-results.json
+            ${{ runner.temp }}/shared-writer/chain-results.json

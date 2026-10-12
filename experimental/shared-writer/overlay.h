@@ -10,6 +10,7 @@ struct overlay *overlay_open(const char *path, size_t max_pages);
 void overlay_close(struct overlay *t);
 void overlay_rollback(struct overlay *t);
 int overlay_publish(struct overlay *t);
+void overlay_suspend(struct overlay *t);
 int overlay_read(struct overlay *t, uint64_t off, size_t n, void *buf,
                  int reader);
 int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *buf);

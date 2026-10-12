@@ -53,6 +53,15 @@ def prepare(source, session, producer):
             raise ValueError('source changed during copy')
     directory(session)
     boundary('cloned')
+    with regular(image) as copied:
+        if digest(copied) != before:
+            raise ValueError('copy differs from source snapshot')
+    return capture_overlay(image, session, producer)
+
+
+def capture_overlay(image, session, producer):
+    with regular(image) as current:
+        before = digest(current)
     capture = session / 'capture'
     block.prepare_overlay(image, session / 'unused-export', capture, producer)
     with regular(capture / 'manifest') as manifest:
@@ -135,6 +144,12 @@ def verify(metadata, image, log):
 
 def recover(session):
     session = block.canonical(session)
+    return recover_image(session, session / 'image.img')
+
+
+def recover_image(session, image_path):
+    # Internal helper for managed chain generations; no CLI accepts a write path.
+    session = block.canonical(session)
     info = os.lstat(session)
     if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
         raise ValueError('session must be a private owned directory')
@@ -143,10 +158,10 @@ def recover(session):
         if os.fstat(transaction.fileno()).st_size > 4096:
             raise ValueError('oversized transaction')
         metadata = json.load(transaction)
-        image_info = os.lstat(session / 'image.img')
+        image_info = os.lstat(image_path)
         if not stat.S_ISREG(image_info.st_mode):
             raise ValueError('only a regular disposable image may be opened for writing')
-        fd = os.open(session / 'image.img', os.O_RDWR | os.O_NOFOLLOW)
+        fd = os.open(image_path, os.O_RDWR | os.O_NOFOLLOW)
         with os.fdopen(fd, 'r+b', buffering=0) as image, regular(session / 'pages') as log:
             fcntl.flock(image, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(log, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -164,7 +179,7 @@ def recover(session):
                 if digest(image) != metadata['image_sha256']:
                     raise ValueError('completed image changed')
                 directory(session)
-                return session / 'image.img'
+                return image_path
             if not (session / 'started').exists():
                 if digest(image) != metadata['base_sha256']:
                     raise ValueError('image changed before commit started')
@@ -192,7 +207,7 @@ def recover(session):
                 raise ValueError('committed image mismatch')
             seal(session, 'complete', marker)
             boundary('complete')
-    return session / 'image.img'
+    return image_path
 
 
 if __name__ == '__main__':

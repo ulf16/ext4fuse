@@ -44,9 +44,13 @@ overlay = compile_source(here / 'overlay.c', 'overlay')
 manager = compile_source(here / 'io-manager.c', 'io-manager')
 reader = compile_source(here / 'reader.c', 'reader')
 prototype = compile_source(here / 'prototype.c', 'prototype')
+step = compile_source(here / 'step-writer.c', 'step-writer')
+watch = compile_source(here / 'reader-watch.c', 'reader-watch')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
 for name, objects in [('prototype', [overlay, manager, reader, prototype, *reader_objects]),
+                      ('step-writer', [overlay, manager, reader, step, *reader_objects]),
+                      ('reader-watch', [overlay, reader, watch, *reader_objects]),
                       ('overlay-unit', [overlay, unit]),
                       ('read-bench', [overlay, bench, *reader_objects])]:
     subprocess.run(compiler + flags + objects + libs + ['-o', str(work / name)], check=True)
