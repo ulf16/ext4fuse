@@ -141,7 +141,7 @@ def append(root, producer):
         return recover_locked(root)
 
 
-GEN_FILES = {'transaction', 'transaction.pending', 'pages', 'started',
+GEN_FILES = {'operations', 'request-producer', 'transaction', 'transaction.pending', 'pages', 'started',
              'started.pending', 'complete', 'complete.pending'}
 CAPTURE_FILES = {'blocks', 'manifest', 'manifest.pending'}
 

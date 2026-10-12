@@ -39,6 +39,7 @@ python3 experimental/shared-writer/test-overlay-log.py --work "$work"
 python3 experimental/shared-writer/test-inplace.py --work "$work"
 python3 experimental/shared-writer/test-chain.py --work "$work"
 python3 experimental/shared-writer/test-checkpoint.py --work "$work"
+python3 experimental/shared-writer/test-write-api.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -275,3 +276,53 @@ unexpected entries and lock exclusion on all 12 configurations. Image hashes and
 inode identity are unchanged by checkpointing, and e2fsck accepts the resulting
 images. Process interruption tests do not certify physical power-loss behavior.
 Mounted writes, JBD2 integration and real-device commits remain disabled.
+
+## General file-mutation API
+
+`mutation.h` exposes staged write, truncate and create operations taking paths,
+caller bytes, offsets and numeric creation metadata. `mutation-producer` applies a
+bounded binary batch and emits an overlay only after all operations and the writer
+flush succeed. Any error discards the writer/overlay; partial batches are never
+sealed. `write-api.py ROOT PRODUCER OPERATIONS.json` connects this API to managed
+transaction generations. Generation requests are retained with the undo/redo logs
+and are removed by checkpoint retirement.
+
+Example operation list (offset/size are bytes; mode is decimal, 416 means 0640):
+
+```json
+[
+  {"kind":"write","path":"/existing-file","offset":17,"data_hex":"0001ff"},
+  {"kind":"truncate","path":"/existing-file","size":9000},
+  {"kind":"create","path":"/directory/new-file","mode":416,"uid":70000,"gid":80000,"data_hex":"68656c6c6f"}
+]
+```
+
+The Python `apply` entry point accepts the same list directly. Files are regular
+files in existing directories; paths must be absolute, with no dot components,
+empty components or symlink traversal. Writes may grow files and leave sparse
+zero-filled gaps. Truncation supports arbitrary byte lengths and zero-filled
+regrowth. Creation refuses existing names, creates empty or populated files, and
+supports 32-bit uid/gid fields. Existing inode/xattr metadata is preserved except
+for data size/allocation and modification/change timestamps; parent timestamps
+are updated for creation. Zero-byte writes do not grow files.
+
+Limits: at most 64 operations, 4 MiB aggregate payload, 4096-byte paths with
+255-byte components, 64 MiB write-end and truncate-size ceilings and 2048 staged pages. Immutable
+files reject mutation. Append-only files permit only writes at EOF and reject
+truncation. Non-regular, encrypted, verity, compressed, inline-data and internal
+xattr inodes are rejected. Creation in indexed/casefold directories is rejected
+until independently validated. Unindexed directories can expand when full.
+
+This is an administrative offline API, not a permission-enforcing frontend. It
+does not enforce caller access ACLs, inherit default ACLs, apply a process umask,
+or provide concurrent open-handle/namespace semantics. Mounted writes remain
+disabled; a FUSE frontend must add those policies and lifetime rules.
+
+The API matrix verifies unaligned binary overwrites, EOF growth, sparse gaps,
+non-block-aligned shrink/regrow zeroing, nested/empty creation and high uid/gid
+metadata against both the native reader and debugfs. It covers failed batches
+after an earlier staged write, injected write failures, torn-page recovery,
+checkpoint retirement and subsequent writes. Extra tests enforce immutable and
+append-only flags, preserve a preexisting xattr, and reject malformed transport
+frames. e2fsck verifies committed filesystem consistency. Source images and the
+installed reader remain unchanged.
