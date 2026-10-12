@@ -55,3 +55,24 @@ jobs:
             ${{ runner.temp }}/shared-writer/checkpoint-results.json
             ${{ runner.temp }}/shared-writer/write-api-results.json
             ${{ runner.temp }}/shared-writer/session-results.json
+
+  permission-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build policy-enabled reader and writer with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/policy-writer" --sanitize
+      - name: Verify ACL decisions and inheritance against an independent oracle
+        run: '"$RUNNER_TEMP/policy-writer/policy-unit"'
+      - name: Prepare and validate filesystem configurations
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/policy-writer"
+      - name: Verify credential-bound sessions and committed ACL metadata
+        run: python3 experimental/shared-writer/test-policy.py --work "$RUNNER_TEMP/policy-writer"
+      - name: Save policy validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: permission-policy-validation
+          path: ${{ runner.temp }}/policy-writer/policy-results.json

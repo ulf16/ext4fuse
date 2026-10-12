@@ -106,6 +106,10 @@ def prepare_overlay(source, target, journal, producer):
                                    stdout=subprocess.PIPE)
         try:
             magic, stream_size, staged = struct.unpack('<8sQQ', read_exact(process.stdout, 24))
+            if magic == b'E4ER0001':
+                if not 0 < stream_size < 4096 or staged or process.stdout.read(1) or process.wait(timeout=60) == 0:
+                    raise ValueError('invalid overlay producer error frame')
+                raise OSError(stream_size, os.strerror(stream_size))
             if magic != b'E4OVL001' or stream_size != size or staged > min(MAX_RECORDS, size // PAGE):
                 raise ValueError('invalid overlay stream header')
             result = hashlib.sha256()

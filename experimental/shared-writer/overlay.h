@@ -22,6 +22,7 @@ size_t overlay_pages(struct overlay *t);
 const char *overlay_path(struct overlay *t);
 int reader_attach(const char *path);
 int reader_refresh(void);
+int reader_metadata(const char *path, uint64_t *size, unsigned *mode);
 int reader_verify(const char *path, const void *data, size_t n);
 int reader_absent(const char *path);
 #endif

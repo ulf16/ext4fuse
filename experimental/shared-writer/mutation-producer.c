@@ -42,15 +42,32 @@ int main(int argc, char **argv) {
   struct mutation ops[64] = {0};
   unsigned count = 0;
   size_t total = 0;
+  struct credentials credentials = {0};
+  int enforce = 0;
   errcode_t e = read_all(input, header, 12);
-  if (!e && memcmp(header, "E4REQ001", 8))
-    e = EINVAL;
+  if (!e) {
+    if (!memcmp(header, "E4REQ002", 8))
+      enforce = 1;
+    else if (memcmp(header, "E4REQ001", 8))
+      e = EINVAL;
+  }
   if (!e) {
     count = little(header + 8, 4);
     if (!count || count > 64) {
       count = 0;
       e = EINVAL;
     }
+  }
+  if (!e && enforce) {
+    unsigned char context[16 + 4 * POLICY_GROUPS];
+    e = read_all(input, header, 4);
+    size_t bytes = little(header, 4);
+    if (!e && (bytes < 16 || bytes > sizeof(context)))
+      e = EINVAL;
+    if (!e)
+      e = read_all(input, context, bytes);
+    if (!e)
+      e = policy_decode(context, bytes, &credentials);
   }
   for (unsigned i = 0; !e && i < count; i++) {
     e = read_all(input, header, 40);
@@ -107,7 +124,7 @@ int main(int argc, char **argv) {
   if (!e && failure)
     overlay_fail_writes(overlay, strtol(failure, NULL, 10));
   for (unsigned i = 0; !e && i < count; i++)
-    e = mutation_apply(fs, &ops[i]);
+    e = mutation_apply_as(fs, &ops[i], enforce ? &credentials : NULL);
   if (!e) {
     e = ext2fs_close(fs);
     fs = NULL;
@@ -123,8 +140,17 @@ int main(int argc, char **argv) {
     free((void *)ops[i].path);
     free((void *)ops[i].data);
   }
+  if (e && enforce) {
+    /* Complete bounded error frame, distinct from a successful overlay. */
+    unsigned char failure[24] = "E4ER0001";
+    unsigned code = e > 0 && e < 4096 ? e : EIO;
+    for (unsigned i = 0; i < 8; i++)
+      failure[8 + i] = (uint64_t)code >> (8 * i);
+    if (write(STDOUT_FILENO, failure, sizeof(failure)) != sizeof(failure))
+      return 1;
+  }
   if (e)
     fprintf(stderr, "mutation transaction rejected: %ld (%s)\n", (long)e,
-            error_message(e));
+            e > 0 && e < 4096 ? strerror(e) : error_message(e));
   return e ? 1 : 0;
 }

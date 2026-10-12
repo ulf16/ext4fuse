@@ -77,3 +77,16 @@ int reader_verify(const char *path, const void *data, size_t n) {
   free(b);
   return same ? 0 : EIO;
 }
+
+int reader_metadata(const char *path, uint64_t *size, unsigned *mode) {
+  int e = overlay_read(active_overlay, 0, 0, NULL, 1);
+  if (e)
+    return e;
+  struct ext4_inode inode;
+  int ret = inode_get_by_path(path, &inode);
+  if (ret < 0)
+    return -ret;
+  *size = inode_get_size(&inode);
+  *mode = inode.i_mode;
+  return *size > INT64_MAX ? EOVERFLOW : 0;
+}

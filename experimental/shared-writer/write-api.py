@@ -9,15 +9,21 @@ import struct
 import chain
 import inplace
 from durable import directory
+from credentials import Credentials
 
 HEADER = struct.Struct('<IIIIIIQQ')
 KINDS = {'write': 1, 'truncate': 2, 'create': 3}
 
 
-def encode(operations):
+def encode(operations, credentials=None):
     if not isinstance(operations, list) or not 1 <= len(operations) <= 64:
         raise ValueError('expected 1..64 operations')
-    result = bytearray(b'E4REQ001' + struct.pack('<I', len(operations)))
+    if credentials is not None and not isinstance(credentials, Credentials):
+        raise ValueError('expected trusted Credentials')
+    result = bytearray((b'E4REQ002' if credentials else b'E4REQ001') + struct.pack('<I', len(operations)))
+    if credentials:
+        context = credentials.encode()
+        result += struct.pack('<I', len(context)) + context
     total = 0
     for op in operations:
         if not isinstance(op, dict) or op.get('kind') not in KINDS:
@@ -28,6 +34,8 @@ def encode(operations):
         path = op['path'].encode('utf-8')
         if not 1 <= len(path) <= 4096 or b'\0' in path:
             raise ValueError('invalid path')
+        if credentials and op['kind'] == 'create' and set(op) & {'uid', 'gid'}:
+            raise ValueError('creation ownership is derived from caller credentials')
         if op['kind'] == 'truncate':
             if set(op) != {'kind', 'path', 'size'}:
                 raise ValueError('truncate needs path and size')
@@ -43,7 +51,7 @@ def encode(operations):
             offset = op.get('offset', 0)
             if op['kind'] == 'create' and offset:
                 raise ValueError('create offset must be zero')
-        mode, uid, gid = op.get('mode', 0o644), op.get('uid', os.getuid()), op.get('gid', os.getgid())
+        mode, uid, gid = op.get('mode', 0o644), op.get('uid', credentials.uid if credentials else os.getuid()), op.get('gid', credentials.gid if credentials else os.getgid())
         for name, value, maximum in (('offset', offset, 64 * 1024 * 1024), ('mode', mode, 0o777), ('uid', uid, 2**32-1), ('gid', gid, 2**32-1)):
             if type(value) is not int or not 0 <= value <= maximum:
                 raise ValueError('invalid ' + name)
@@ -54,8 +62,8 @@ def encode(operations):
     return result
 
 
-def apply(root, producer, operations):
-    request = encode(operations)
+def apply(root, producer, operations, credentials=None):
+    request = encode(operations, credentials)
     with chain.locked(root) as root:
         return apply_encoded_locked(root, producer, request)
 

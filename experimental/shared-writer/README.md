@@ -41,6 +41,8 @@ python3 experimental/shared-writer/test-chain.py --work "$work"
 python3 experimental/shared-writer/test-checkpoint.py --work "$work"
 python3 experimental/shared-writer/test-write-api.py --work "$work"
 python3 experimental/shared-writer/test-session.py --work "$work"
+"$work/policy-unit"
+python3 experimental/shared-writer/test-policy.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -314,10 +316,11 @@ truncation. Non-regular, encrypted, verity, compressed, inline-data and internal
 xattr inodes are rejected. Creation in indexed/casefold directories is rejected
 until independently validated. Unindexed directories can expand when full.
 
-This is an administrative offline API, not a permission-enforcing frontend. It
-does not enforce caller access ACLs, inherit default ACLs, apply a process umask,
-or provide concurrent open-handle/namespace semantics. Mounted writes remain
-disabled; a FUSE frontend must add those policies and lifetime rules.
+The CLI and calls without credentials retain administrative offline behavior.
+The optional trusted credential policy below adds access checks, creation
+inheritance and a caller umask. Persistent open-handle/namespace semantics and
+mounted writes remain disabled; the future frontend must bind authenticated
+caller context and implement those lifetime rules.
 
 The API matrix verifies unaligned binary overwrites, EOF growth, sparse gaps,
 non-block-aligned shrink/regrow zeroing, nested/empty creation and high uid/gid
@@ -360,8 +363,9 @@ the recovered head before retrying a non-idempotent request.
 The private binary pipe protocol bounds paths to 4096 bytes and individual reads
 to 1 MiB. The Python API accepts canonical absolute UTF-8 paths, explicit bounded
 read ranges, sizes and free-block/free-inode counters. The reader resolves each
-request afresh; persistent open-file handles and permission enforcement are still
-absent. The image identity and resident reader process are retained across
+request afresh; persistent open-file handles are still absent. Requests without
+credentials retain administrative behavior; credential-bound sessions enforce
+the numeric policy below. The image identity and resident reader process are retained across
 successful transactions. Locks protect cooperating processes, not external disk
 writers. Full-image hashes and process/pipe transport still make this a correctness
 prototype rather than a final low-latency mounted implementation.
@@ -373,3 +377,78 @@ restart recovery after a torn page and unchanged image identity. It checks sizes
 bytes and cached counters through the same reader process, compares debugfs and
 runs e2fsck on all 12 configurations. Mounted writes, physical devices and the
 installed reader remain unchanged.
+
+## Trusted numeric permission and ACL policy
+
+Pass an immutable `Credentials(uid, gid, groups=(), umask=0o022)` to `Session`, or
+as the optional `credentials` argument of `write_api.apply`/`encode`. Identities
+are 32-bit numeric Linux filesystem IDs, excluding the reserved all-ones value;
+at most 64 supplementary groups are accepted and the primary group is implicit.
+The reader binds its context once and refuses reconfiguration. This is policy
+input from a trusted frontend, not authentication: the caller of this offline API
+can select IDs, including root. A mounted frontend must derive the IDs/groups
+from authenticated request context and must not expose the administrative path.
+
+```python
+from credentials import Credentials
+from session import Session
+
+caller = Credentials(uid=70000, gid=80000, groups=(200, 201), umask=0o027)
+with Session(root, work / "mutation-producer", work / "reader-server", caller) as fs:
+    data = fs.read("/existing-file", offset=0, length=4096)
+    fs.apply([{"kind": "create", "path": "/open/new", "mode": 438,
+               "data_hex": "68656c6c6f"}])  # 438 decimal is 0666
+```
+
+The shared policy checks search permission on each ancestor before lookup, read
+permission for content reads, write permission for overwrite/truncate, and a
+single write-plus-search request on the creation parent. Metadata lookup requires
+ancestor search, not file read permission. Owner and named-user entries take
+precedence; matching groups are constrained by the ACL mask and cannot fall
+through to other. One matching group must supply the complete request; separate
+group grants are not combined. Root bypasses discretionary permissions, but
+malformed ACLs, inconsistent inode modes and unsupported rich ACLs still fail.
+The model follows the [Linux POSIX ACL access and creation rules](https://man7.org/linux/man-pages/man5/acl.5.html).
+
+ACLs use the existing compact ext4 validation and are limited to 4096 bytes.
+Access ACL owner/group-class/other permissions must agree with the inode mode.
+The reader uses a fresh read-only libext2fs metadata view for authorization and
+retains the native reader for data/size access; it does not depend on macOS UUID
+resolution or translating numeric identities into host Apple ACLs. Both views
+are serialized by the session and refreshed between generations.
+
+Creation derives the owner from the caller. It uses the parent's group when the
+parent has setgid, otherwise the caller's primary group. JSON creation requests
+cannot override uid/gid, and raw credential-framed requests cannot override the
+derived ownership either. With a default ACL, inherit it as an access ACL and
+clip owner, group class/mask and other by the requested mode; do not additionally
+apply umask. Without a default ACL, apply the caller umask. The parent default
+ACL is unchanged; regular files do not acquire a default ACL or the parent's
+setgid mode bit. Initial creation bytes are accepted even with a resulting mode
+of zero, while subsequent independent path mutations require write access.
+
+Non-root content changes conservatively clear setuid/setgid bits; zero-byte
+writes do not clear them. Credential-bound writes to files carrying
+`security.capability` are rejected until killpriv semantics are implemented.
+No capability sets, security-module policy, ID mapping, permission-changing APIs,
+open-time grants, retained handles or multi-user mounted frontend are introduced.
+
+Credential batches use `E4REQ002`; legacy administrative `E4REQ001` is retained.
+Permission/error rejections emit a bounded `E4ER0001` frame with a POSIX errno;
+no overlay is emitted and no transaction is sealed. Capture validates the frame
+and producer termination before propagating `OSError`. Recovery aborts any
+unsealed intent and refreshes the reader, preserving the complete previous head.
+The generation request retains the credential context with its logs.
+
+The sanitizer unit suite exercises mode permissions, owner/named/group precedence,
+all requested permission combinations, ACL masks, inheritance and malformed
+contexts against an independent decision oracle. The image matrix checks numeric
+reads/writes, traversal denial, inherited ACL bytes/modes, setgid/high-ID ownership,
+umask, privilege-bit clearing, atomic multi-operation denial, malformed/default
+ACLs, mode disagreement, rich ACL/capability rejection and forged transport frames
+on 12 filesystem configurations. debugfs independently checks committed metadata
+and e2fsck verifies all valid committed images. Deliberately invalid ACL fixtures
+are separate and must remain byte-for-byte unchanged by rejected mutations.
+These tests use explicit logical callers, not host credential changes or mounted
+kernel authorization. Physical devices and installed read-only behavior remain
+unchanged.

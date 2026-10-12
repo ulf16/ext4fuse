@@ -11,6 +11,7 @@ import subprocess
 import threading
 import time
 import chain
+from credentials import Credentials
 
 spec = importlib.util.spec_from_file_location('write_api', Path(__file__).with_name('write-api.py'))
 write_api = importlib.util.module_from_spec(spec)
@@ -21,13 +22,16 @@ LIMIT = 1024 * 1024
 
 
 class Session:
-    """Administrative API; no caller permission policy or persistent file handles.
+    """Optional trusted numeric permission policy; no persistent file handles.
 
     Hold the global chain lock for the entire session. Readers and mutations are
     serialized inside this object; other cooperating processes are excluded.
     Any unresolvable recovery/reader error leaves the session failed closed.
     """
-    def __init__(self, root, producer, reader):
+    def __init__(self, root, producer, reader, credentials=None):
+        if credentials is not None and not isinstance(credentials, Credentials):
+            raise ValueError('expected trusted Credentials')
+        self._credentials = credentials
         self._mutex = threading.RLock()
         self._closed = False
         self._failed = False
@@ -41,10 +45,16 @@ class Session:
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                              stderr=subprocess.DEVNULL, bufsize=0)
             os.set_blocking(self._process.stdin.fileno(), False)
+            if credentials is not None:
+                self._rpc(6, credentials.encode())
             self._rpc(4)
         except BaseException:
             self.close()
             raise
+
+    @property
+    def credentials(self):
+        return self._credentials
 
     def __enter__(self):
         return self
@@ -90,7 +100,7 @@ class Session:
             self._send(REQUEST.pack(b'E4RD0001', op, len(path), offset, length) + path, deadline)
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
-                    or (op == 2 and count > length) or (op in (1, 3, 4) and count)):
+                    or (op == 2 and count > length) or (op in (1, 3, 4, 6) and count)):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
         except BaseException:
@@ -137,7 +147,7 @@ class Session:
             return struct.unpack('<QQ', data)
 
     def apply(self, operations):
-        request = write_api.encode(operations)
+        request = write_api.encode(operations, self._credentials)
         with self._mutex:
             self._ready()
             try:

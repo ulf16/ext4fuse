@@ -11,7 +11,7 @@
    EXT4_EA_INODE_FL)
 
 static errcode_t parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
-                        char **leaf) {
+                        char **leaf, const struct credentials *credentials) {
   if (!path || path[0] != '/' || strlen(path) > 4096 || !path[1] ||
       path[strlen(path) - 1] == '/')
     return EINVAL;
@@ -42,6 +42,11 @@ static errcode_t parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
       e = EOPNOTSUPP;
       break;
     }
+    if (credentials) {
+      e = policy_inode(fs, *dir, credentials, 1);
+      if (e)
+        break;
+    }
     if (!slash) {
       *leaf = strdup(component);
       if (!*leaf)
@@ -69,7 +74,7 @@ static errcode_t parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
   free(copy);
   return e;
 }
-static errcode_t touch(ext2_filsys fs, ext2_ino_t ino) {
+static errcode_t touch(ext2_filsys fs, ext2_ino_t ino, int clear_privileges) {
   struct ext2_inode_large in = {0};
   unsigned bytes = EXT2_INODE_SIZE(fs->super);
   if (bytes > sizeof(in))
@@ -78,6 +83,8 @@ static errcode_t touch(ext2_filsys fs, ext2_ino_t ino) {
       ext2fs_read_inode_full(fs, ino, (struct ext2_inode *)&in, bytes);
   if (e)
     return e;
+  if (clear_privileges)
+    in.i_mode &= ~(LINUX_S_ISUID | LINUX_S_ISGID);
   in.i_mtime = in.i_ctime = (uint32_t)time(NULL);
   if (in.i_extra_isize >= 8)
     in.i_ctime_extra = 0;
@@ -86,7 +93,8 @@ static errcode_t touch(ext2_filsys fs, ext2_ino_t ino) {
   return ext2fs_write_inode_full(fs, ino, (struct ext2_inode *)&in, bytes);
 }
 static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
-                             const struct mutation *op, ext2_ino_t *ino) {
+                             const struct mutation *op, ext2_ino_t *ino,
+                             const unsigned char *acl, size_t acl_length) {
   struct ext2_inode parent_inode;
   errcode_t e = ext2fs_read_inode(fs, dir, &parent_inode);
   if (e)
@@ -117,6 +125,24 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
   if (e)
     return e;
   ext2fs_inode_alloc_stats2(fs, *ino, 1, 0);
+  if (acl) {
+    struct ext2_xattr_handle *handle = NULL;
+    unsigned flags = XATTR_HANDLE_FLAG_RAW;
+    e = ext2fs_xattrs_open(fs, *ino, &handle);
+    if (!e)
+      e = ext2fs_xattrs_flags(handle, &flags, NULL);
+    if (!e)
+      e = ext2fs_xattrs_read(handle);
+    if (!e)
+      e = ext2fs_xattr_set(handle, "system.posix_acl_access", acl, acl_length);
+    if (handle) {
+      errcode_t close = ext2fs_xattrs_close(&handle);
+      if (!e)
+        e = close;
+    }
+    if (e)
+      return e;
+  }
   e = ext2fs_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
   if (e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM) {
     e = ext2fs_expand_dir(fs, dir);
@@ -124,27 +150,43 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
       e = ext2fs_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
   }
   if (!e)
-    e = touch(fs, dir);
+    e = touch(fs, dir, 0);
   return e;
 }
 errcode_t mutation_apply(ext2_filsys fs, const struct mutation *op) {
+  return mutation_apply_as(fs, op, NULL);
+}
+errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *op,
+                            const struct credentials *credentials) {
   if (!op || op->kind < MUT_WRITE || op->kind > MUT_CREATE ||
       op->length > MAX_DATA || op->offset > MAX_FILE ||
       op->length > MAX_FILE - op->offset || (op->length && !op->data) ||
       op->mode > 0777 || (op->kind == MUT_TRUNCATE && op->length) ||
       (op->kind == MUT_CREATE && op->offset))
     return EINVAL;
+  if (credentials && policy_credentials(credentials))
+    return EINVAL;
   ext2_ino_t dir, ino;
   char *leaf = NULL;
-  errcode_t e = parent(fs, op->path, &dir, &leaf);
+  errcode_t e = parent(fs, op->path, &dir, &leaf, credentials);
   if (e)
     return e;
   e = ext2fs_lookup(fs, dir, leaf, strlen(leaf), NULL, &ino);
   if (op->kind == MUT_CREATE) {
     if (!e)
       e = EEXIST;
-    else if (e == EXT2_ET_FILE_NOT_FOUND)
-      e = create_file(fs, dir, leaf, op, &ino);
+    else if (e == EXT2_ET_FILE_NOT_FOUND) {
+      struct mutation resolved = *op;
+      unsigned char *acl = NULL;
+      size_t acl_length = 0;
+      e = 0;
+      if (credentials)
+        e = policy_creation(fs, dir, credentials, op->mode, &resolved.mode,
+                            &resolved.uid, &resolved.gid, &acl, &acl_length);
+      if (!e)
+        e = create_file(fs, dir, leaf, &resolved, &ino, acl, acl_length);
+      free(acl);
+    }
   }
   free(leaf);
   if (e)
@@ -166,6 +208,13 @@ errcode_t mutation_apply(ext2_filsys fs, const struct mutation *op) {
   if ((in.i_flags & EXT2_APPEND_FL) &&
       (op->kind == MUT_TRUNCATE || op->offset != size))
     return EPERM;
+  if (credentials && op->kind != MUT_CREATE) {
+    e = policy_inode(fs, ino, credentials, 2);
+    if (!e)
+      e = policy_writable(fs, ino);
+    if (e)
+      return e;
+  }
   if (op->kind == MUT_WRITE && !op->length)
     return 0;
   ext2_file_t file;
@@ -185,5 +234,5 @@ errcode_t mutation_apply(ext2_filsys fs, const struct mutation *op) {
   errcode_t close = ext2fs_file_close(file);
   if (!e)
     e = close;
-  return e ? e : touch(fs, ino);
+  return e ? e : touch(fs, ino, credentials && credentials->uid != 0);
 }

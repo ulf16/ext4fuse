@@ -3,6 +3,7 @@
  */
 #include "ops.h"
 #include "overlay.h"
+#include "policy.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -10,6 +11,33 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+extern struct struct_io_manager staged_manager;
+static int authorize(const char *image, const char *path,
+                     const struct credentials *c, unsigned want) {
+  ext2_filsys fs = NULL;
+  errcode_t e =
+      ext2fs_open(image, EXT2_FLAG_64BITS, 0, 0, &staged_manager, &fs);
+  ext2_ino_t ino;
+  if (!e)
+    e = policy_path(fs, path, c, want, &ino);
+  if (fs)
+    ext2fs_free(fs);
+  if (e == EXT2_ET_FILE_NOT_FOUND)
+    return ENOENT;
+  return e > 0 && e < 4096 ? e : e ? EIO : 0;
+}
+static int numeric_stat(const char *path, struct stat *st) {
+  /* Numeric POSIX policy is independent of host UUID/Apple ACL translation. */
+  uint64_t size;
+  unsigned mode;
+  int e = reader_metadata(path, &size, &mode);
+  if (e)
+    return -e;
+  memset(st, 0, sizeof(*st));
+  st->st_mode = mode;
+  st->st_size = size;
+  return 0;
+}
 #define READ_LIMIT (1024 * 1024)
 static uint64_t get_le(const unsigned char *p, unsigned n) {
   uint64_t v = 0;
@@ -37,7 +65,8 @@ int main(int argc, char **argv) {
   if (!active_overlay || reader_attach(argv[1]))
     return 2;
   unsigned char header[32];
-  int result = 0;
+  int result = 0, enforce = 0;
+  struct credentials credentials = {0};
   for (;;) {
     size_t got = fread(header, 1, sizeof(header), stdin);
     if (!got && feof(stdin))
@@ -48,15 +77,19 @@ int main(int argc, char **argv) {
     }
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
-    if (op < 1 || op > 5 || pathlen > 4096 || length > READ_LIMIT ||
+    if (op < 1 || op > 6 || pathlen > 4096 || length > READ_LIMIT ||
         offset > INT64_MAX ||
-        ((op == 1 || op == 2) ? !pathlen : (pathlen || offset || length)) ||
+        (op == 6 ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
+                    offset || length)
+                 : ((op == 1 || op == 2) ? !pathlen
+                                         : (pathlen || offset || length))) ||
         (op == 1 && (offset || length))) {
       result = 2;
       break;
     }
     char path[4097];
-    if (fread(path, 1, pathlen, stdin) != pathlen || memchr(path, 0, pathlen)) {
+    if (fread(path, 1, pathlen, stdin) != pathlen ||
+        (op != 6 && memchr(path, 0, pathlen))) {
       result = 2;
       break;
     }
@@ -65,7 +98,12 @@ int main(int argc, char **argv) {
     uint64_t size = 0;
     unsigned char *data = NULL, counts[16];
     size_t bytes = 0;
-    if (op == 3) {
+    if (op == 6) {
+      e = enforce ? EPERM
+                  : policy_decode((unsigned char *)path, pathlen, &credentials);
+      if (!e)
+        enforce = 1;
+    } else if (op == 3) {
       overlay_suspend(active_overlay);
     } else if (op == 4) {
       e = overlay_publish(active_overlay);
@@ -76,6 +114,9 @@ int main(int argc, char **argv) {
     } else {
       /* Gate before even a cached inode lookup or statfs. */
       e = overlay_read(active_overlay, 0, 0, NULL, 1);
+      if (!e && enforce)
+        e = authorize(argv[1], op == 5 ? "/" : path, &credentials,
+                      op == 2 ? 4 : 0);
       if (!e && op == 5) {
         struct statvfs st;
         int ret = op_statfs("/", &st);
@@ -88,7 +129,7 @@ int main(int argc, char **argv) {
         }
       } else if (!e) {
         struct stat st;
-        int ret = op_getattr(path, &st);
+        int ret = enforce ? numeric_stat(path, &st) : op_getattr(path, &st);
         if (ret < 0)
           e = -ret;
         else {
