@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 from durable import boundary, sync, directory, regular, digest
 
 PAGE = 4096
@@ -74,6 +75,95 @@ def prepare(source, candidate, target, journal):
         os.rename(journal / 'manifest.pending', journal / 'manifest')
         directory(journal)
         boundary('sealed')
+
+
+def read_exact(stream, length):
+    chunks = bytearray()
+    while len(chunks) < length:
+        data = stream.read(length - len(chunks))
+        if not data:
+            raise ValueError('truncated overlay stream')
+        chunks.extend(data)
+    return bytes(chunks)
+
+
+def prepare_overlay(source, target, journal, producer):
+    source, target, journal = [canonical(p) for p in (source, target, journal)]
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(target)
+    if journal.parent != target.parent or target in (source, journal):
+        raise ValueError('invalid transaction paths')
+    journal.mkdir(mode=0o700)
+    directory(journal.parent)
+    boundary('created')
+    with regular(source) as base:
+        fcntl.flock(base, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        size = os.fstat(base.fileno()).st_size
+        if size <= 0 or size % PAGE:
+            raise ValueError('invalid source size')
+        original = digest(base)
+        process = subprocess.Popen([str(Path(producer).absolute()), str(source), '--stream'],
+                                   stdout=subprocess.PIPE)
+        try:
+            magic, stream_size, staged = struct.unpack('<8sQQ', read_exact(process.stdout, 24))
+            if magic != b'E4OVL001' or stream_size != size or staged > min(MAX_RECORDS, size // PAGE):
+                raise ValueError('invalid overlay stream header')
+            result = hashlib.sha256()
+            cursor, previous, count = 0, -1, 0
+
+            def hash_clean(end):
+                nonlocal cursor
+                base.seek(cursor)
+                while cursor < end:
+                    chunk = base.read(min(1024 * 1024, end - cursor))
+                    if not chunk:
+                        raise ValueError('short source image')
+                    result.update(chunk)
+                    cursor += len(chunk)
+
+            with (journal / 'blocks').open('xb') as log:
+                for _ in range(staged):
+                    index, old, new = struct.unpack('<Q4096s4096s', read_exact(process.stdout, 8200))
+                    if not previous < index < size // PAGE:
+                        raise ValueError('invalid overlay stream block order or bounds')
+                    base.seek(index * PAGE)
+                    if base.read(PAGE) != old:
+                        raise ValueError('overlay stream preimage mismatch')
+                    hash_clean(index * PAGE)
+                    result.update(new)
+                    cursor += PAGE
+                    if old != new:
+                        log.write(RECORD.pack(index, sha(old), sha(new), new))
+                        count += 1
+                    previous = index
+                    boundary('record')
+                hash_clean(size)
+                if process.stdout.read(1):
+                    raise ValueError('trailing overlay stream bytes')
+                if process.wait(timeout=60) != 0:
+                    raise ValueError('overlay producer failed')
+                log.flush()
+                sync(log.fileno())
+            boundary('snapshot')
+            if digest(base) != original:
+                raise ValueError('source changed during overlay capture')
+            with regular(journal / 'blocks') as log:
+                metadata = dict(version=1, source=str(source), target=str(target), size=size,
+                                count=count, base_sha256=original,
+                                image_sha256=result.hexdigest(), log_sha256=digest(log))
+            with (journal / 'manifest.pending').open('x') as manifest:
+                json.dump(metadata, manifest, sort_keys=True)
+                manifest.flush()
+                sync(manifest.fileno())
+            boundary('manifest')
+            os.rename(journal / 'manifest.pending', journal / 'manifest')
+            directory(journal)
+            boundary('sealed')
+        finally:
+            process.stdout.close()
+            if process.poll() is None:
+                process.kill()
+            process.wait()
 
 
 def validate(metadata, journal, base, log):
@@ -173,10 +263,15 @@ if __name__ == '__main__':
     p = commands.add_parser('prepare')
     for name in ('source', 'candidate', 'target', 'journal'):
         p.add_argument(name)
+    p = commands.add_parser('prepare-overlay')
+    for name in ('source', 'target', 'journal', 'producer'):
+        p.add_argument(name)
     commands.add_parser('recover').add_argument('journal')
     args = vars(parser.parse_args())
     action = args.pop('action')
     if action == 'prepare':
         prepare(**args)
+    elif action == 'prepare-overlay':
+        prepare_overlay(**args)
     else:
         print(recover(**args))

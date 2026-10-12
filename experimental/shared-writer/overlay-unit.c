@@ -20,6 +20,12 @@ static unsigned rng(void) {
   state = state * 1664525U + 1013904223U;
   return state;
 }
+static uint64_t decode64(const unsigned char *p) {
+  uint64_t result = 0;
+  for (unsigned i = 0; i < 8; i++)
+    result |= (uint64_t)p[i] << (8 * i);
+  return result;
+}
 int main(void) {
   unsigned count = 0;
   char path[4096];
@@ -51,6 +57,7 @@ int main(void) {
     CHECK(overlay_write(t, off, n, buf) == 0);
     memcpy(model + off, buf, n);
     CHECK(overlay_read(t, off, n, read, 1) == EBUSY);
+    CHECK(overlay_stream(t, -1) == EBUSY);
     CHECK(overlay_read(t, off, n, read, 0) == 0);
     CHECK(!memcmp(buf, read, n));
     CHECK(overlay_publish(t) == 0);
@@ -61,18 +68,49 @@ int main(void) {
       CHECK(!memcmp(read, model + off, n));
     }
   }
+  FILE *stream = tmpfile();
+  CHECK(stream != NULL);
+  CHECK(overlay_stream(t, fileno(stream)) == 0);
+  CHECK(overlay_stream(t, -1) == EBADF);
+  rewind(stream);
+  unsigned char header[24], record[8200];
+  CHECK(fread(header, 1, sizeof(header), stream) == sizeof(header));
+  CHECK(!memcmp(header, "E4OVL001", 8));
+  CHECK(decode64(header + 8) == SIZE);
+  CHECK(decode64(header + 16) == overlay_pages(t));
+  uint64_t previous = UINT64_MAX;
+  for (size_t i = 0; i < overlay_pages(t); i++) {
+    CHECK(fread(record, 1, sizeof(record), stream) == sizeof(record));
+    uint64_t idx = decode64(record);
+    CHECK(idx < SIZE / 4096 && (i == 0 || idx > previous));
+    CHECK(!memcmp(record + 8, base + idx * 4096, 4096));
+    CHECK(!memcmp(record + 4104, model + idx * 4096, 4096));
+    previous = idx;
+  }
+  CHECK(fgetc(stream) == EOF && !ferror(stream));
+  CHECK(fclose(stream) == 0);
   CHECK(overlay_write(t, SIZE - 2, 4, buf) == EIO);
   CHECK(overlay_publish(t) == EIO);
+  CHECK(overlay_stream(t, -1) == EBUSY);
   CHECK(overlay_read(t, 0, 1, read, 1) == EBUSY);
   overlay_rollback(t);
   CHECK(overlay_read(t, 0, 65536, read, 1) == 0);
   CHECK(!memcmp(base, read, 65536));
+  stream = tmpfile();
+  CHECK(stream != NULL);
+  CHECK(overlay_stream(t, fileno(stream)) == 0);
+  rewind(stream);
+  CHECK(fread(header, 1, sizeof(header), stream) == sizeof(header));
+  CHECK(decode64(header + 16) == 0);
+  CHECK(fgetc(stream) == EOF);
+  CHECK(fclose(stream) == 0);
   overlay_close(t);
   t = overlay_open(path, 2);
   CHECK(t);
   CHECK(overlay_write(t, 0, 3 * 4096, buf) == ENOSPC);
   CHECK(overlay_pages(t) == 2);
   CHECK(overlay_publish(t) == EIO);
+  CHECK(overlay_stream(t, -1) == EBUSY);
   CHECK(overlay_read(t, 0, 1, read, 1) == EBUSY);
   overlay_rollback(t);
   CHECK(overlay_read(t, 0, 65536, read, 1) == 0);

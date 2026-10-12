@@ -13,6 +13,8 @@ int overlay_publish(struct overlay *t);
 int overlay_read(struct overlay *t, uint64_t off, size_t n, void *buf,
                  int reader);
 int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *buf);
+/* Serialized published overlay only; emits E4OVL001 protocol to a stream. */
+int overlay_stream(struct overlay *t, int fd);
 int overlay_export(struct overlay *t, const char *output, long fail_page);
 void overlay_fail_writes(struct overlay *t, long after);
 size_t overlay_pages(struct overlay *t);

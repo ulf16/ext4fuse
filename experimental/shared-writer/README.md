@@ -35,6 +35,7 @@ python3 experimental/shared-writer/build.py --work "$work" --sanitize
 python3 experimental/shared-writer/run-matrix.py --work "$work"
 python3 experimental/shared-writer/test-durable.py --work "$work"
 python3 experimental/shared-writer/test-block-log.py --work "$work"
+python3 experimental/shared-writer/test-overlay-log.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -138,3 +139,32 @@ preimages, duplicate/out-of-range records, invalid counts, trailing records,
 incorrect final hashes, target collisions, no-op transactions and lock exclusion.
 It checks that these fixtures' logs use less than one tenth of the source size.
 Process-interruption validation still does not certify physical power-loss safety.
+
+## Direct C overlay capture
+
+`block-log.py prepare-overlay SOURCE TARGET JOURNAL PRODUCER` now starts the
+isolated `prototype SOURCE --stream` producer and builds a sealed block log directly
+from its published in-memory overlay. No candidate image is exported. The C API
+`overlay_stream` rejects pending/poisoned state, sorts bounded page pointers, and
+emits a 24-byte header (`E4OVL001`, little-endian image size and staged-page count)
+followed by 8200-byte records (little-endian page index, original 4096 bytes,
+replacement 4096 bytes). This is a private transport, not the persisted log format.
+
+The consumer checks exact lengths, page order, bounds and preimages, omits staged
+pages whose bytes are unchanged, hashes the merged view while reading clean spans
+from the source, and writes the existing checksummed block-log format. It rejects
+trailing bytes and a nonzero producer exit even after a complete stream. The
+manifest is sealed only after successful producer completion and source recheck.
+The producer continues to run its rollback/failure tests after emitting the view.
+A failed or interrupted capture can leave an incomplete private directory, but it
+cannot publish a target. The caller must serialize the C overlay throughout capture;
+this does not add thread safety or a writable FUSE frontend.
+
+The source is still scanned for whole-image integrity binding, and recovery still
+builds a full output image. This step removes the intermediate full candidate
+export from log preparation; incremental in-place commits and JBD2 interoperability
+remain future work. Stream tests cover malformed headers, truncation, duplicates,
+bounds, preimages, trailing bytes, producer failure, and preparation/recovery
+interruptions across all 12 filesystem configurations. Recovered files are checked
+with debugfs and e2fsck; the C unit suite independently compares stream pages with
+its randomized reference model. Installed reader and Homebrew packaging are unchanged.

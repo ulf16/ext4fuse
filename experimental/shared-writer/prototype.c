@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 extern struct struct_io_manager staged_manager;
 static unsigned checks;
 #define CHECK(x)                                                               \
@@ -72,6 +73,7 @@ static void publish(ext2_filsys fs) {
 int main(int argc, char **argv) {
   if (argc != 3)
     return 2;
+  int stream = !strcmp(argv[2], "--stream");
   struct overlay *t = overlay_open(argv[1], 2048);
   if (!t) {
     perror("overlay_open");
@@ -119,9 +121,13 @@ int main(int argc, char **argv) {
   size_t pages = overlay_pages(t);
   char *failed = malloc(strlen(argv[2]) + 16);
   sprintf(failed, "%s.failed", argv[2]);
-  CHECK(overlay_export(t, failed, 2) == EIO ? 0 : EIO);
-  CHECK(overlay_export(t, argv[2], -1));
-  CHECK(overlay_export(t, argv[2], -1) == EEXIST ? 0 : EIO);
+  if (stream) {
+    CHECK(overlay_stream(t, STDOUT_FILENO));
+  } else {
+    CHECK(overlay_export(t, failed, 2) == EIO ? 0 : EIO);
+    CHECK(overlay_export(t, argv[2], -1));
+    CHECK(overlay_export(t, argv[2], -1) == EEXIST ? 0 : EIO);
+  }
   CHECK(reader_verify("/renamed-file", data, 160 * 1024));
   overlay_rollback(t);
   CHECK(reader_refresh());
@@ -159,8 +165,9 @@ int main(int argc, char **argv) {
   overlay_close(t);
   free(data);
   free(failed);
-  printf("PASS: %u shared-reader, libext2fs mutation, publication, rollback "
-         "and injected-failure checks; %zu staged pages\n",
-         checks, pages);
+  fprintf(stream ? stderr : stdout,
+          "PASS: %u shared-reader, libext2fs mutation, publication, rollback "
+          "and injected-failure checks; %zu staged pages\n",
+          checks, pages);
   return 0;
 }

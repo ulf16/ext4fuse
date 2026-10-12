@@ -246,3 +246,56 @@ int overlay_export(struct overlay *t, const char *path, long fail_page) {
   free(temporary);
   return e;
 }
+
+/* The private transport carries original and replacement pages. The durable
+ * consumer computes cryptographic digests and seals the transaction. */
+static int stream_write(int fd, const void *data, size_t length) {
+  while (length) {
+    ssize_t n = write(fd, data, length);
+    if (n < 0 && errno == EINTR)
+      continue;
+    if (n <= 0)
+      return n < 0 ? errno : EIO;
+    data = (const unsigned char *)data + n;
+    length -= (size_t)n;
+  }
+  return 0;
+}
+static void little64(unsigned char *out, uint64_t value) {
+  for (unsigned i = 0; i < 8; i++)
+    out[i] = (unsigned char)(value >> (i * 8));
+}
+static int page_order(const void *a, const void *b) {
+  const struct page *left = *(const struct page *const *)a;
+  const struct page *right = *(const struct page *const *)b;
+  return left->idx < right->idx ? -1 : left->idx > right->idx;
+}
+int overlay_stream(struct overlay *t, int fd) {
+  if (!t->published || t->poisoned)
+    return EBUSY;
+  if (t->used > 1048576 || t->used > SIZE_MAX / sizeof(struct page *))
+    return EOVERFLOW;
+  struct page **ordered = calloc(t->used ? t->used : 1, sizeof(*ordered));
+  if (!ordered)
+    return ENOMEM;
+  size_t count = 0;
+  for (size_t i = 0; i < BUCKETS; i++)
+    for (struct page *p = t->pages[i]; p; p = p->next)
+      ordered[count++] = p;
+  qsort(ordered, count, sizeof(*ordered), page_order);
+  unsigned char header[24] = "E4OVL001";
+  little64(header + 8, t->size);
+  little64(header + 16, count);
+  int e = stream_write(fd, header, sizeof(header));
+  unsigned char record[8 + PAGE * 2];
+  for (size_t i = 0; !e && i < count; i++) {
+    little64(record, ordered[i]->idx);
+    e = exact_read(t->fd, record + 8, PAGE, ordered[i]->idx * PAGE);
+    if (!e) {
+      memcpy(record + 8 + PAGE, ordered[i]->data, PAGE);
+      e = stream_write(fd, record, sizeof(record));
+    }
+  }
+  free(ordered);
+  return e;
+}
