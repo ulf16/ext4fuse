@@ -12,6 +12,7 @@ struct credentials {
 /* Numeric identities are trusted input from a future frontend, not
  * authentication. Groups are strictly increasing; primary gid is included
  * implicitly. */
+int policy_errno(errcode_t error);
 int policy_credentials(const struct credentials *c);
 int policy_decode(const unsigned char *data, size_t length,
                   struct credentials *c);

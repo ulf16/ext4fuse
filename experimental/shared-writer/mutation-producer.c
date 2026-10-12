@@ -143,7 +143,7 @@ int main(int argc, char **argv) {
   if (e && enforce) {
     /* Complete bounded error frame, distinct from a successful overlay. */
     unsigned char failure[24] = "E4ER0001";
-    unsigned code = e > 0 && e < 4096 ? e : EIO;
+    unsigned code = policy_errno(e);
     for (unsigned i = 0; i < 8; i++)
       failure[8 + i] = (uint64_t)code >> (8 * i);
     if (write(STDOUT_FILENO, failure, sizeof(failure)) != sizeof(failure))

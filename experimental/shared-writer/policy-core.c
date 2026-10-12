@@ -9,6 +9,18 @@ static uint32_t le(const unsigned char *p, unsigned n) {
     v |= (uint32_t)p[i] << (8 * i);
   return v;
 }
+int policy_errno(errcode_t e) {
+  if (!e)
+    return 0;
+  if (e == EXT2_ET_FILE_NOT_FOUND)
+    return ENOENT;
+  if (e == EXT2_ET_NO_MEMORY)
+    return ENOMEM;
+  if (e == EXT2_ET_BLOCK_ALLOC_FAIL || e == EXT2_ET_INODE_ALLOC_FAIL ||
+      e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM)
+    return ENOSPC;
+  return e > 0 && e < 4096 ? e : EIO;
+}
 int policy_credentials(const struct credentials *c) {
   if (!c || c->uid == UINT32_MAX || c->gid == UINT32_MAX || c->umask > 0777 ||
       c->ngroups > POLICY_GROUPS)

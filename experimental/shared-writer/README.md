@@ -435,7 +435,9 @@ open-time grants, retained handles or multi-user mounted frontend are introduced
 
 Credential batches use `E4REQ002`; legacy administrative `E4REQ001` is retained.
 Permission/error rejections emit a bounded `E4ER0001` frame with a POSIX errno;
-no overlay is emitted and no transaction is sealed. Capture validates the frame
+no overlay is emitted and no transaction is sealed. Missing paths map to
+ENOENT, allocation exhaustion to ENOSPC and allocation failures to ENOMEM;
+unknown library errors map to EIO. Capture validates the frame
 and producer termination before propagating `OSError`. Recovery aborts any
 unsealed intent and refreshes the reader, preserving the complete previous head.
 The generation request retains the credential context with its logs.

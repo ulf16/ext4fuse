@@ -152,6 +152,23 @@ int main(void) {
   checks++;
   assert(policy_decode(context, 17, &decoded) == EINVAL);
   checks++;
+  const errcode_t errors[] = {0,
+                              EACCES,
+                              EPERM,
+                              EXT2_ET_FILE_NOT_FOUND,
+                              EXT2_ET_NO_MEMORY,
+                              EXT2_ET_BLOCK_ALLOC_FAIL,
+                              EXT2_ET_INODE_ALLOC_FAIL,
+                              EXT2_ET_DIR_NO_SPACE,
+                              EXT2_ET_DIR_NO_SPACE_FOR_CSUM,
+                              EXT2_ET_BAD_MAGIC,
+                              -1};
+  const int mapped[] = {0,      EACCES, EPERM,  ENOENT, ENOMEM, ENOSPC,
+                        ENOSPC, ENOSPC, ENOSPC, EIO,    EIO};
+  for (unsigned i = 0; i < sizeof(errors) / sizeof(*errors); i++) {
+    assert(policy_errno(errors[i]) == mapped[i]);
+    checks++;
+  }
   printf("PASS %lu policy checks\n", checks);
   return 0;
 }

@@ -22,9 +22,7 @@ static int authorize(const char *image, const char *path,
     e = policy_path(fs, path, c, want, &ino);
   if (fs)
     ext2fs_free(fs);
-  if (e == EXT2_ET_FILE_NOT_FOUND)
-    return ENOENT;
-  return e > 0 && e < 4096 ? e : e ? EIO : 0;
+  return policy_errno(e);
 }
 static int numeric_stat(const char *path, struct stat *st) {
   /* Numeric POSIX policy is independent of host UUID/Apple ACL translation. */

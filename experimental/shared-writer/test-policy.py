@@ -148,6 +148,12 @@ with tempfile.TemporaryDirectory(prefix='policy-test-', dir=args.work) as direct
             model[17:28] = b'owner write'
             atomic(s,[write('/existing-file',b'prefix'),write('/open/read-only')],errno.EACCES)
             atomic(s,[write('/open/cap')],errno.EOPNOTSUPP)
+            atomic(s,[write('/existing-file',b'prefix'),write('/missing')],errno.ENOENT)
+            atomic(s,[write('/missing-parent/new')],errno.ENOENT)
+            unchanged = sha(image)
+            s.apply([write('/open/setid',b'')])
+            metadata(image,'/open/setid',0o6777,100,200)
+            check(sha(image) == unchanged, 'zero-byte write changed privilege metadata')
             s.apply([write('/open/setid',b'changed')])
             metadata(image,'/open/setid',0o777,100,200)
             check(s.read('/open/read-only') == payload.read_bytes())
