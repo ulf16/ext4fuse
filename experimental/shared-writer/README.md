@@ -40,6 +40,7 @@ python3 experimental/shared-writer/test-inplace.py --work "$work"
 python3 experimental/shared-writer/test-chain.py --work "$work"
 python3 experimental/shared-writer/test-checkpoint.py --work "$work"
 python3 experimental/shared-writer/test-write-api.py --work "$work"
+python3 experimental/shared-writer/test-session.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -325,4 +326,50 @@ after an earlier staged write, injected write failures, torn-page recovery,
 checkpoint retirement and subsequent writes. Extra tests enforce immutable and
 append-only flags, preserve a preexisting xattr, and reject malformed transport
 frames. e2fsck verifies committed filesystem consistency. Source images and the
+installed reader remain unchanged.
+
+## Coordinated resident-reader session
+
+`session.Session(ROOT, PRODUCER, READER_SERVER)` joins caller-data mutations to a
+single long-lived native reader. Recover the managed chain before opening the
+reader, hold the chain lock for the whole session, and serialize requests with a
+session mutex. Other cooperating sessions, administrative writes, recovery and
+checkpoint commands are excluded until it closes. Use the object as a context
+manager so reader shutdown precedes releasing the lock.
+
+```python
+from session import Session
+
+with Session(root, work / "mutation-producer", work / "reader-server") as fs:
+    previous = fs.read("/existing-file", offset=0, length=4096)
+    fs.apply([{"kind": "write", "path": "/existing-file", "offset": 17,
+               "data_hex": "0001ff"}])
+    updated_size = fs.size("/existing-file")
+    updated = fs.read("/existing-file", offset=17, length=3)
+```
+
+Before preparation the coordinator suspends native reads, including cached size
+lookups and allocation counters. It keeps them suspended through recovery and
+head publication, then refreshes reader geometry/inode/directory caches before
+resuming. Normal failed batches recover the unsealed intent and resume the old
+view. An unresolved recovery, refresh or reader transport error makes the session
+unusable; close it and start a new session to recover before serving more reads.
+A reported error after sealing may still correspond to a committed batch: inspect
+the recovered head before retrying a non-idempotent request.
+
+The private binary pipe protocol bounds paths to 4096 bytes and individual reads
+to 1 MiB. The Python API accepts canonical absolute UTF-8 paths, explicit bounded
+read ranges, sizes and free-block/free-inode counters. The reader resolves each
+request afresh; persistent open-file handles and permission enforcement are still
+absent. The image identity and resident reader process are retained across
+successful transactions. Locks protect cooperating processes, not external disk
+writers. Full-image hashes and process/pipe transport still make this a correctness
+prototype rather than a final low-latency mounted implementation.
+
+The session matrix checks the actual native read gate before and after a commit,
+concurrent read/write and write/write requests, competing-session exclusion,
+normal failed batches, injected producer/recovery failures, sticky reader death,
+restart recovery after a torn page and unchanged image identity. It checks sizes,
+bytes and cached counters through the same reader process, compares debugfs and
+runs e2fsck on all 12 configurations. Mounted writes, physical devices and the
 installed reader remain unchanged.

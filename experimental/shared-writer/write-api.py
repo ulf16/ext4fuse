@@ -56,26 +56,29 @@ def encode(operations):
 
 def apply(root, producer, operations):
     request = encode(operations)
-    # One global lock covers recovery, request staging, generation preparation,
-    # commit and head advancement; avoid mutating the process environment.
     with chain.locked(root) as root:
-        state = chain.recover_locked(root)
-        proposed = root / f"g-{state['head'] + 1:08d}"
-        if state['head'] >= 99_999_998 or proposed.exists() or proposed.is_symlink():
-            raise ValueError('invalid next generation')
-        state['pending'] = state['head'] + 1
-        inplace.seal(root, 'chain-state', state)
-        proposed.mkdir(mode=0o700); directory(root)
-        request_path = proposed / 'operations'
-        request_path.write_bytes(request)
-        adapter = proposed / 'request-producer'
-        # repr creates Python string literals, never shell source. Data stays in
-        # a bounded binary request retained with the generation until retirement.
-        executable = str(Path(producer).absolute())
-        adapter.write_text('#!/usr/bin/env python3\nimport os,sys\nos.environ["EXT4_MUTATION_REQUEST"] = ' + repr(str(request_path)) + '\nos.execv(' + repr(executable) + ', [' + repr(executable) + '] + sys.argv[1:])\n')
-        adapter.chmod(0o700)
-        inplace.capture_overlay(root / 'image.img', proposed, adapter)
-        return chain.recover_locked(root)
+        return apply_encoded_locked(root, producer, request)
+
+
+def apply_encoded_locked(root, producer, request):
+    """Internal entry point; caller owns chain-lock for the entire operation."""
+    state = chain.recover_locked(root)
+    proposed = root / f"g-{state['head'] + 1:08d}"
+    if state['head'] >= 99_999_998 or proposed.exists() or proposed.is_symlink():
+        raise ValueError('invalid next generation')
+    state['pending'] = state['head'] + 1
+    inplace.seal(root, 'chain-state', state)
+    proposed.mkdir(mode=0o700); directory(root)
+    request_path = proposed / 'operations'
+    request_path.write_bytes(request)
+    adapter = proposed / 'request-producer'
+    # repr creates Python string literals, never shell source. Data stays in
+    # a bounded binary request retained with the generation until retirement.
+    executable = str(Path(producer).absolute())
+    adapter.write_text('#!/usr/bin/env python3\nimport os,sys\nos.environ["EXT4_MUTATION_REQUEST"] = ' + repr(str(request_path)) + '\nos.execv(' + repr(executable) + ', [' + repr(executable) + '] + sys.argv[1:])\n')
+    adapter.chmod(0o700)
+    inplace.capture_overlay(root / 'image.img', proposed, adapter)
+    return chain.recover_locked(root)
 
 
 if __name__ == '__main__':

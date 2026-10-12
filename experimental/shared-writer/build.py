@@ -48,12 +48,14 @@ mutation = compile_source(here / 'mutation.c', 'mutation')
 producer = compile_source(here / 'mutation-producer.c', 'mutation-producer')
 step = compile_source(here / 'step-writer.c', 'step-writer')
 verify = compile_source(here / 'verify-reader.c', 'verify-reader')
+server = compile_source(here / 'reader-server.c', 'reader-server')
 watch = compile_source(here / 'reader-watch.c', 'reader-watch')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
 for name, objects in [('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
                       ('mutation-producer', [overlay, manager, mutation, producer]),
+                      ('reader-server', [overlay, reader, server, *reader_objects]),
                       ('reader-watch', [overlay, reader, watch, *reader_objects]),
                       ('verify-reader', [overlay, reader, verify, *reader_objects]),
                       ('overlay-unit', [overlay, unit]),
