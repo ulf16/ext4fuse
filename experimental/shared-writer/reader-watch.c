@@ -1,11 +1,13 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  * Keep the same production-reader instance and base descriptor across commits.
  */
+#include "ops.h"
 #include "overlay.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/statvfs.h>
 int main(int argc, char **argv) {
   if (argc != 2)
     return 2;
@@ -15,6 +17,15 @@ int main(int argc, char **argv) {
   char command[64];
   while (fgets(command, sizeof(command), stdin)) {
     int e = 0;
+    if (!strcmp(command, "stats\n")) {
+      struct statvfs st;
+      if (op_statfs("/", &st))
+        return 2;
+      printf("%llu %llu\n", (unsigned long long)st.f_bfree,
+             (unsigned long long)st.f_ffree);
+      fflush(stdout);
+      continue;
+    }
     if (!strcmp(command, "pause\n")) {
       overlay_suspend(active_overlay);
       e = reader_absent("/not-present") == EBUSY ? 0 : EIO;

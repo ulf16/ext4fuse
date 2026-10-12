@@ -238,7 +238,8 @@ concurrency or kernel-cache invalidation. Caller coordination remains mandatory.
 The chain matrix covers aborted preparation, partial writes, completed transactions
 with unpublished heads, head publication interruption, repeated recovery,
 predecessor mismatch and lock exclusion on all 12 configurations. Each successful
-head is checked by the resident reader and e2fsck. Image inode and original-source
+head is checked by the resident reader and e2fsck. Cached reader free-block and
+free-inode counters are compared with independent debugfs output after refresh. Image inode and original-source
 hash are preserved throughout. The earlier single-transaction interface and its
 recovery tests remain supported. Physical devices, mounted writes and packaging
 remain unchanged.

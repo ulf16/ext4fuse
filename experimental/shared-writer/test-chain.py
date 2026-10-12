@@ -7,6 +7,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -47,6 +48,17 @@ def command(reader, text, expected=0):
     checks += 1
 
 
+def counters(reader, image):
+    global checks
+    reader.stdin.write('stats\n'); reader.stdin.flush()
+    actual = tuple(map(int, reader.stdout.readline().split()))
+    result = subprocess.run(['debugfs', '-R', 'stats', str(image)], capture_output=True, text=True)
+    assert result.returncode == 0
+    expected = tuple(int(re.search(r'Free ' + name + r':\s+(\d+)', result.stdout).group(1)) for name in ('blocks', 'inodes'))
+    assert actual == expected, ('stale reader counters', actual, expected)
+    checks += 1
+
+
 with tempfile.TemporaryDirectory(prefix='chain-test-', dir=args.work) as root:
     root = Path(root)
     for source in sorted(fixtures.glob('*-csum*.img')):
@@ -62,6 +74,7 @@ with tempfile.TemporaryDirectory(prefix='chain-test-', dir=args.work) as root:
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         try:
             command(reader, 0)
+            counters(reader, image)
             # Failed preparation, partial page writes, completed-but-unpublished
             # heads, and normal commits all feed the same reader and image inode.
             phases = ('chain-intent', 'record', 'prepared', 'half:0:0', 'complete',
@@ -86,6 +99,7 @@ with tempfile.TemporaryDirectory(prefix='chain-test-', dir=args.work) as root:
                     assert recovered['head'] == committed
                 command(reader, 'resume')
                 command(reader, committed)
+                counters(reader, image)
                 assert image.stat().st_ino == identity
                 result = subprocess.run(['e2fsck', '-f', '-n', str(image)], capture_output=True)
                 assert result.returncode == 0, result.stdout + result.stderr
@@ -115,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix='chain-test-', dir=args.work) as root:
         assert sha(source) == before
         rows.append({'fixture': source.stem, 'commits_after_initial': committed,
                      'same_inode': True, 'resident_reader_refreshed': True,
-                     'pending_reader_blocked': True, 'fsck_clean': True, 'source_unchanged': True})
+                     'cached_counters_refreshed': True, 'pending_reader_blocked': True, 'fsck_clean': True, 'source_unchanged': True})
         print('PASS chain', source.stem, flush=True)
     assert len(rows) == 12
 report = {'checks': checks, 'result': 'passed', 'configurations': rows,
