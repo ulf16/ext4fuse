@@ -34,6 +34,7 @@ python3 experimental/shared-writer/build.py --work "$work" --sanitize
 "$work/overlay-unit"
 python3 experimental/shared-writer/run-matrix.py --work "$work"
 python3 experimental/shared-writer/test-durable.py --work "$work"
+python3 experimental/shared-writer/test-block-log.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -104,3 +105,36 @@ power-cut certification. This full-image approach uses one complete extra image
 and hashes the complete images; it establishes the offline recovery protocol,
 not an efficient journal for mounted writes. There are still no in-place writes,
 JBD2 integration, physical-device writes or changes to the installed reader.
+
+## Incremental block redo experiment
+
+`block-log.py prepare SOURCE CANDIDATE TARGET JOURNAL` replaces the full-image
+snapshot with fixed records for changed 4096-byte pages. Each little-endian record
+contains its page index, SHA-256 preimage digest, SHA-256 replacement digest and
+replacement bytes. The sealed manifest binds the log to the full source and result
+hashes, image size and record count. Records must be strictly increasing, unique
+and within the image. Recovery enforces a 1,048,576-record cap and exact log length,
+validates every record before writing an output, and rejects trailing data.
+
+`block-log.py recover JOURNAL` copies the immutable source into a private staging
+image, applies the verified records, verifies the reconstructed image hash, syncs
+it, then links the completed image to the target and syncs the directory. An
+interrupted copy/replay is rebuilt on retry. The staging inode remains linked to
+the target so repeated publication can be distinguished from an unrelated target.
+A staging file with additional links is rejected before truncation. Concurrent
+cooperating recoveries use an exclusive manifest lock. A no-change log is valid.
+
+This reduces persistent log space to changed pages, plus 72 bytes per page and a
+small manifest. Preparation still scans both images, and offline recovery still
+copies a complete image. It does not yet stream dirty pages directly from the C
+overlay or apply transactions in place. The same private-directory, immutable-input
+and advisory-lock assumptions as the snapshot experiment apply. No physical-device
+writes or writable mounts are enabled. Retain the original source until the log
+is retired; do not edit the published image while using the log for recovery.
+
+The additional matrix interrupts preparation, base copying and individual page
+replay, verifies e2fsck and source/result hashes, and checks corrupt payloads,
+preimages, duplicate/out-of-range records, invalid counts, trailing records,
+incorrect final hashes, target collisions, no-op transactions and lock exclusion.
+It checks that these fixtures' logs use less than one tenth of the source size.
+Process-interruption validation still does not certify physical power-loss safety.
