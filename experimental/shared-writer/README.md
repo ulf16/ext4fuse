@@ -38,6 +38,7 @@ python3 experimental/shared-writer/test-block-log.py --work "$work"
 python3 experimental/shared-writer/test-overlay-log.py --work "$work"
 python3 experimental/shared-writer/test-inplace.py --work "$work"
 python3 experimental/shared-writer/test-chain.py --work "$work"
+python3 experimental/shared-writer/test-checkpoint.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -77,7 +78,7 @@ performance have not been benchmarked for this backend.
 - Resource/error bounds, fault injection at every durability boundary and independent
   native Linux recovery tests before any in-place write support is considered.
 
-No in-place commits, physical-device writes, FUSE write frontend or release change
+No production in-place commits, physical-device writes, FUSE write frontend or release change
 is introduced by this experiment.
 
 ## Durable full-image redo experiment
@@ -164,8 +165,8 @@ this does not add thread safety or a writable FUSE frontend.
 
 The source is still scanned for whole-image integrity binding, and recovery still
 builds a full output image. This step removes the intermediate full candidate
-export from log preparation; incremental in-place commits and JBD2 interoperability
-remain future work. Stream tests cover malformed headers, truncation, duplicates,
+export from log preparation; disposable in-place commits are described below, while JBD2 interoperability
+remains future work. Stream tests cover malformed headers, truncation, duplicates,
 bounds, preimages, trailing bytes, producer failure, and preparation/recovery
 interruptions across all 12 filesystem configurations. Recovered files are checked
 with debugfs and e2fsck; the C unit suite independently compares stream pages with
@@ -207,9 +208,9 @@ Only new disposable copies created by preparation are supported. There is no API
 to commit to an arbitrary existing image, block device, or mounted filesystem.
 Private directories and cooperating-process locks remain assumptions; concurrent
 external writers are unsupported. Tests simulate process termination and torn
-pages, not physical power loss or failed hardware. Mounted write support, native
-Linux journal interoperability, transaction chaining and log retirement are still
-future work. The installed read-only reader and Homebrew package are unchanged.
+pages, not physical power loss or failed hardware. Mounted write support and native
+Linux journal interoperability remain future work. Managed transaction chaining
+and log retirement are described below. The installed read-only reader and Homebrew package are unchanged.
 
 ## Managed transaction chains and reader refresh
 
@@ -224,9 +225,9 @@ Pending intent is synced before generation preparation. Recovery retains and
 renames incomplete preparation as an aborted directory if the image still matches
 the completed head. A sealed generation is recovered in place before the head
 advances. Crashes after image commit but before head publication recover through
-the pending generation's log and completed marker. The previous logs are retained;
-old-generation logs are not replayed once the chain has advanced. Log retirement
-and reconstruction of a lost chain-state file are not implemented.
+the pending generation's log and completed marker. Previous logs are retained until an explicit checkpoint retires them;
+old-generation logs are not replayed once the chain has advanced. Checkpoint-based
+restoration and its limits are described below.
 
 The `step-writer` test producer modifies and grows the same ext4 file each generation.
 The `reader-watch` harness keeps one production-reader instance and base descriptor
@@ -243,3 +244,34 @@ free-inode counters are compared with independent debugfs output after refresh. 
 hash are preserved throughout. The earlier single-transaction interface and its
 recovery tests remain supported. Physical devices, mounted writes and packaging
 remain unchanged.
+
+## Durable checkpoints and log retirement
+
+`chain.py checkpoint ROOT` requires a completed head with no pending generation.
+It verifies image identity and the complete head hash, validates all proposed
+retirement paths, then seals a checksummed checkpoint containing the head, image
+hash and identity. The checkpoint file and parent directory are synced before any
+logs are removed. It does not implicitly recover or commit a pending transaction.
+
+Retirement removes initial transaction logs, completed generation directories and
+abandoned preparation directories. It only accepts known log filenames, private
+owned directories on the same filesystem, and regular single-link owned files.
+Unexpected files, aliases and symlinks cause preflight rejection. Image data,
+chain state, chain lock, checkpoint and unrelated root files are preserved.
+Every unlink/rmdir is followed by directory fsync; interrupted cleanup is safely
+repeatable. The checkpoint is retained even after all older logs are gone.
+
+When chain-state is missing, recovery may restore it from a valid latest checkpoint
+whose image identity/hash still match and which has no successor directories.
+A stale checkpoint is rejected; this is not arbitrary reconstruction of a later
+history after state loss. A corrupt checkpoint fails its checksum and cannot
+authorize retirement. Append/commit continue normally after successful retirement.
+The private-directory/cooperating-process assumptions remain unchanged.
+
+The checkpoint matrix tests publication and deletion interruptions, repeated
+cleanup, state restoration after complete retirement, append and torn-write
+recovery afterward, pending-log preservation, corrupt/stale checkpoints,
+unexpected entries and lock exclusion on all 12 configurations. Image hashes and
+inode identity are unchanged by checkpointing, and e2fsck accepts the resulting
+images. Process interruption tests do not certify physical power-loss behavior.
+Mounted writes, JBD2 integration and real-device commits remain disabled.

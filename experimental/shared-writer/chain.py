@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Serialized generations on one managed disposable image; logs are retained."""
+"""Serialized generations on one managed disposable image with checkpoints."""
 import argparse
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import stat
 import uuid
@@ -28,11 +30,18 @@ def locked(root):
         yield root
 
 
-def read_state(root):
-    with regular(root / 'chain-state') as state:
+def read_state(root, name='chain-state'):
+    with regular(root / name) as state:
         if os.fstat(state.fileno()).st_size > 4096:
             raise ValueError('oversized chain state')
         value = json.load(state)
+    if name == 'checkpoint':
+        if not isinstance(value, dict) or set(value) != {'state', 'sha256'}:
+            raise ValueError('invalid checkpoint envelope')
+        expected = hashlib.sha256(json.dumps(value['state'], sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+        if value['sha256'] != expected:
+            raise ValueError('checkpoint checksum mismatch')
+        value = value['state']
     if set(value) != {'version', 'head', 'pending', 'sha256', 'device', 'inode', 'size'} or type(value['version']) is not int or value['version'] != 1:
         raise ValueError('invalid chain state')
     if type(value['head']) is not int or not 0 <= value['head'] < 99_999_999:
@@ -50,13 +59,21 @@ def read_state(root):
 def check_image(root, state, check_hash=True):
     with regular(root / 'image.img') as image:
         info = os.fstat(image.fileno())
-        if info.st_nlink != 1 or (info.st_dev, info.st_ino, info.st_size) != (state['device'], state['inode'], state['size']):
+        if info.st_uid != os.getuid() or info.st_nlink != 1 or (info.st_dev, info.st_ino, info.st_size) != (state['device'], state['inode'], state['size']):
             raise ValueError('chain image identity changed')
         if check_hash and digest(image) != state['sha256']:
             raise ValueError('chain image edited outside a transaction')
 
 
 def recover_locked(root):
+    if not (root / 'chain-state').exists() and (root / 'checkpoint').exists():
+        saved = read_state(root, 'checkpoint')
+        if saved['pending'] is not None:
+            raise ValueError('checkpoint contains a pending transaction')
+        check_image(root, saved)
+        if any(re.fullmatch(r'g-(\d{8})', p.name) and int(p.name[2:]) > saved['head'] for p in root.iterdir()):
+            raise ValueError('checkpoint is stale; successor history needs explicit repair')
+        inplace.seal(root, 'chain-state', saved)
     if not (root / 'chain-state').exists():
         inplace.recover(root)
         with regular(root / 'image.img') as image:
@@ -124,6 +141,87 @@ def append(root, producer):
         return recover_locked(root)
 
 
+GEN_FILES = {'transaction', 'transaction.pending', 'pages', 'started',
+             'started.pending', 'complete', 'complete.pending'}
+CAPTURE_FILES = {'blocks', 'manifest', 'manifest.pending'}
+
+
+def inspect_tree(path, device, capture=False):
+    info = os.lstat(path)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or
+        info.st_dev != device or info.st_mode & 0o077):
+        raise ValueError('unsafe retirement directory')
+    for entry in path.iterdir():
+        if not capture and entry.name == 'capture':
+            inspect_tree(entry, device, True)
+        else:
+            allowed = CAPTURE_FILES if capture else GEN_FILES
+            info = os.lstat(entry)
+            if (entry.name not in allowed or not stat.S_ISREG(info.st_mode) or
+                info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_dev != device):
+                raise ValueError('unexpected retirement entry')
+
+
+def remove_tree(path):
+    # All candidates are inspected before checkpoint publication/deletion. The
+    # chain lock protects cooperating actors; the private directory is trusted.
+    for entry in sorted(path.iterdir()):
+        if entry.name == 'capture' and stat.S_ISDIR(os.lstat(entry).st_mode):
+            remove_tree(entry)
+        else:
+            entry.unlink()
+            directory(path)
+            boundary('retire-entry')
+    path.rmdir()
+    directory(path.parent)
+    boundary('retire-directory')
+
+
+def checkpoint(root):
+    with locked(root) as root:
+        # Do not implicitly commit a pending transaction as part of cleanup.
+        state = read_state(root)
+        if state['pending'] is not None:
+            raise ValueError('recover pending generation before checkpointing')
+        check_image(root, state)
+        if (root / 'checkpoint').exists() or (root / 'checkpoint').is_symlink():
+            previous = read_state(root, 'checkpoint')
+            if previous['pending'] is not None or previous['head'] > state['head']:
+                raise ValueError('invalid checkpoint ancestry')
+            check_image(root, previous, check_hash=False)
+        candidates = []
+        root_files = []
+        device = os.lstat(root).st_dev
+        for entry in sorted(root.iterdir()):
+            generation = re.fullmatch(r'g-(\d{8})', entry.name)
+            aborted = re.fullmatch(r'aborted-[0-9a-f]{32}', entry.name)
+            if generation and int(generation.group(1)) > state['head']:
+                raise ValueError('untracked successor generation')
+            if generation or aborted:
+                inspect_tree(entry, device)
+                candidates.append(entry)
+            elif entry.name == 'capture':
+                inspect_tree(entry, device, True)
+                candidates.append(entry)
+            elif entry.name in GEN_FILES:
+                info = os.lstat(entry)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or info.st_dev != device:
+                    raise ValueError('unsafe initial transaction file')
+                root_files.append(entry)
+        boundary('checkpoint-validated')
+        encoded = json.dumps(state, sort_keys=True, separators=(',', ':')).encode()
+        inplace.seal(root, 'checkpoint', {'state': state, 'sha256': hashlib.sha256(encoded).hexdigest()})
+        boundary('checkpoint-published')
+        for entry in candidates:
+            remove_tree(entry)
+        for entry in root_files:
+            entry.unlink()
+            directory(root)
+            boundary('retire-entry')
+        boundary('retirement-complete')
+        return state
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
@@ -133,5 +231,6 @@ if __name__ == '__main__':
     p = commands.add_parser('append')
     p.add_argument('root'); p.add_argument('producer')
     commands.add_parser('recover').add_argument('root')
+    commands.add_parser('checkpoint').add_argument('root')
     args = vars(parser.parse_args()); action = args.pop('action')
     print(json.dumps(globals()[action](**args), sort_keys=True))

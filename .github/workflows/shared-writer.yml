@@ -35,6 +35,8 @@ jobs:
         run: python3 experimental/shared-writer/test-inplace.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify transaction chains and resident reader refresh
         run: python3 experimental/shared-writer/test-chain.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify checkpoints and interrupted log retirement
+        run: python3 experimental/shared-writer/test-checkpoint.py --work "$RUNNER_TEMP/shared-writer"
       - name: Save validation summary
         uses: actions/upload-artifact@v4
         with:
@@ -46,3 +48,4 @@ jobs:
             ${{ runner.temp }}/shared-writer/overlay-log-results.json
             ${{ runner.temp }}/shared-writer/inplace-results.json
             ${{ runner.temp }}/shared-writer/chain-results.json
+            ${{ runner.temp }}/shared-writer/checkpoint-results.json
