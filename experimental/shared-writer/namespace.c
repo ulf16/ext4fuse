@@ -33,11 +33,58 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
     struct ext2_inode in;
     if ((e = ext2fs_read_inode(fs, ino, &in)))
       return e;
-    if (in.i_links_count || (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFREG ||
+    if (in.i_links_count ||
+        ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFREG &&
+         (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR) ||
         (in.i_flags & GRANT_UNSUPPORTED))
       return EIO;
     list[(*count)++] = ino;
     ino = in.i_dtime;
+  }
+  /* Directory '..' references must form a bounded allocated ancestry tree;
+   * every unlinked ancestor belongs to this same validated orphan list. */
+  for (unsigned i = 0; i < *count; i++) {
+    struct ext2_inode in;
+    if ((e = ext2fs_read_inode(fs, list[i], &in)))
+      return e;
+    if ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
+      continue;
+    ext2_ino_t seen[PIN_LIMIT], node = list[i];
+    unsigned depth = 0;
+    for (;;) {
+      if (node == EXT2_ROOT_INO) {
+        ext2_ino_t parent;
+        e = namespace_directory_parent(fs, node, &parent);
+        if (e || parent != node)
+          return e ? e : EIO;
+        break;
+      }
+      if (depth == PIN_LIMIT)
+        return EIO;
+      for (unsigned j = 0; j < depth; j++)
+        if (seen[j] == node)
+          return EIO;
+      seen[depth++] = node;
+      if ((e = ext2fs_read_inode(fs, node, &in)))
+        return e;
+      if (!in.i_links_count) {
+        int found = 0;
+        for (unsigned j = 0; j < *count; j++)
+          if (list[j] == node)
+            found = 1;
+        if (!found)
+          return EIO;
+      }
+      ext2_ino_t parent;
+      if ((e = namespace_directory_parent(fs, node, &parent)))
+        return e;
+      if (node == EXT2_ROOT_INO) {
+        if (parent != node)
+          return EIO;
+        break;
+      }
+      node = parent;
+    }
   }
   return 0;
 }
@@ -109,9 +156,14 @@ errcode_t namespace_reap(ext2_filsys fs, const struct inode_pin *pins,
     return e;
   /* Reject malformed/stale broker pins before changing any metadata. */
   for (unsigned i = 0; i < count; i++) {
-    struct inode_grant g = {pins[i].inode, pins[i].generation, GRANT_READ, 0};
     struct ext2_inode in;
-    if ((e = grant_inode(fs, &g, &in)))
+    if ((e = ext2fs_read_inode(fs, pins[i].inode, &in)))
+      return e;
+    int directory = (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR;
+    struct inode_grant g = {pins[i].inode, pins[i].generation,
+                            directory ? GRANT_DIR_SEARCH : GRANT_READ,
+                            directory ? GRANT_DIRECTORY : 0};
+    if ((e = grant_inode_known(fs, &g, &in, list, n)))
       return e;
     for (unsigned j = 0; j < i; j++)
       if (pins[i].inode == pins[j].inode)
@@ -289,7 +341,7 @@ static errcode_t directory_check(ext2_filsys fs, ext2_ino_t ino,
   errcode_t e = ext2fs_read_inode(fs, ino, &in);
   if (e)
     return e;
-  if (in.i_links_count < 2)
+  if (in.i_links_count && in.i_links_count < 2)
     return EIO;
   struct dots dots = {.self = ino, .parent = parent, .new_parent = new_parent};
   e = ext2fs_dir_iterate(fs, ino, 0, NULL, directory_entries, &dots);
@@ -299,9 +351,43 @@ static errcode_t directory_check(ext2_filsys fs, ext2_ino_t ino,
     return EIO;
   if (empty && dots.other)
     return ENOTEMPTY;
-  if (empty && in.i_links_count != 2)
+  if (empty && in.i_links_count && in.i_links_count != 2)
     return EIO;
   return 0;
+}
+errcode_t namespace_directory_parent(ext2_filsys fs, ext2_ino_t ino,
+                                     ext2_ino_t *parent) {
+  if (!fs->inode_map) {
+    errcode_t e = ext2fs_read_inode_bitmap(fs);
+    if (e)
+      return e;
+  }
+  if (!ino || ino > fs->super->s_inodes_count ||
+      !ext2fs_test_inode_bitmap2(fs->inode_map, ino))
+    return EIO;
+  struct ext2_inode in;
+  errcode_t e = ext2fs_read_inode(fs, ino, &in);
+  if (e)
+    return e;
+  if ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR ||
+      (in.i_flags & (GRANT_UNSUPPORTED | EXT2_INDEX_FL | EXT4_CASEFOLD_FL)))
+    return EOPNOTSUPP;
+  e = ext2fs_lookup(fs, ino, "..", 2, NULL, parent);
+  if (!e && (!*parent || *parent > fs->super->s_inodes_count ||
+             !ext2fs_test_inode_bitmap2(fs->inode_map, *parent)))
+    e = EIO;
+  if (!e)
+    e = directory_check(fs, ino, *parent, !in.i_links_count, 0);
+  if (!e) {
+    struct ext2_inode ancestor;
+    e = ext2fs_read_inode(fs, *parent, &ancestor);
+    if (!e && (ancestor.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
+      e = EIO;
+    if (!e && ((ino == EXT2_ROOT_INO && *parent != ino) ||
+               (ino != EXT2_ROOT_INO && *parent == ino)))
+      e = EIO;
+  }
+  return e;
 }
 static errcode_t no_cycle(ext2_filsys fs, ext2_ino_t moving,
                           ext2_ino_t parent) {
@@ -336,7 +422,8 @@ static errcode_t no_cycle(ext2_filsys fs, ext2_ino_t moving,
   }
 }
 static errcode_t drop_directory(ext2_filsys fs, ext2_ino_t dir,
-                                const char *name, ext2_ino_t ino) {
+                                const char *name, ext2_ino_t ino,
+                                const struct inode_pin *pins, unsigned count) {
   errcode_t e = directory_check(fs, ino, dir, 1, 0);
   if (e)
     return e;
@@ -346,10 +433,24 @@ static errcode_t drop_directory(ext2_filsys fs, ext2_ino_t dir,
     e = ext2fs_read_inode(fs, ino, &in);
   if (!e) {
     in.i_links_count = 0;
-    e = ext2fs_write_inode(fs, ino, &in);
+    if (pinned(pins, count, ino, in.i_generation)) {
+      ext2_ino_t list[PIN_LIMIT];
+      unsigned n;
+      e = namespace_orphans(fs, list, &n);
+      if (!e && n == PIN_LIMIT)
+        e = ENOSPC;
+      if (!e) {
+        in.i_dtime = fs->super->s_last_orphan;
+        fs->super->s_last_orphan = ino;
+        ext2fs_mark_super_dirty(fs);
+      }
+    }
+    if (!e)
+      e = ext2fs_write_inode(fs, ino, &in);
   }
   if (!e)
-    e = reclaim(fs, ino);
+    e = pinned(pins, count, ino, in.i_generation) ? stamp(fs, ino, 0)
+                                                  : reclaim(fs, ino);
   if (!e)
     e = parent_links(fs, dir, -1);
   if (!e)
@@ -586,7 +687,7 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     }
   }
   if (!e && op->kind == MUT_RMDIR)
-    e = drop_directory(fs, from, name, ino);
+    e = drop_directory(fs, from, name, ino, pins, count);
   else if (!e && op->kind == MUT_UNLINK)
     e = drop(fs, from, name, ino, pins, count);
   else if (!e && op->kind == MUT_RENAME &&
@@ -595,8 +696,9 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     if (op->kind == MUT_LINK && in.i_links_count == 65535)
       e = EMLINK;
     if (!e && victim)
-      e = type == LINUX_S_IFDIR ? drop_directory(fs, to, newname, victim)
-                                : drop(fs, to, newname, victim, pins, count);
+      e = type == LINUX_S_IFDIR
+              ? drop_directory(fs, to, newname, victim, pins, count)
+              : drop(fs, to, newname, victim, pins, count);
     unsigned filetype = type == LINUX_S_IFDIR   ? EXT2_FT_DIR
                         : type == LINUX_S_IFLNK ? EXT2_FT_SYMLINK
                                                 : EXT2_FT_REG_FILE;

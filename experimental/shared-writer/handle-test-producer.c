@@ -20,8 +20,10 @@ int main(int argc, char **argv) {
              *number = getenv("EXT4_TEST_HANDLE_INODE"),
              *next = getenv("EXT4_TEST_HANDLE_ORPHAN_NEXT"),
              *links = getenv("EXT4_TEST_HANDLE_LINKS"),
-             *size = getenv("EXT4_TEST_HANDLE_SIZE");
-  if (!mode && !gen && !flags && !acl && !cap && !next && !links && !size)
+             *size = getenv("EXT4_TEST_HANDLE_SIZE"),
+             *parent = getenv("EXT4_TEST_HANDLE_PARENT");
+  if (!mode && !gen && !flags && !acl && !cap && !next && !links && !size &&
+      !parent)
     return 2;
   if (!path)
     path = "/existing-file";
@@ -61,6 +63,14 @@ int main(int argc, char **argv) {
           (in.i_flags & ~(EXT2_IMMUTABLE_FL | EXT2_APPEND_FL)) |
           (strtoul(flags, NULL, 0) & (EXT2_IMMUTABLE_FL | EXT2_APPEND_FL));
     e = ext2fs_write_inode_full(fs, ino, (struct ext2_inode *)&in, bytes);
+  }
+  if (!e && parent) {
+    ext2_ino_t old_parent;
+    e = ext2fs_lookup(fs, ino, "..", 2, NULL, &old_parent);
+    if (!e)
+      e = ext2fs_unlink(fs, ino, "..", old_parent, 0);
+    if (!e)
+      e = ext2fs_link(fs, ino, "..", strtoul(parent, NULL, 0), EXT2_FT_DIR);
   }
   if (!e && (acl || cap)) {
     struct ext2_xattr_handle *h = NULL;

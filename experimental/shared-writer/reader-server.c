@@ -90,22 +90,33 @@ int main(int argc, char **argv) {
     }
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
-    int shape = op == 13   ? (!pathlen || offset || length)
-                : op == 12 ? (pathlen || offset || length)
-                : op == 6 ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
-                             offset || length)
-                : op == 7 ? (!pathlen || offset < 1 || offset > 3 || length > 1)
-                : op >= 8 ? (pathlen != 8 || (op != 8 && (offset || length)))
-                : (op == 1 || op == 2) ? !pathlen
-                                       : (pathlen || offset || length);
-    if (op < 1 || op > 13 || pathlen > 4096 || length > READ_LIMIT ||
-        offset > INT64_MAX || shape || (op == 1 && (offset || length))) {
+    int shape =
+        op == 19 || op == 20 ? (pathlen < 9 || offset || length)
+        : op == 18 ? (pathlen != 8 || (offset != 1 && offset != 4) || length)
+        : op >= 15 && op <= 17 ? (pathlen != 8 || offset || length)
+        : op == 14 ? (!pathlen || (offset != 1 && offset != 4) || length)
+        : op == 13 ? (!pathlen || offset || length)
+        : op == 12 ? (pathlen || offset || length)
+        : op == 6  ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
+                      offset || length)
+        : op == 7  ? (!pathlen || offset < 1 || offset > 3 || length > 1)
+        : op >= 8  ? (pathlen != 8 || (op != 8 && (offset || length)))
+        : op == 1 || op == 2 ? !pathlen
+                             : (pathlen || offset || length);
+    if (op < 1 || op > 20 || pathlen > ((op == 19 || op == 20) ? 4104 : 4096) ||
+        length > READ_LIMIT || offset > INT64_MAX || shape ||
+        (op == 1 && (offset || length))) {
       result = 2;
       break;
     }
-    char path[4097];
+    char path[4105];
     if (fread(path, 1, pathlen, stdin) != pathlen ||
-        ((op <= 2 || op == 7 || op == 13) && memchr(path, 0, pathlen))) {
+        ((op <= 2 || op == 7 || op == 13 || op == 14) &&
+         memchr(path, 0, pathlen))) {
+      result = 2;
+      break;
+    }
+    if ((op == 19 || op == 20) && memchr(path + 8, 0, pathlen - 8)) {
       result = 2;
       break;
     }
@@ -114,7 +125,7 @@ int main(int argc, char **argv) {
     uint64_t size = 0;
     unsigned char *data = NULL, counts[16];
     size_t bytes = 0;
-    if (op >= 7 && op <= 12) {
+    if ((op >= 7 && op <= 12) || op >= 14) {
       e = handles_dispatch(argv[1], enforce ? &credentials : NULL, op,
                            (unsigned char *)path, pathlen, offset, length,
                            &size, &data, &bytes);

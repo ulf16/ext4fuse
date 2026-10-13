@@ -3,19 +3,26 @@
 #include "namespace.h"
 #include <errno.h>
 int grant_valid(const struct inode_grant *g) {
-  return !g || !g->inode || !g->access || g->access > 3 ||
-                 g->flags > GRANT_APPEND ||
+  if (!g || !g->inode)
+    return EINVAL;
+  if (g->flags == GRANT_DIRECTORY)
+    return g->access == GRANT_DIR_READ || g->access == GRANT_DIR_SEARCH ||
+                   g->access == (GRANT_DIR_READ | GRANT_DIR_SEARCH)
+               ? 0
+               : EINVAL;
+  return !g->access || g->access > 3 || g->flags > GRANT_APPEND ||
                  (g->flags && !(g->access & GRANT_WRITE))
              ? EINVAL
              : 0;
 }
-errcode_t grant_inode(ext2_filsys fs, const struct inode_grant *g,
-                      struct ext2_inode *in) {
+static errcode_t identity(ext2_filsys fs, const struct inode_grant *g,
+                          struct ext2_inode *in) {
   if (fs->super->s_creator_os != EXT2_OS_LINUX)
     return EOPNOTSUPP;
   if (grant_valid(g))
     return EINVAL;
-  if (g->inode < EXT2_FIRST_INODE(fs->super) ||
+  if ((g->inode < EXT2_FIRST_INODE(fs->super) &&
+       !(g->inode == EXT2_ROOT_INO && g->flags == GRANT_DIRECTORY)) ||
       g->inode > fs->super->s_inodes_count)
     return ESTALE;
   errcode_t e = fs->inode_map ? 0 : ext2fs_read_inode_bitmap(fs);
@@ -27,21 +34,43 @@ errcode_t grant_inode(ext2_filsys fs, const struct inode_grant *g,
   if (e)
     return e;
   if (in->i_generation != g->generation ||
-      (in->i_mode & LINUX_S_IFMT) != LINUX_S_IFREG)
+      (in->i_mode & LINUX_S_IFMT) !=
+          (g->flags == GRANT_DIRECTORY ? LINUX_S_IFDIR : LINUX_S_IFREG))
     return ESTALE;
-  if (!in->i_links_count) {
-    ext2_ino_t list[PIN_LIMIT];
-    unsigned n;
-    int found = 0;
-    e = namespace_orphans(fs, list, &n);
-    if (e)
-      return e;
-    for (unsigned i = 0; i < n; i++)
-      if (list[i] == g->inode)
-        found = 1;
-    if (!found)
-      return ESTALE;
-  } else if (in->i_dtime)
+  if (in->i_links_count && in->i_dtime)
     return ESTALE;
+  if (g->flags == GRANT_DIRECTORY && in->i_links_count == 1)
+    return EIO;
+  if (g->flags == GRANT_DIRECTORY &&
+      (in->i_flags & (EXT2_INDEX_FL | EXT4_CASEFOLD_FL)))
+    return EOPNOTSUPP;
   return in->i_flags & GRANT_UNSUPPORTED ? EOPNOTSUPP : 0;
+}
+static errcode_t member(const struct inode_grant *g,
+                        const struct ext2_inode *in, const ext2_ino_t *list,
+                        unsigned n) {
+  if (in->i_links_count)
+    return 0;
+  for (unsigned i = 0; i < n; i++)
+    if (list[i] == g->inode)
+      return 0;
+  return ESTALE;
+}
+errcode_t grant_inode_known(ext2_filsys fs, const struct inode_grant *g,
+                            struct ext2_inode *in, const ext2_ino_t *list,
+                            unsigned n) {
+  if (n > PIN_LIMIT || (n && !list))
+    return EINVAL;
+  errcode_t e = identity(fs, g, in);
+  return e ? e : member(g, in, list, n);
+}
+errcode_t grant_inode(ext2_filsys fs, const struct inode_grant *g,
+                      struct ext2_inode *in) {
+  errcode_t e = identity(fs, g, in);
+  if (e || in->i_links_count)
+    return e;
+  ext2_ino_t list[PIN_LIMIT];
+  unsigned n;
+  e = namespace_orphans(fs, list, &n);
+  return e ? e : member(g, in, list, n);
 }

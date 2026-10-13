@@ -46,6 +46,7 @@ python3 experimental/shared-writer/test-policy.py --work "$work"
 python3 experimental/shared-writer/test-handles.py --work "$work"
 python3 experimental/shared-writer/test-namespace.py --work "$work"
 python3 experimental/shared-writer/test-directories.py --work "$work"
+python3 experimental/shared-writer/test-directory-refs.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -79,7 +80,7 @@ performance have not been benchmarked for this backend.
 - Incremental durable transactions and in-place crash recovery; the full-image redo
   experiment below is not an ext4 journal commit.
 - Feature admission, corruption handling and complete mutation semantics, including
-  ownership, ACLs, attributes and directory-handle/cwd lifetime; basic file,
+  ownership, ACLs, attributes and full mounted frontend semantics; basic file,
   directory and symlink namespace mutations are now exercised offline.
 - Concurrency, reader/writer cache invalidation and stable inode/file-handle lifetime.
 - FUSE frontend semantics, device locking, journal interaction and multi-mount protection.
@@ -645,8 +646,8 @@ reclamation skips block punching because `i_block` contains target bytes rather
 than block numbers. Symlinks have no file handles in this API and are reclaimed
 immediately after their final link is removed. Regular files replaced by a
 symlink remain pinned for their existing open handles using the preceding orphan
-mechanism. Directory handles, active cwd references and removed-but-open directory
-lifetime are still absent; these are required before a mounted frontend.
+mechanism. Directory handles, session cwd and removed-but-open directory lifetime are
+described below; a full mounted frontend remains absent.
 
 `Session.readlink(path)` returns target **bytes** using the unchanged native
 symlink reader. The private pipe command 13 checks the reader pause gate,
@@ -665,3 +666,81 @@ cross-parent rename. debugfs independently inspects topology/metadata, the nativ
 reader compares file/link bytes, and e2fsck checks each successful configuration.
 Physical-device writes, FUSE write callbacks and installed reader packaging are
 unchanged. Indexed/casefold directory mutation remains rejected.
+
+## Directory handles and session cwd lifetime
+
+Credential-bound sessions support `opendir(path)` returning `DirectoryHandle`,
+with `stat()` (inode/generation/mode/link count/size), `size()`, `listdir()` (names,
+excluding dot entries), `path()`, `dup()` and explicit/context-manager close.
+Directory read access is checked at open and retained after mode/ACL changes;
+file data reads, writes, truncation and writer grants reject directory tokens.
+File and directory tokens share the 128-slot table. Copies and cross-session
+objects are rejected before issuing native requests; duplicate directories get
+independent tokens and retain the original read grant. Metadata and identity are
+checked on every request; detected stale generations remain stale for that slot.
+
+`chdir(path)` and `fchdir(directory_handle)` install an independently owned,
+search-only cwd reference after checking current search permission. They never
+consume the caller's public handle. A new cwd slot/pin closure is acquired before
+releasing the old one; quota/search failures preserve the current cwd. An error
+while cleaning up the already released old reference is reported after the new
+cwd has been installed, and orphan cleanup is retried by later batches/sessions.
+Initial cwd is a virtual immutable `/` without a slot. `getcwd()` reconstructs a
+linked path from current inode ancestry, so ancestor rename does not strand a
+saved pathname. `cwd_stat()` exposes identity even for a removed cwd. Absolute
+chdir ignores a stale/removed current cwd. No host process cwd or credentials are
+changed by this API.
+
+Relative session paths now resolve from cwd identity: existing read/write/open,
+readlink and mutation helpers use the current parent path, and relative `chdir`
+walks dot/dotdot components through retained inodes. Absolute operation paths
+retain their existing strict canonical validation; symlinks are not followed.
+Administrative sessions without credentials retain absolute operations and may
+use simple root-relative canonical paths, but cannot allocate directory/cwd
+references. The broker converts relative operation parents to absolute paths
+before using the existing writer protocol. This is not a complete openat/dirfd
+API: ordinary operations still recheck the reconstructed ancestor path's current
+permissions, and byte-only non-UTF-8 operation names remain outside the encoder.
+
+A removed directory has link count zero and remains on the legacy orphan chain
+while a directory/cwd reference exists. Its original dot entries, generation,
+data and attributes remain allocated privately so `..` continues to reference
+its parent. The public directory listing is empty and logical stat size is zero;
+`path()`/`getcwd()` return ENOENT until the cwd leaves that detached node. Creating
+entries beneath a removed cwd fails ENOENT, while `chdir("..")` can escape a
+removed directory and its removed parents. Rename replacement preserves the old
+empty directory for its handles/cwd while the new directory occupies its name.
+Closed handles never switch to a replacement inode at the same path.
+
+The live pin snapshot includes the unique ancestors of every directory/cwd
+reference through root. This prevents a removed parent from being freed/reused
+while a descendant still retains a dotdot pointer. Shared ancestry is deduplicated;
+root is never a removable orphan or non-root pin. The union of file/dir/ancestor
+identities is limited to 128, independently of the slot limit. Opening a reference
+which exceeds either bound fails EMFILE and leaves existing references/cwd intact.
+The same validated orphan list is cached within one immutable/staged filesystem
+context during snapshot/reap identity checks to avoid repeated ancestry validation.
+
+Orphan admission now permits zero-link regular files and empty directories only.
+Removed-directory dot entries, allocated parent types, bounded/cycle-free ancestry
+and membership of every zero-link ancestor are checked before reclamation.
+Final reference close, cwd departure, session shutdown and crash restart reclaim
+unpinned directory data/xattrs/inodes and decrement directory allocation statistics
+through the same durable staged transaction engine. File orphan behavior remains
+unchanged. Restart drops all session-local cwd/handle references and starts at `/`.
+Independent e2fsck recovery of removed-directory orphan trees is tested on copies
+after the coordinator has exited.
+
+Private reader commands 14–20 implement directory open, stat, listing, path,
+duplication, cwd traversal and relative-parent reconstruction. They use the same
+pause gate as file reads; only reference release is allowed while suspended.
+Directory namespace/type/bitmap checks remain in libext2fs and production data
+reads remain native. `test-directory-refs.py` covers moved cwd identity, public and
+private references, read/search distinctions, removed-parent escape, replacement,
+failed batches/producers, actual torn rmdir, session/crash release, stale/copy
+rejection, slot and 128-ancestor quota boundaries, and checksum-valid corrupt
+ancestry which must fail refresh/attach without reclamation. All 12 filesystem
+configurations run with sanitizers and independent filesystem checks. Indexed/
+casefold directory references and mutation, symlink-following path resolution,
+complete directory stream offsets/openat semantics, FUSE write callbacks and
+physical-device writes remain unimplemented.

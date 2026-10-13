@@ -160,6 +160,27 @@ jobs:
           name: directory-symlink-validation
           path: ${{ runner.temp }}/shared-writer/directories-results.json
 
+  directory-references:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build existing reader and experimental overlay with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Check overlay publication, randomized reads and resource limits
+        run: '"$RUNNER_TEMP/shared-writer/overlay-unit"'
+      - name: Verify mutations, rollback and independent filesystem integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify directory handles, cwd and removed ancestry lifetime
+        run: python3 experimental/shared-writer/test-directory-refs.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save directory reference validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: directory-reference-validation
+          path: ${{ runner.temp }}/shared-writer/directory-refs-results.json
+
   permission-policy:
     runs-on: ubuntu-latest
     timeout-minutes: 15

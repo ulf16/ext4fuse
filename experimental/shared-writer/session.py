@@ -38,6 +38,7 @@ class Session:
         self._process = None
         self._files = set()
         self._file_key = object()
+        self._cwd = None
         self._lock = chain.locked(root)
         self.root = self._lock.__enter__()
         self.producer = Path(producer).absolute()
@@ -106,7 +107,8 @@ class Session:
                     or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10) and count)
                     or (op == 13 and (count != size or count > 4095))
                     or (op == 12 and (count % 8 or count > 128*8))
-                    or (not error and ((op == 7 and count != 24) or (op == 11 and count != 16)))):
+                    or (not error and ((op in (7,14,18,19) and count != 24) or (op in (11,15) and count != 16)))
+                    or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
         except BaseException:
@@ -129,19 +131,85 @@ class Session:
             raise ValueError('invalid path components')
         return encoded
 
-    def size(self, path):
-        path = self._path(path)
+    def _absolute(self, path):
+        if not isinstance(path,str):raise ValueError('path must be a string')
+        if path.startswith('/'):return self._path(path)
+        raw=path.encode('utf-8')
+        if not raw or len(raw)>4096 or b'\0' in raw or any(not p or len(p.encode('utf-8'))>255 for p in path.split('/')):
+            raise ValueError('invalid relative path')
+        if self.credentials is None:return self._path('/'+path)
+        parent,_,leaf=path.rpartition('/')
+        if leaf in ('.','..'):
+            parent=path;leaf=''
+        else:parent=parent or '.'
+        payload=self._cwd_token()+parent.encode('utf-8')
+        _,base=self._rpc(20,payload)
+        result=base.decode('utf-8')
+        if leaf:result=result.rstrip('/')+'/'+leaf
+        return self._path(result)
+
+    def _cwd_token(self):
+        return self._file(self._cwd) if self._cwd is not None else struct.pack('<Q',0)
+
+    def _directory(self, reply, access):
+        _,data=reply
+        token,inode,generation,granted,flags=struct.unpack('<QIIII',data)
+        if not token or not inode or granted!=access or flags!=2:
+            self._failed=True;raise OSError(errno.EIO,'invalid directory open result')
+        handle=DirectoryHandle(self,token,self._file_key)
+        self._files.add(handle);return handle
+
+    def opendir(self, path):
         with self._mutex:
             self._ready()
-            return self._rpc(1, path)[0]
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'directory handles require bound credentials')
+            return self._directory(self._rpc(14,self._absolute(path),4),4)
+
+    def getcwd(self):
+        with self._mutex:
+            self._ready()
+            if self._cwd is None:return '/'
+            return os.fsdecode(self._rpc(17,self._cwd_token())[1])
+
+    def cwd_stat(self):
+        with self._mutex:
+            self._ready()
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'cwd metadata requires bound credentials')
+            return DirectoryHandle._stat(self._rpc(15,self._cwd_token()))
+
+    def _replace_cwd(self, handle):
+        old=self._cwd;self._cwd=handle
+        if old is not None:old.close()
+
+    def chdir(self, path):
+        if not isinstance(path,str):raise ValueError('path must be a string')
+        raw=path.encode('utf-8')
+        if not raw or len(raw)>4096 or b'\0' in raw:raise ValueError('invalid cwd path')
+        with self._mutex:
+            self._ready()
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'cwd requires bound credentials')
+            token=struct.pack('<Q',0) if path.startswith('/') else self._cwd_token()
+            handle=self._directory(self._rpc(19,token+raw),8)
+            self._replace_cwd(handle)
+
+    def fchdir(self, handle):
+        with self._mutex:
+            self._ready()
+            token=self._file(handle)
+            if not isinstance(handle,DirectoryHandle):raise OSError(errno.ENOTDIR,'not a directory handle')
+            self._replace_cwd(self._directory(self._rpc(18,token,1),8))
+
+    def size(self, path):
+        with self._mutex:
+            self._ready()
+            return self._rpc(1, self._absolute(path))[0]
 
     def read(self, path, offset=0, length=LIMIT):
-        path = self._path(path)
         if type(offset) is not int or not 0 <= offset <= 2**63 - 1 or type(length) is not int or not 0 <= length <= LIMIT:
             raise ValueError('read bounds')
         with self._mutex:
             self._ready()
-            return self._rpc(2, path, offset, length)[1]
+            return self._rpc(2, self._absolute(path), offset, length)[1]
 
     def counters(self):
         with self._mutex:
@@ -157,8 +225,16 @@ class Session:
             self._ready()
             if not isinstance(operations,list) or not 1<=len(operations)<=64:
                 raise ValueError('expected 1..64 operations')
+            normalized=[]
+            for operation in operations:
+                if not isinstance(operation,dict):raise ValueError('invalid operation')
+                op=dict(operation)
+                op['path']=self._absolute(op.get('path')).decode('utf-8')
+                if op.get('kind') in ('link','rename'):
+                    op['target']=self._absolute(op.get('target')).decode('utf-8')
+                normalized.append(op)
             _, pins = self._rpc(12)
-            return self._apply_request(write_api.encode_broker(operations,self._credentials,pins))
+            return self._apply_request(write_api.encode_broker(normalized,self._credentials,pins))
 
     def _cleanup_orphans(self):
         head,pins=self._rpc(12)
@@ -184,10 +260,9 @@ class Session:
         return self.apply([dict(kind='symlink',path=path,target=target)])
 
     def readlink(self, path):
-        path=self._path(path)
         with self._mutex:
             self._ready()
-            return self._rpc(13,path)[1]
+            return self._rpc(13,self._absolute(path))[1]
 
     def _apply_request(self, request):
         with self._mutex:
@@ -217,7 +292,6 @@ class Session:
             return dict(self.state)
 
     def open(self, path, access='r', *, append=False, truncate=False):
-        path = self._path(path)
         if access not in ('r','w','rw') or type(append) is not bool or type(truncate) is not bool:
             raise ValueError('invalid open options')
         rights={'r':1,'w':2,'rw':3}[access]
@@ -227,7 +301,7 @@ class Session:
             self._ready()
             if self._credentials is None:
                 raise OSError(errno.EOPNOTSUPP,'handles require bound credentials')
-            _, data = self._rpc(7,path,rights,int(append))
+            _, data = self._rpc(7,self._absolute(path),rights,int(append))
             token,inode,generation,granted,flags = struct.unpack('<QIIII',data)
             if not token or not inode or granted!=rights or flags!=int(append):
                 self._failed=True
@@ -252,6 +326,7 @@ class Session:
         with self._mutex:
             if self._closed:
                 return
+            self._cwd=None
             tokens=[handle._token for handle in self._files]
             for handle in self._files:
                 handle._closed = True
@@ -348,3 +423,47 @@ class FileHandle:
             if not self._owner._closed and not self._owner._failed:
                 self._owner._rpc(10,struct.pack('<Q',self._token))
                 self._owner._cleanup_orphans()
+
+
+class DirectoryHandle(FileHandle):
+    """Read grants and inode identity survive rename and removal; no file data I/O."""
+    @staticmethod
+    def _stat(reply):
+        size,data=reply
+        inode,generation,mode,links=struct.unpack('<IIII',data)
+        return dict(inode=inode,generation=generation,mode=mode,links=links,size=size)
+
+    def stat(self):
+        with self._owner._mutex:
+            return self._stat(self._owner._rpc(15,self._owner._file(self)))
+
+    def listdir(self):
+        with self._owner._mutex:
+            raw=self._owner._rpc(16,self._owner._file(self))[1]
+            names=[];offset=0
+            while offset<len(raw):
+                if offset+2>len(raw):break
+                length=struct.unpack_from('<H',raw,offset)[0];offset+=2
+                if not 1<=length<=255 or offset+length>len(raw):break
+                name=raw[offset:offset+length];offset+=length
+                if b'/' in name or b'\0' in name or name in (b'.',b'..'):break
+                names.append(os.fsdecode(name))
+            else:return names
+            self._owner._failed=True;raise OSError(errno.EIO,'invalid directory listing')
+
+    def path(self):
+        with self._owner._mutex:
+            return os.fsdecode(self._owner._rpc(17,self._owner._file(self))[1])
+
+    def dup(self):
+        with self._owner._mutex:
+            return self._owner._directory(self._owner._rpc(18,self._owner._file(self),4),4)
+
+    def _no_data(self):
+        with self._owner._mutex:
+            self._owner._file(self)
+            raise OSError(errno.EISDIR,'directory has no file data operations')
+
+    def read(self,*args,**kwargs):return self._no_data()
+    def write(self,*args,**kwargs):return self._no_data()
+    def truncate(self,*args,**kwargs):return self._no_data()

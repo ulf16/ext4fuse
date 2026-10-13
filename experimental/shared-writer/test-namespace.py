@@ -175,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix='namespace-',dir=args.work) as directory
                              (lambda:s.link('/target','/readonly/x'),errno.EACCES),
                              (lambda:s.link('/target','/symdir/x'),errno.ELOOP)]:
                 atomic(s,op,error)
-            for target in ('relative','/a/../b','/','/a//b'):
+            for target in ('/a/../b','/','/a//b'):
                 atomic(s,lambda target=target:s.rename('/target',target),ValueError)
             # Source search, rather than write, permits a hardlink from a read-only parent.
             s.link('/readonly/owned','/readonly-source-link');s.unlink('/readonly-source-link')

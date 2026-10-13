@@ -47,6 +47,7 @@ prototype = compile_source(here / 'prototype.c', 'prototype')
 policy_core = compile_source(here / 'policy-core.c', 'policy-core')
 policy_fs = compile_source(here / 'policy-fs.c', 'policy-fs')
 policy_acl = compile_source(repo / 'acl.c', 'policy-acl')
+directory_ref = compile_source(here / 'directory-ref.c', 'directory-ref')
 namespace = compile_source(here / 'namespace.c', 'namespace')
 grant = compile_source(here / 'grant.c', 'grant')
 handles = compile_source(here / 'handles.c', 'handles')
@@ -66,7 +67,7 @@ for name, objects in [('prototype', [overlay, manager, reader, prototype, *reade
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
                       ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, mutation, producer]),
                       ('handle-test-producer', [overlay, manager, handle_test]),
-                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, mutation, handles, reader, server, *server_readers]),
+                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, mutation, directory_ref, handles, reader, server, *server_readers]),
                       ('reader-watch', [overlay, reader, watch, *reader_objects]),
                       ('verify-reader', [overlay, reader, verify, *reader_objects]),
                       ('policy-unit', [policy_core, policy_acl, policy_unit]),
