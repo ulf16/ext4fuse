@@ -101,7 +101,7 @@ errcode_t mutation_parent_at(ext2_filsys fs, const struct mutation *op,
     if (op->kind == MUT_UNLINK || op->kind == MUT_WRITE ||
         op->kind == MUT_TRUNCATE)
       return EISDIR;
-    if (op->kind == MUT_RENAME || special.inode == EXT2_ROOT_INO)
+    if (op->kind == MUT_RENAME || e == EBUSY)
       return EBUSY;
     size_t n = strlen(path);
     while (n && path[n - 1] == '/')

@@ -178,7 +178,9 @@ with tempfile.TemporaryDirectory(prefix='openat-',dir=args.work) as temp:
                                (lambda:s.unlinkat(d,'.',remove_directory=True),errno.EINVAL),
                                (lambda:s.renameat(d,'.',dest,'bad'),errno.EBUSY),
                                (lambda:s.mkdirat(None,'/'),errno.EEXIST),
-                               (lambda:s.unlinkat(None,'/',remove_directory=True),errno.EBUSY)]:
+                               (lambda:s.unlinkat(None,'/',remove_directory=True),errno.EBUSY),
+                               (lambda:s.unlinkat(None,'.',remove_directory=True),errno.EINVAL),
+                               (lambda:s.unlinkat(None,'..',remove_directory=True),errno.ENOTEMPTY)]:
                 atomic(s,call,error)
             # Slow symlinks use block data, relative targets start at the link's
             # own parent, and absolute targets ignore an inaccessible ancestor.
