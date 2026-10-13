@@ -91,7 +91,13 @@ int main(int argc, char **argv) {
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
     int shape =
-        op == 27   ? (pathlen != 12 || length < 8)
+        op == 30   ? (pathlen != 8 || offset || length)
+        : op == 31 ? (pathlen < 9 || offset || length)
+        : op == 32 ? (pathlen != 8 || offset || length)
+        : op == 33 ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
+                      offset || length)
+        : op == 34 ? (pathlen < 9 || offset > 7 || length)
+        : op == 27 ? (pathlen != 12 || length < 8)
         : op == 28 ? (pathlen != 8 || length)
         : op == 29 ? (pathlen != 8 || offset || length)
         : op == 23 ? (pathlen || offset || length)
@@ -112,8 +118,9 @@ int main(int argc, char **argv) {
         : op >= 8  ? (pathlen != 8 || (op != 8 && (offset || length)))
         : op == 1 || op == 2 ? !pathlen
                              : (pathlen || offset || length);
-    if (op < 1 || op > 29 ||
-        pathlen > ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26)
+    if (op < 1 || op > 34 ||
+        pathlen > ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26 ||
+                    op == 31 || op == 34)
                        ? 4104
                        : 4096) ||
         length > READ_LIMIT || offset > INT64_MAX || shape ||
@@ -128,7 +135,8 @@ int main(int argc, char **argv) {
       result = 2;
       break;
     }
-    if ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26) &&
+    if ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26 || op == 31 ||
+         op == 34) &&
         memchr(path + 8, 0, pathlen - 8)) {
       result = 2;
       break;
@@ -138,13 +146,14 @@ int main(int argc, char **argv) {
     uint64_t size = 0;
     unsigned char *data = NULL, counts[16];
     size_t bytes = 0;
-    if ((op >= 7 && op <= 12) || op >= 14) {
+    if ((op >= 7 && op <= 12) || (op >= 14 && op != 33)) {
       e = handles_dispatch(argv[1], enforce ? &credentials : NULL, op,
                            (unsigned char *)path, pathlen, offset, length,
                            &size, &data, &bytes);
-    } else if (op == 6) {
-      e = enforce ? EPERM
-                  : policy_decode((unsigned char *)path, pathlen, &credentials);
+    } else if (op == 6 || op == 33) {
+      e = enforce && op == 6
+              ? EPERM
+              : policy_decode((unsigned char *)path, pathlen, &credentials);
       if (!e)
         enforce = 1;
     } else if (op == 3) {

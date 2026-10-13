@@ -114,6 +114,9 @@ class Session:
                     or (not error and op==28 and size>=2**63-1)
                     or (not error and op==29 and size)
                     or (op==26 and (count!=size or count>4095))
+                    or (not error and op in (30,31) and count!=128)
+                    or (not error and op==32 and count!=80)
+                    or (op in (33,34) and (count or size))
                     or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
@@ -305,6 +308,26 @@ class Session:
 
     def symlinkat(self, target, directory, path):
         return self.applyat([dict(kind='symlink',path=path,target=target)],directory)
+
+    def _mount_context(self, credentials):
+        """Private authenticated mount broker entry; not JSON caller input."""
+        if not isinstance(credentials,Credentials):raise ValueError('invalid mount context')
+        with self._mutex:
+            self._ready();self._rpc(33,credentials.encode());self._credentials=credentials
+
+    def _mount_stat(self, path=None, handle=None):
+        with self._mutex:
+            self._ready()
+            payload=self._file(handle) if handle is not None else struct.pack('<Q',0)+self._at_path(path)
+            return self._rpc(30 if handle is not None else 31,payload)[1]
+
+    def _mount_geometry(self):
+        with self._mutex:
+            self._ready();return self._rpc(32,struct.pack('<Q',0))[1]
+
+    def _mount_access(self, path, want):
+        with self._mutex:
+            self._ready();self._rpc(34,struct.pack('<Q',0)+self._at_path(path),want)
 
     def getcwd(self):
         with self._mutex:

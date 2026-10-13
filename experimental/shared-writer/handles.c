@@ -2,6 +2,7 @@
 #include "handles.h"
 #include "directory-ref.h"
 #include "directory-stream.h"
+#include "mount-metadata.h"
 #include "ops.h"
 #include "overlay.h"
 #include "path-at.h"
@@ -185,7 +186,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
   int root_request = 0;
   if (command != 7 && command != 12 && command != 14) {
     if ((command == 19 || command == 20 || command == 22 || command == 25 ||
-         command == 26)
+         command == 26 || command == 31 || command == 34)
             ? bytes < 9
         : command == 27 ? bytes != 12
         : command == 24 ? bytes != 24
@@ -194,7 +195,8 @@ int handles_dispatch(const char *image, const struct credentials *c,
     uint64_t token = le(path, 8);
     if (!token &&
         (command == 15 || command == 17 || command == 19 || command == 20 ||
-         command == 21 || command == 22 || command == 25 || command == 26))
+         command == 21 || command == 22 || command == 25 || command == 26 ||
+         command == 30 || command == 31 || command == 32 || command == 34))
       root_request = 1;
     else {
       for (unsigned i = 0; i < HANDLE_LIMIT; i++)
@@ -317,13 +319,13 @@ int handles_dispatch(const char *image, const struct credentials *c,
     if (e == ESTALE)
       h->stale = 1;
     int directory = h->grant.flags == GRANT_DIRECTORY;
-    if (!e && command >= 15 && !directory)
+    if (!e && command >= 15 && command != 30 && !directory)
       e = ENOTDIR;
     if (!e && directory && (command == 8 || command == 11))
       e = EISDIR;
     if (!e && ((command == 8 && !(h->grant.access & GRANT_READ)) ||
                (command == 11 && !(h->grant.access & GRANT_WRITE)) ||
-               ((command == 16 || command >= 27) &&
+               ((command == 16 || (command >= 27 && command <= 29)) &&
                 !(h->grant.access & GRANT_DIR_READ))))
       e = EBADF;
     if (!e)
@@ -375,6 +377,21 @@ int handles_dispatch(const char *image, const struct credentials *c,
     if (!e && command == 29) {
       directory_stream_clear(&h->stream);
       *size = 0;
+    }
+    if (!e && command == 30)
+      e = mount_inode_stat(fs, h->grant.inode, data, count);
+    if (!e && command == 32)
+      e = mount_geometry(fs, data, count);
+    if (!e && (command == 31 || command == 34)) {
+      struct path_result r;
+      e = path_at(fs, h->grant.inode, (const char *)path + 8, c,
+                  command == 34 ? AT_FOLLOW : 0, &r);
+      if (!e && command == 31)
+        e = mount_inode_stat(fs, r.inode, data, count);
+      if (!e && command == 34)
+        e = policy_inode(fs, r.inode, c, offset);
+      if (!e && command == 34)
+        *size = 0;
     }
     if (!e && command == 17) {
       e = directory_path(fs, h->grant.inode, data, count);

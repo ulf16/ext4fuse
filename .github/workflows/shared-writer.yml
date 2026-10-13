@@ -219,6 +219,49 @@ jobs:
           name: directory-stream-validation
           path: ${{ runner.temp }}/shared-writer/directory-streams-results.json
 
+  mount-broker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build mounted broker and native reader with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Prepare and validate filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify mounted metadata, credentials, cleanup and protocol
+        run: python3 experimental/shared-writer/test-mount-broker.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save mount broker validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mount-broker-validation
+          path: ${{ runner.temp }}/shared-writer/mount-broker-results.json
+
+  mounted-fuse3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native FUSE mount and filesystem dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require a working FUSE device
+        run: sudo modprobe fuse && test -c /dev/fuse && test -x /usr/bin/fusermount3
+      - name: Build experimental mounted frontend with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Prepare and independently validate filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify real mounted mutations, inode handles and recovery
+        run: python3 experimental/shared-writer/test-mounted-writer.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save mounted validation and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mounted-fuse3-validation
+          path: |
+            ${{ runner.temp }}/shared-writer/mounted-writer-results.json
+            ${{ runner.temp }}/shared-writer/mounted-writer-*/**/*-mount.log
+
   permission-policy:
     runs-on: ubuntu-latest
     timeout-minutes: 15

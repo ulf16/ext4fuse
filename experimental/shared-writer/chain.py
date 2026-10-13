@@ -112,6 +112,25 @@ def recover_locked(root):
     return state
 
 
+def clone(source, root):
+    """Pristine private clone, unlike init's demonstration mutation producer."""
+    source=Path(source).absolute();root=inplace.block.canonical(root)
+    root.mkdir(mode=0o700);directory(root.parent)
+    image=root/'image.img'
+    with regular(source) as base, image.open('xb') as copied:
+        fcntl.flock(base,fcntl.LOCK_SH|fcntl.LOCK_NB)
+        before=digest(base);base.seek(0)
+        while chunk:=base.read(1024*1024):copied.write(chunk)
+        copied.flush();inplace.sync(copied.fileno())
+        if digest(base)!=before:raise ValueError('source changed during clone')
+    directory(root)
+    with regular(image) as cloned:
+        info=os.fstat(cloned.fileno())
+        if info.st_size<=0 or info.st_size%4096 or digest(cloned)!=before:raise ValueError('invalid clone')
+        state=dict(version=1,head=0,pending=None,sha256=before,device=info.st_dev,inode=info.st_ino,size=info.st_size)
+    inplace.seal(root,'chain-state',state);return state
+
+
 def init(source, root, producer):
     inplace.prepare(source, root, producer)
     return recover(root)
@@ -225,6 +244,7 @@ def checkpoint(root):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='action', required=True)
+    p=commands.add_parser('clone');p.add_argument('source');p.add_argument('root')
     p = commands.add_parser('init')
     for name in ('source', 'root', 'producer'):
         p.add_argument(name)

@@ -1,8 +1,10 @@
 # Shared reader / libext2fs writer experiment
 
-This is an offline feasibility prototype, not writable mount support. It retains
-this repository's reader and uses libext2fs for filesystem mutations. Production
-reader and Homebrew behavior are unchanged.
+This experimental backend retains the native reader and uses libext2fs for
+filesystem mutations. It now includes an initial private FUSE 3 frontend for
+managed regular-file image copies. Production read-only reader and Homebrew
+behavior are unchanged. Physical-device and general-purpose writable mounts
+remain outside this prototype.
 
 The source image is opened read-only and must be a regular file. A custom
 libext2fs I/O manager stages writes in bounded 4 KiB copy-on-write pages. A test-only
@@ -77,7 +79,7 @@ within approximately 3% of the original reader for 4 KiB/64 KiB/1 MiB requests,
 with one unchanged metadata page staged. Dirty-data-heavy workloads and macFUSE
 performance have not been benchmarked for this backend.
 
-## Required before mounted writes
+## Required before general-purpose writable mounts
 
 - Incremental durable transactions and in-place crash recovery; the full-image redo
   experiment below is not an ext4 journal commit.
@@ -89,8 +91,8 @@ performance have not been benchmarked for this backend.
 - Resource/error bounds, fault injection at every durability boundary and independent
   native Linux recovery tests before any in-place write support is considered.
 
-No production in-place commits, physical-device writes, FUSE write frontend or release change
-is introduced by this experiment.
+No production in-place commits, physical-device writes or release change is
+introduced. The experimental mounted frontend below applies only to managed copies.
 
 ## Durable full-image redo experiment
 
@@ -253,8 +255,8 @@ predecessor mismatch and lock exclusion on all 12 configurations. Each successfu
 head is checked by the resident reader and e2fsck. Cached reader free-block and
 free-inode counters are compared with independent debugfs output after refresh. Image inode and original-source
 hash are preserved throughout. The earlier single-transaction interface and its
-recovery tests remain supported. Physical devices, mounted writes and packaging
-remain unchanged.
+recovery tests remain supported. Physical devices and production packaging
+remain unchanged; the initial managed-image mount is described below.
 
 ## Durable checkpoints and log retirement
 
@@ -745,7 +747,8 @@ failed batches/producers, actual torn rmdir, session/crash release, stale/copy
 rejection, slot and 128-ancestor quota boundaries, and checksum-valid corrupt
 ancestry which must fail refresh/attach without reclamation. All 12 filesystem
 configurations run with sanitizers and independent filesystem checks. Indexed/
-casefold directory references and mutation, FUSE write callbacks and physical-device writes remain unimplemented.
+casefold directory references and mutation and physical-device writes remain
+unimplemented. The initial managed-image FUSE frontend is described below.
 
 
 ## Directory-relative open and namespace operations
@@ -823,7 +826,7 @@ The tests compare core pathname outcomes against real host openat, exercise all
 cover permission revocation, renamed/removed dirfds, symlink budgets, raw names,
 quotas, failed producers, actual torn-page recovery and checkpoint retirement.
 
-Mounted writes, kernel dentry integration, special-file opens, O_PATH/O_TMPFILE, renameat2 extensions, openat2 containment policies and
+Production/device writes, complete kernel dentry integration, special-file opens, O_PATH/O_TMPFILE, renameat2 extensions, openat2 containment policies and
 indexed/casefold directory references/mutation remain outside this image-only
 prototype. Host descriptor inheritance/nonblocking/direct-I/O flags do not apply
 to its session objects.
@@ -886,8 +889,7 @@ size field carries the next cookie, followed by a little-endian EOF/count header
 and length-delimited inode/type/name/next-cookie records. The frontend validates
 record bounds, types, names, cookies, count and EOF before returning a page. A
 future FUSE filler can resume from the cookie of the last entry it accepted even
-if a native page contains additional records. No mounted write callbacks are
-introduced here.
+if a native page contains additional records. These stream primitives are also used by the initial mounted frontend below.
 
 `test-directory-streams.py` checks multiblock classic/extent directories on all
 12 block-size/checksum combinations, compares entry identities/types against
@@ -900,3 +902,106 @@ admission, malformed replies and release/restart. The isolated
 capacity reclamation without creating enormous fixtures. It is a test helper,
 not an installed frontend. Owned source images remain byte-identical and resulting
 filesystems are checked independently with e2fsck.
+
+
+## Initial experimental FUSE 3 mount
+
+`mount-broker.py` now connects a separate native FUSE 3 callback executable to the
+managed-image session. The frontend never opens an image or device itself. The
+Python broker holds the chain lock throughout the mount, authenticates requests
+from its private inherited pipes, serializes callbacks, and delegates reads to
+the existing native reader and mutations to the staged transaction engine.
+Foreground/single-threaded/private-owner mounts are fixed by the launcher; it
+accepts no allow_other, writeback-cache or arbitrary FUSE options.
+
+Build the experiment as above, then create a **pristine** managed copy (the older
+`chain.py init` intentionally runs demonstration mutations and is not used here):
+
+```sh
+python3 experimental/shared-writer/chain.py clone /path/to/source.img /path/to/private-chain
+mkdir /path/to/empty-owned-mountpoint
+python3 experimental/shared-writer/mount-broker.py --work "$work" \
+  --root /path/to/private-chain --mountpoint /path/to/empty-owned-mountpoint
+```
+
+The original source is read-only, hashed during copying, and never mounted or
+written. Existing managed directories are never overwritten by clone. The chain
+and image must be private/owned and the image must be a regular, single-link file;
+physical devices/symlink sources are rejected. The mountpoint must be empty,
+unmounted, owned by the launching user, and outside the chain/build programs.
+Unmount with `umount MOUNTPOINT` on macOS or `fusermount3 -u MOUNTPOINT` on Linux.
+The managed image and transaction logs remain available for inspection and restart.
+The chain lock excludes another cooperating controller/mount of that chain; it
+cannot prevent an unrelated program from directly editing its files.
+
+Supported callbacks are stat/getattr/statfs/access, open/create/read/write,
+truncate, flush/fsync, mkdir/rmdir, hard link, symlink/readlink, rename/unlink, and
+directory open/read/release/fsync. Rename extensions, chmod/chown/utimens, special
+file creation, xattr mutation and native mounted ACL delivery are not implemented.
+Unsupported metadata mutation returns ENOTSUP rather than pretending success.
+Mounted creation accepts ordinary permission bits (mkdir also permits sticky);
+setgid inheritance is still derived by the backend. The backend's 64 MiB mutation
+size, 128 handle/pin, 4 MiB stream and 32 MiB reader stream limits still apply.
+Larger existing regular files can be read, but writable sizing beyond that limit
+returns EFBIG. The mounted helper uses FUSE 3 only; the stable reader's FUSE 2 ABI
+is unaffected.
+
+The mount is owner-only and policy is enforced in the broker, including numeric
+POSIX ACL access/default inheritance, sticky/protected-link rules and immutable/
+append safeguards. Caller uid/gid/umask originate in FUSE context. Where FUSE can
+provide supplementary groups, those are supplied for the request; otherwise the
+broker uses only the authenticated primary gid, rather than granting the daemon's
+potentially broader group list. Linux kernel ACL enforcement is not advertised;
+macOS uses defer_permissions for the broker policy. nodev/nosuid are fixed.
+Lifecycle-only handle release/flush/fsync and kernel metadata requests can use the
+mount owner's context; they grant no new data or namespace access. This is not a
+multi-user mount or a replacement for the stable native macOS ACL reader.
+
+File/dir inode handles survive rename and the broker preserves their open-time
+rights. Every acknowledged write/namespace mutation is durably committed through
+the existing recovery engine; flush does not close a handle shared by dup/fork,
+and fsync checks the still-live handle/session after already committed writes.
+Regular-file direct I/O, zero attribute/entry/negative timeouts and disabled
+writeback/directory caching avoid serving stale kernel data after commits.
+Mounted stat reports actual write bits, Linux uid/gid, inode/link counts, logical
+size, allocated 512-byte sectors and validated timestamps. Space/inode counts are
+reported from current libext2fs metadata without the read-only flag.
+
+High-level macFUSE does not always provide an open fh on getattr after immediate
+unlink, so this frontend deliberately uses libfuse's standard deferred-removal
+policy. It temporarily renames open unlinked files to `.fuse_hidden...`, and
+libfuse adjusts the visible link count. Read/write/fstat/truncate/fsync remain
+usable until final close; libfuse then unlinks the temporary name. Live generated
+names are tracked by exact inode/generation for lifecycle-only cleanup if libfuse
+supplies a kernel/teardown context with no caller. This is volatile tracking, not
+a destructive prefix scan. **Abrupt frontend/broker termination can leave such
+names in the managed image**; recovery preserves them for inspection. Automatic
+hidden-name recovery and complete kernel lookup/forget/cwd handling require a
+low-level inode frontend. In particular, offline retained-cwd guarantees are not
+certified for a kernel cwd after its directory is removed. Directory snapshot
+cookies work through the mounted filler; subsequent calls resume from the last
+entry the kernel accepted.
+
+Mount admission requires a clean Linux-format filesystem and no journal replay.
+It rejects bigalloc, quota, ea_inode, active modern orphan records, inline data,
+encryption, verity, casefold, readonly and largedir feature profiles. An inactive
+orphan-file feature is accepted because the existing legacy-orphan backend has
+been independently fsck/recovery-tested on those same profiles. Indexed/casefold
+directory operations still fail EOPNOTSUPP at use. This is managed-image redo
+recovery, not native ext4/JBD2 journaling or physical-power-loss certification.
+The Python orchestration still hashes images and retains transaction history;
+mounted latency and long-running storage consumption are experimental.
+
+`test-mount-broker.py` checks pristine clone preservation, full inode/geometry
+metadata, per-request umask/context, foreign-caller rejection, grant lifetime,
+tracked hidden cleanup, rename/size errors and malformed transport across all
+12 profiles. `test-mounted-writer.py` requires a real working FUSE 3 installation
+and mounts only owned temporary clones. It verifies regular writes, sparse
+truncate/growth, allocation, fd metadata, hard-link/rename/unlink-open lifetime,
+dup/flush/fsync, append/exclusive creation, kernel buffer pagination of long
+names, symlink/directory changes, unsupported metadata operations, lock exclusion,
+restart, independent e2fsck/debugfs contents and unchanged inputs. Its first
+configuration forces half-page replay interruptions during mounted transactions.
+It never deletes a still-mounted tree; failed fixtures/logs are retained. The new
+Linux CI mount job requires /dev/fuse and fusermount3 rather than silently skipping
+kernel integration. Native macFUSE is validated separately on this host.
