@@ -91,7 +91,13 @@ int main(int argc, char **argv) {
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
     int shape =
-        op == 19 || op == 20 ? (pathlen < 9 || offset || length)
+        op == 23   ? (pathlen || offset || length)
+        : op == 24 ? (pathlen != 24 || offset || length)
+        : op == 22 ? (pathlen < 9 || !offset || offset > 255 || length)
+        : op == 25 ? (pathlen < 9 || offset > 1 || length)
+        : op == 26 ? (pathlen < 9 || offset || length)
+        : op == 21 ? (pathlen != 8 || offset || length)
+        : op == 19 || op == 20 ? (pathlen < 9 || offset || length)
         : op == 18 ? (pathlen != 8 || (offset != 1 && offset != 4) || length)
         : op >= 15 && op <= 17 ? (pathlen != 8 || offset || length)
         : op == 14 ? (!pathlen || (offset != 1 && offset != 4) || length)
@@ -103,7 +109,10 @@ int main(int argc, char **argv) {
         : op >= 8  ? (pathlen != 8 || (op != 8 && (offset || length)))
         : op == 1 || op == 2 ? !pathlen
                              : (pathlen || offset || length);
-    if (op < 1 || op > 20 || pathlen > ((op == 19 || op == 20) ? 4104 : 4096) ||
+    if (op < 1 || op > 26 ||
+        pathlen > ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26)
+                       ? 4104
+                       : 4096) ||
         length > READ_LIMIT || offset > INT64_MAX || shape ||
         (op == 1 && (offset || length))) {
       result = 2;
@@ -116,7 +125,8 @@ int main(int argc, char **argv) {
       result = 2;
       break;
     }
-    if ((op == 19 || op == 20) && memchr(path + 8, 0, pathlen - 8)) {
+    if ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26) &&
+        memchr(path + 8, 0, pathlen - 8)) {
       result = 2;
       break;
     }

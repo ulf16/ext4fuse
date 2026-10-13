@@ -47,6 +47,7 @@ python3 experimental/shared-writer/test-handles.py --work "$work"
 python3 experimental/shared-writer/test-namespace.py --work "$work"
 python3 experimental/shared-writer/test-directories.py --work "$work"
 python3 experimental/shared-writer/test-directory-refs.py --work "$work"
+python3 experimental/shared-writer/test-openat.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -693,14 +694,16 @@ changed by this API.
 
 Relative session paths now resolve from cwd identity: existing read/write/open,
 readlink and mutation helpers use the current parent path, and relative `chdir`
-walks dot/dotdot components through retained inodes. Absolute operation paths
-retain their existing strict canonical validation; symlinks are not followed.
+walks dot/dotdot components through retained inodes. Legacy absolute operation paths
+retain their existing strict canonical validation; legacy read/write/open/mutation
+helpers do not follow symlinks. `chdir` now uses the following resolver described
+below.
 Administrative sessions without credentials retain absolute operations and may
 use simple root-relative canonical paths, but cannot allocate directory/cwd
 references. The broker converts relative operation parents to absolute paths
-before using the existing writer protocol. This is not a complete openat/dirfd
-API: ordinary operations still recheck the reconstructed ancestor path's current
-permissions, and byte-only non-UTF-8 operation names remain outside the encoder.
+before using the existing writer protocol. These legacy helpers still recheck the reconstructed ancestor path's current
+permissions. Use the new `*at` methods below for direct inode-relative operations
+and byte-only names.
 
 A removed directory has link count zero and remains on the legacy orphan chain
 while a directory/cwd reference exists. Its original dot entries, generation,
@@ -741,6 +744,87 @@ failed batches/producers, actual torn rmdir, session/crash release, stale/copy
 rejection, slot and 128-ancestor quota boundaries, and checksum-valid corrupt
 ancestry which must fail refresh/attach without reclamation. All 12 filesystem
 configurations run with sanitizers and independent filesystem checks. Indexed/
-casefold directory references and mutation, symlink-following path resolution,
-complete directory stream offsets/openat semantics, FUSE write callbacks and
-physical-device writes remain unimplemented.
+casefold directory references and mutation, directory stream offsets, FUSE write
+callbacks and physical-device writes remain unimplemented.
+
+
+## Directory-relative open and namespace operations
+
+`Session.openat(dir, path, access="r", ...)` resolves directly from a live
+`DirectoryHandle`; `dir=None` means the session cwd. An absolute path ignores the
+supplied handle, including a closed, foreign or non-directory handle. Relative
+paths reject invalid handles and validate inode generation before lookup. No
+path reconstruction or search check above the starting directory is involved.
+Each actually traversed directory needs current search permission, even when
+its handle retains a read grant. Final file access is checked once at open;
+subsequent handle I/O retains that grant, as with the existing file API.
+
+The shared reader/writer resolver accepts repeated slashes, dot/dotdot, and
+trailing slashes which require a directory. Intermediate symbolic links are
+followed; relative targets start at the link's containing inode, absolute targets
+restart at image root. Dotdot walks after link expansion, rather than cancelling
+components lexically. Forty symlinks are allowed over the entire traversal;
+cycles/excess return ELOOP. Expanded paths are bounded to 4096 bytes and components
+to 255 bytes. Both `str` (filesystem encoding) and raw `bytes` paths/targets are
+supported by these private APIs; NUL is rejected. Links are read via libext2fs,
+while regular-file data continues through the existing native reader.
+
+Named portable options are `create`, `exclusive`, `mode` (ordinary permission
+bits), `append`, `truncate`, `nofollow` and `directory_only`. They correspond to
+the relevant [open/openat flags](https://man7.org/linux/man-pages/man2/open.2.html),
+not the platform-dependent numeric O_* constants. Opening a directory read-only
+returns a `DirectoryHandle` even without `directory_only`; writable directories
+fail EISDIR. Nofollow affects only the final component; a trailing slash still
+requires directory traversal. Create+exclusive rejects an existing final symlink
+without following it, including a dangling one. Ordinary create follows a
+dangling final link and creates its target when its parent exists. New files
+inherit the existing umask/default-ACL/setgid creation policy. A newly created
+mode-zero file still returns the requested open grant; its mode applies to later
+opens. Existing files require current mode/ACL permission. Append/immutable and
+capability safeguards remain enforced.
+
+Creation, exclusivity, truncation, and open-time permission checks run in one
+staged transaction under the session/chain lock. The reader reserves a handle
+slot and room for one new inode pin before image changes, so a quota failure does
+not create or truncate a file. This conservative reservation may reject a
+create/truncate open when all 128 pins are occupied even if the existing inode
+is already held. A private, fsynced `operations.result` records the writer's
+validated grant before its overlay is sealed; after commit/recovery the reader
+validates allocation/generation/type before activating the reserved token.
+Producer failures release the reservation and discard the staged mutations.
+Reports are checked as owned regular files and retired by normal checkpoints.
+An unresolved refresh/transport failure still fails the session closed. These
+handles are session-local objects, not host file descriptors.
+
+`statat(dir,path,follow_symlinks=True)`, `readlinkat`, `readat`, and `chdirat`
+share the inode resolver; `chdir` follows symlinks as well. Metadata currently
+contains inode/generation/mode/links/size, rather than a complete POSIX stat.
+`mkdirat`, `unlinkat(remove_directory=True)`, `symlinkat`, `renameat` and `linkat`
+perform namespace changes. Rename/link accept independent source and destination
+directory handles. Unlink and rename act on the final symlink itself. Link
+also defaults to the symlink inode; `follow_symlinks=True` selects its target.
+Sticky-bit, protected-link, directory-cycle, ACL and orphan rules still apply.
+`applyat(operations,dir,target_directory=...)` resolves each operation sequentially
+inside the staged filesystem, so later operations can use directories/links made
+or renamed earlier in the batch. An error rolls back the entire batch.
+
+Removed directory references retain dot/dotdot semantics and can escape through
+retained ancestors; they cannot receive new names. Cwd and directory handles keep
+the same independent ownership, generation and orphan-recovery rules. Absolute
+paths remain usable after cwd removal or staleness.
+
+Private commands 21–26 export directory capabilities, admit existing at-opens,
+reserve/activate committed opens, and perform statat/readlinkat. They validate
+framing, types, generation and the publication pause gate. The private V5 writer
+envelope contains separately validated source/destination directory grants per
+operation; JSON clients cannot supply inode capabilities or open-result grants.
+The tests compare core pathname outcomes against real host openat, exercise all
+12 block-size/layout/checksum configurations with sanitizers, verify fsck, and
+cover permission revocation, renamed/removed dirfds, symlink budgets, raw names,
+quotas, failed producers, actual torn-page recovery and checkpoint retirement.
+
+Mounted writes, kernel dentry integration, directory stream offsets, special-file
+opens, O_PATH/O_TMPFILE, renameat2 extensions, openat2 containment policies and
+indexed/casefold directory references/mutation remain outside this image-only
+prototype. Host descriptor inheritance/nonblocking/direct-I/O flags do not apply
+to its session objects.

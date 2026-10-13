@@ -44,13 +44,15 @@ int main(int argc, char **argv) {
   unsigned count = 0;
   size_t total = 0;
   struct credentials credentials = {0};
-  int enforce = 0, by_inode = 0, broker = 0;
+  int enforce = 0, by_inode = 0, broker = 0, at = 0;
   struct inode_pin pins[PIN_LIMIT] = {0};
   unsigned pin_count = 0;
   struct inode_grant grants[64] = {0};
   errcode_t e = read_all(input, header, 12);
   if (!e) {
-    if (!memcmp(header, "E4REQ004", 8))
+    if (!memcmp(header, "E4REQ005", 8))
+      enforce = broker = at = 1;
+    else if (!memcmp(header, "E4REQ004", 8))
       enforce = broker = 1;
     else if (!memcmp(header, "E4REQ003", 8))
       enforce = by_inode = 1;
@@ -70,7 +72,8 @@ int main(int argc, char **argv) {
     unsigned char context[16 + 4 * POLICY_GROUPS];
     e = read_all(input, header, 4);
     size_t bytes = little(header, 4);
-    if (!e && ((!broker || bytes) && (bytes < 16 || bytes > sizeof(context))))
+    if (!e &&
+        ((!broker || at || bytes) && (bytes < 16 || bytes > sizeof(context))))
       e = EINVAL;
     if (!e)
       e = read_all(input, context, bytes);
@@ -91,6 +94,22 @@ int main(int argc, char **argv) {
     }
   }
   for (unsigned i = 0; !e && i < count; i++) {
+    if (at) {
+      unsigned char bases[32];
+      e = read_all(input, bases, sizeof(bases));
+      for (unsigned j = 0; !e && j < 2; j++) {
+        struct inode_grant *g = j ? &ops[i].target_base : &ops[i].base;
+        g->inode = little(bases + j * 16, 4);
+        g->generation = little(bases + j * 16 + 4, 4);
+        g->access = little(bases + j * 16 + 8, 4);
+        g->flags = little(bases + j * 16 + 12, 4);
+        if (grant_valid(g) || g->flags != GRANT_DIRECTORY)
+          e = EINVAL;
+      }
+      ops[i].at = 1;
+      if (e)
+        break;
+    }
     e = read_all(input, header, 40);
     if (e)
       break;
@@ -98,11 +117,20 @@ int main(int argc, char **argv) {
     uint64_t length = little(header + 32, 8);
     if ((by_inode && pathlen != 16) || !pathlen || pathlen > 4096 ||
         length > 4 * 1024 * 1024 || length > 4 * 1024 * 1024 - total ||
-        little(header + 20, 4)) {
+        (!at && little(header + 20, 4))) {
       e = EINVAL;
       break;
     }
     ops[i].kind = little(header, 4);
+    if (ops[i].kind == MUT_OPEN && (!at || count != 1)) {
+      e = EINVAL;
+      break;
+    }
+    ops[i].at_flags = little(header + 20, 4);
+    if (ops[i].at_flags > 1 || (ops[i].at_flags && ops[i].kind != MUT_LINK)) {
+      e = EINVAL;
+      break;
+    }
     ops[i].mode = little(header + 8, 4);
     ops[i].uid = little(header + 12, 4);
     ops[i].gid = little(header + 16, 4);
@@ -155,8 +183,11 @@ int main(int argc, char **argv) {
     overlay_fail_writes(overlay, strtol(failure, NULL, 10));
   if (!e && broker)
     e = namespace_reap(fs, pins, pin_count);
+  struct inode_grant opened[64] = {0};
   for (unsigned i = 0; !e && i < count; i++)
-    e = ops[i].kind >= MUT_LINK && !by_inode
+    e = ops[i].kind == MUT_OPEN && at
+            ? mutation_open_at(fs, &ops[i], &credentials, &opened[i])
+        : ops[i].kind >= MUT_LINK && !by_inode
             ? namespace_apply(fs, &ops[i], enforce ? &credentials : NULL, pins,
                               pin_count)
         : by_inode
@@ -170,6 +201,32 @@ int main(int argc, char **argv) {
   }
   if (!e)
     e = overlay_publish(overlay);
+  if (!e && at && count == 1 && ops[0].kind == MUT_OPEN) {
+    size_t n = strlen(request);
+    char *report = malloc(n + 8);
+    if (!report)
+      e = ENOMEM;
+    else {
+      memcpy(report, request, n);
+      strcpy(report + n, ".result");
+      int out = open(report, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+      free(report);
+      unsigned char record[16];
+      uint32_t values[4] = {opened[0].inode, opened[0].generation,
+                            opened[0].access, opened[0].flags};
+      for (unsigned j = 0; j < 4; j++)
+        for (unsigned k = 0; k < 4; k++)
+          record[j * 4 + k] = values[j] >> (k * 8);
+      if (out < 0)
+        e = errno;
+      else {
+        if (write(out, record, 16) != 16 || fsync(out))
+          e = EIO;
+        if (close(out) && !e)
+          e = errno;
+      }
+    }
+  }
   if (!e)
     e = overlay_stream(overlay, STDOUT_FILENO);
   if (fs)

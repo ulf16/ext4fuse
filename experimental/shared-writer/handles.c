@@ -3,6 +3,7 @@
 #include "directory-ref.h"
 #include "ops.h"
 #include "overlay.h"
+#include "path-at.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,7 @@ extern struct struct_io_manager staged_manager;
 struct handle {
   uint64_t token;
   struct inode_grant grant;
-  int stale;
+  int stale, pending;
 };
 static struct handle table[HANDLE_LIMIT];
 static uint64_t last_token;
@@ -48,7 +49,7 @@ static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
     return valid;
   for (unsigned i = 0; i < HANDLE_LIMIT; i++) {
     struct handle *h = &table[i];
-    if (!h->token || h->stale)
+    if (!h->token || h->stale || h->pending)
       continue;
     struct ext2_inode in;
     errcode_t e = grant_inode_known(fs, &h->grant, &in, orphans, orphan_count);
@@ -134,16 +135,55 @@ int handles_dispatch(const char *image, const struct credentials *c,
                      unsigned command, const unsigned char *path, size_t bytes,
                      uint64_t offset, uint64_t length, uint64_t *size,
                      unsigned char **data, size_t *count) {
+  if (command == 23) {
+    if (!c)
+      return EPERM;
+    int ready = overlay_read(active_overlay, 0, 0, NULL, 1);
+    if (ready)
+      return ready;
+    ext2_filsys fs = NULL;
+    errcode_t e =
+        ext2fs_open(image, EXT2_FLAG_64BITS, 0, 0, &staged_manager, &fs);
+    struct inode_pin pins[PIN_LIMIT];
+    unsigned n = 0;
+    if (!e)
+      e = pin_snapshot(fs, pins, &n);
+    if (fs)
+      ext2fs_free(fs);
+    if (e)
+      return policy_errno(e);
+    if (n == PIN_LIMIT || last_token == UINT64_MAX)
+      return EMFILE;
+    struct handle *slot = NULL;
+    for (unsigned i = 0; !slot && i < HANDLE_LIMIT; i++)
+      if (!table[i].token)
+        slot = &table[i];
+    if (!slot)
+      return EMFILE;
+    *data = calloc(8, 1);
+    if (!*data)
+      return ENOMEM;
+    slot->token = ++last_token;
+    slot->pending = 1;
+    put(*data, slot->token, 8);
+    *count = 8;
+    return 0;
+  }
   if (!c && command != 12)
     return EPERM;
   struct handle *h = NULL, root = {0};
   int root_request = 0;
   if (command != 7 && command != 12 && command != 14) {
-    if ((command == 19 || command == 20) ? bytes < 9 : bytes != 8)
+    if ((command == 19 || command == 20 || command == 22 || command == 25 ||
+         command == 26)
+            ? bytes < 9
+        : command == 24 ? bytes != 24
+                        : bytes != 8)
       return EINVAL;
     uint64_t token = le(path, 8);
     if (!token &&
-        (command == 15 || command == 17 || command == 19 || command == 20))
+        (command == 15 || command == 17 || command == 19 || command == 20 ||
+         command == 21 || command == 22 || command == 25 || command == 26))
       root_request = 1;
     else {
       for (unsigned i = 0; i < HANDLE_LIMIT; i++)
@@ -159,6 +199,10 @@ int handles_dispatch(const char *image, const struct credentials *c,
       }
       if (h->stale)
         return ESTALE;
+      if (h->pending && command != 24)
+        return EBADF;
+      if (!h->pending && command == 24)
+        return EBADF;
     }
   }
   int ready = overlay_read(active_overlay, 0, 0, NULL, 1);
@@ -176,7 +220,33 @@ int handles_dispatch(const char *image, const struct credentials *c,
                                       GRANT_DIR_SEARCH, GRANT_DIRECTORY};
     h = &root;
   }
-  if (!e && (command == 7 || command == 14)) {
+  if (!e && command == 24) {
+    struct inode_grant g = {le(path + 8, 4), le(path + 12, 4), le(path + 16, 4),
+                            le(path + 20, 4)};
+    e = grant_inode(fs, &g, &in);
+    if (!e) {
+      h->grant = g;
+      h->pending = 0;
+      struct inode_pin pins[PIN_LIMIT];
+      unsigned n;
+      e = pin_snapshot(fs, pins, &n);
+      if (e) {
+        h->pending = 1;
+        memset(&h->grant, 0, sizeof(h->grant));
+      }
+    }
+    if (!e) {
+      *data = calloc(24, 1);
+      if (!*data)
+        e = ENOMEM;
+      else {
+        put(*data, h->token, 8);
+        memcpy(*data + 8, path + 8, 16);
+        *count = 24;
+        *size = EXT2_I_SIZE(&in);
+      }
+    }
+  } else if (!e && (command == 7 || command == 14)) {
     int directory = command == 14;
     if (directory ? (offset != 1 && offset != 4) || length
                   : (!offset || offset > 3 || length > 1 ||
@@ -246,7 +316,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
       e = EBADF;
     if (!e)
       *size = directory && !in.i_links_count ? 0 : EXT2_I_SIZE(&in);
-    if (!e && command == 11) {
+    if (!e && (command == 11 || command == 21)) {
       *data = calloc(16, 1);
       if (!*data)
         e = ENOMEM;
@@ -303,9 +373,67 @@ int handles_dispatch(const char *image, const struct credentials *c,
       if (!e)
         e = allocate(fs, &g, size, data, count);
     }
+    if (!e && command == 22) {
+      struct mutation op = {.kind = MUT_OPEN,
+                            .at = 1,
+                            .base = h->grant,
+                            .path = (const char *)path + 8,
+                            .offset = offset};
+      struct inode_grant g;
+      if (offset & (OPEN_CREATE | OPEN_EXCL | OPEN_TRUNC))
+        e = EINVAL;
+      else
+        e = mutation_open_at(fs, &op, c, &g);
+      if (!e)
+        e = allocate(fs, &g, size, data, count);
+    }
+    if (!e && (command == 25 || command == 26)) {
+      struct path_result r;
+      e = path_at(fs, h->grant.inode, (const char *)path + 8, c,
+                  command == 25 && offset ? AT_FOLLOW : 0, &r);
+      if (!e && command == 26) {
+        char *target = NULL;
+        e = path_readlink(fs, r.inode, &target, count);
+        if (!e) {
+          *data = (unsigned char *)target;
+          *size = *count;
+        }
+      } else if (!e) {
+        e = ext2fs_read_inode(fs, r.inode, &in);
+        if (!e) {
+          *data = calloc(16, 1);
+          if (!*data)
+            e = ENOMEM;
+          else {
+            put(*data, r.inode, 4);
+            put(*data + 4, in.i_generation, 4);
+            put(*data + 8, in.i_mode, 4);
+            put(*data + 12, in.i_links_count, 4);
+            *count = 16;
+            *size =
+                (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR && !in.i_links_count
+                    ? 0
+                    : EXT2_I_SIZE(&in);
+          }
+        }
+      }
+    }
     if (!e && (command == 19 || command == 20)) {
       ext2_ino_t ino = 0;
-      e = directory_walk(fs, h->grant.inode, (const char *)path + 8, c, &ino);
+      if (command == 19) {
+        struct path_result r;
+        e = path_at(fs, h->grant.inode, (const char *)path + 8, c, AT_FOLLOW,
+                    &r);
+        if (!e) {
+          ino = r.inode;
+          e = ext2fs_read_inode(fs, ino, &in);
+        }
+        if (!e && (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
+          e = ENOTDIR;
+        if (!e)
+          e = policy_inode(fs, ino, c, 1);
+      } else
+        e = directory_walk(fs, h->grant.inode, (const char *)path + 8, c, &ino);
       if (!e)
         e = ext2fs_read_inode(fs, ino, &in);
       struct inode_grant g = {ino, in.i_generation, GRANT_DIR_SEARCH,

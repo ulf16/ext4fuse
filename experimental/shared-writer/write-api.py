@@ -15,7 +15,7 @@ HEADER = struct.Struct('<IIIIIIQQ')
 KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6, 'mkdir': 7, 'rmdir': 8, 'symlink': 9}
 
 
-def encode(operations, credentials=None):
+def encode(operations, credentials=None, *, _at=False):
     if not isinstance(operations, list) or not 1 <= len(operations) <= 64:
         raise ValueError('expected 1..64 operations')
     if credentials is not None and not isinstance(credentials, Credentials):
@@ -26,18 +26,20 @@ def encode(operations, credentials=None):
         result += struct.pack('<I', len(context)) + context
     total = 0
     for op in operations:
-        if not isinstance(op, dict) or op.get('kind') not in KINDS:
+        if not isinstance(op, dict) or op.get('kind') not in (dict(KINDS,open=10) if _at else KINDS):
             raise ValueError('unknown operation')
-        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target'}
-        if set(op) - allowed or not isinstance(op.get('path'), str):
+        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target'} | ({'flags','follow_symlinks'} if _at else set())
+        if set(op) - allowed or not isinstance(op.get('path'),(str,bytes) if _at else str):
             raise ValueError('invalid operation fields')
-        path = op['path'].encode('utf-8')
+        path = os.fsencode(op['path']) if _at else op['path'].encode('utf-8')
         if not 1 <= len(path) <= 4096 or b'\0' in path:
             raise ValueError('invalid path')
         kind=op['kind']
+        if 'follow_symlinks' in op and type(op['follow_symlinks']) is not bool:
+            raise ValueError('invalid follow option')
         namespace=kind in ('link','rename','unlink','mkdir','rmdir','symlink')
         creating=kind in ('create','mkdir','symlink')
-        if namespace:
+        if namespace and not _at:
             candidates=(op['path'],op['target']) if kind in ('link','rename') and 'target' in op else (op['path'],)
             for candidate in candidates:
                 if not isinstance(candidate,str) or not candidate.startswith('/') or candidate=='/' or any(c in ('','.','..') or len(c.encode('utf-8'))>255 for c in candidate[1:].split('/')):
@@ -52,16 +54,20 @@ def encode(operations, credentials=None):
             if kind in ('link','rename','symlink'):allowed_fields.add('target')
             if kind=='mkdir':allowed_fields|={'mode','uid','gid'}
             if kind=='symlink':allowed_fields|={'uid','gid'}
+            if _at and kind=='link':allowed_fields.add('follow_symlinks')
             if set(op)-allowed_fields:raise ValueError('invalid namespace fields')
             if kind in ('link','rename','symlink'):
                 target=op.get('target')
-                if not isinstance(target,str):raise ValueError('target must be a string')
-                data=target.encode('utf-8')
+                if not isinstance(target,(str,bytes) if _at else str):raise ValueError('invalid target')
+                data=os.fsencode(target) if _at else target.encode('utf-8')
                 if not data or len(data)>4096 or b'\0' in data:raise ValueError('invalid target')
             else:data=b''
             offset=0
             if not creating:mode=uid=gid=0
             if kind=='symlink':mode=0o777
+        elif kind=='open' and _at:
+            if set(op)-{'kind','path','mode','flags'}:raise ValueError('invalid open fields')
+            offset=op.get('flags');data=b'';uid=gid=0
         elif kind=='truncate':
             if set(op)!={'kind','path','size'}:raise ValueError('truncate needs path and size')
             offset=op['size'];data=b''
@@ -78,7 +84,7 @@ def encode(operations, credentials=None):
         total += len(data)
         if total > 4 * 1024 * 1024 or offset + len(data) > 64 * 1024 * 1024:
             raise ValueError('transaction bounds')
-        result += HEADER.pack(KINDS[op['kind']], len(path), mode, uid, gid, 0, offset, len(data)) + path + data
+        result += HEADER.pack(10 if kind=='open' else KINDS[kind], len(path), mode, uid, gid, int(op.get('follow_symlinks',False)), offset, len(data)) + path + data
     return result
 
 
@@ -118,6 +124,23 @@ def encode_broker(operations, credentials, pins):
         raw=credentials.encode() if credentials else b''
         context=struct.pack('<I',len(raw))+raw; records=b''
     return b'E4REQ004'+count+context+struct.pack('<I',len(pins)//8)+pins+records
+
+
+def encode_at(operations, credentials, pins, bases):
+    """Private V5: per-operation directory capabilities, resolved in staged state."""
+    if not isinstance(credentials,Credentials) or len(bases)!=len(operations):
+        raise ValueError('invalid at context')
+    request=encode(operations,credentials,_at=True)
+    n=struct.unpack_from('<I',request,12)[0]
+    body=request[16+n:];offset=0;records=bytearray()
+    for pair in bases:
+        if len(pair)!=2 or any(not isinstance(g,bytes) or len(g)!=16 for g in pair):
+            raise ValueError('invalid directory capability')
+        fields=HEADER.unpack_from(body,offset);length=HEADER.size+fields[1]+fields[-1]
+        records+=pair[0]+pair[1]+body[offset:offset+length];offset+=length
+    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>1024:
+        raise ValueError('invalid pins')
+    return b'E4REQ005'+request[8:16+n]+struct.pack('<I',len(pins)//8)+pins+records
 
 
 def apply(root, producer, operations, credentials=None):

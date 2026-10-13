@@ -10,6 +10,7 @@ import struct
 import subprocess
 import threading
 import time
+from durable import regular
 import chain
 from credentials import Credentials
 
@@ -107,7 +108,9 @@ class Session:
                     or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10) and count)
                     or (op == 13 and (count != size or count > 4095))
                     or (op == 12 and (count % 8 or count > 128*8))
-                    or (not error and ((op in (7,14,18,19) and count != 24) or (op in (11,15) and count != 16)))
+                    or (not error and ((op in (7,14,18,19,22,24) and count != 24) or (op in (11,15,21,25) and count != 16)))
+                    or (not error and op==23 and count!=8)
+                    or (op==26 and (count!=size or count>4095))
                     or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
@@ -164,6 +167,141 @@ class Session:
             self._ready()
             if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'directory handles require bound credentials')
             return self._directory(self._rpc(14,self._absolute(path),4),4)
+
+    @staticmethod
+    def _at_path(path):
+        if not isinstance(path,(str,bytes)):raise ValueError('path must be str or bytes')
+        raw=os.fsencode(path)
+        if not raw:raise OSError(errno.ENOENT,'empty pathname')
+        if b'\0' in raw:raise ValueError('NUL in pathname')
+        if len(raw)>4096:raise OSError(errno.ENAMETOOLONG,'pathname limit')
+        return raw
+
+    def _at_token(self, directory, path):
+        # An absolute pathname ignores dirfd, even a released/non-directory fd.
+        if self._at_path(path).startswith(b'/'):return struct.pack('<Q',0)
+        if directory is None:return self._cwd_token()
+        token=self._file(directory)
+        if not isinstance(directory,DirectoryHandle):raise OSError(errno.ENOTDIR,'dirfd is not a directory')
+        return token
+
+    def _at_context(self, directory, path):
+        self._at_path(path)
+        return self._rpc(21,self._at_token(directory,path))[1]
+
+    def _opened(self, reply):
+        _,raw=reply
+        token,inode,generation,access,flags=struct.unpack('<QIIII',raw)
+        if not token or not inode or (flags==2 and access!=4) or (flags!=2 and (access not in (1,2,3) or flags>1)):
+            self._failed=True;raise OSError(errno.EIO,'invalid openat admission')
+        h=(DirectoryHandle if flags==2 else FileHandle)(self,token,self._file_key)
+        self._files.add(h);return h
+
+    def openat(self, directory, path, access='r', *, create=False, exclusive=False,
+               mode=0o666, append=False, truncate=False, nofollow=False, directory_only=False):
+        """Open from dirfd (None means cwd); absolute paths ignore dirfd.
+
+        Flags use portable named options, not host-dependent O_* integers.
+        Creation/truncation and open-time grants are one staged transaction.
+        """
+        if access not in ('r','w','rw') or any(type(v) is not bool for v in
+                (create,exclusive,append,truncate,nofollow,directory_only)):
+            raise ValueError('invalid openat options')
+        rights={'r':1,'w':2,'rw':3}[access]
+        if type(mode) is not int or not 0<=mode<=0o777 or (exclusive and not create) or ((append or truncate) and not rights&2) or (create and directory_only):
+            raise ValueError('invalid openat flag combination')
+        flags=rights|4*append|8*create|16*exclusive|32*truncate|64*nofollow|128*directory_only
+        raw=self._at_path(path)
+        with self._mutex:
+            self._ready()
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'openat requires bound credentials')
+            token=self._at_token(directory,path)
+            if not (create or truncate):return self._opened(self._rpc(22,token+raw,flags))
+            # Reserve a table slot and a new-inode pin before any image changes.
+            # The broker exports capabilities, never user-supplied inode numbers.
+            base=self._rpc(21,token)[1]
+            root=self._rpc(21,struct.pack('<Q',0))[1]
+            reserved=self._rpc(23)[1]
+            try:
+                _,pins=self._rpc(12)
+                op=dict(kind='open',path=path,flags=flags,mode=mode)
+                request=write_api.encode_at([op],self.credentials,pins,[(base,root)])
+                self._apply_request(request)
+                report=self.root/f"g-{self.state['head']:08d}"/'operations.result'
+                try:
+                    with regular(report) as result:
+                        grant=result.read(17)
+                except BaseException:
+                    self._failed=True;raise
+                if len(grant)!=16:
+                    self._failed=True;raise OSError(errno.EIO,'invalid committed open grant')
+                ino,generation,granted,grant_flags=struct.unpack('<IIII',grant)
+                expected=self.statat(directory,path,follow_symlinks=not nofollow)
+                is_dir=expected['mode'] & 0o170000 == 0o040000
+                if ((ino,generation)!=(expected['inode'],expected['generation']) or
+                        granted!=(4 if is_dir else rights) or grant_flags!=(2 if is_dir else int(append))):
+                    self._failed=True;raise OSError(errno.EIO,'committed open grant does not match request and image')
+                return self._opened(self._rpc(24,reserved+grant))
+            finally:
+                # Successful activation is now owned by the returned handle.
+                if not any(struct.pack('<Q',h._token)==reserved for h in self._files):
+                    if not self._failed:self._rpc(10,reserved)
+
+    def chdirat(self, directory, path):
+        raw=self._at_path(path)
+        with self._mutex:
+            self._ready()
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'cwd requires bound credentials')
+            self._replace_cwd(self._directory(self._rpc(19,self._at_token(directory,path)+raw),8))
+
+    def readat(self, directory, path, offset=0, length=LIMIT):
+        with self.openat(directory,path) as f:return f.read(offset,length)
+
+    def statat(self, directory, path, *, follow_symlinks=True):
+        if type(follow_symlinks) is not bool:raise ValueError('invalid follow option')
+        raw=self._at_path(path)
+        with self._mutex:
+            self._ready()
+            return DirectoryHandle._stat(self._rpc(25,self._at_token(directory,path)+raw,int(follow_symlinks)))
+
+    def readlinkat(self, directory, path):
+        raw=self._at_path(path)
+        with self._mutex:
+            self._ready()
+            return self._rpc(26,self._at_token(directory,path)+raw)[1]
+
+    def applyat(self, operations, directory=None, *, target_directory=None):
+        """Atomic batch, resolved sequentially in staged state from held dirfds."""
+        with self._mutex:
+            self._ready()
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'at operations require bound credentials')
+            if not isinstance(operations,list) or not 1<=len(operations)<=64:raise ValueError('expected 1..64 operations')
+            bases=[]
+            for op in operations:
+                if not isinstance(op,dict):raise ValueError('invalid operation')
+                if op.get('kind')=='open':raise ValueError('open grants are allocated by openat')
+                base=self._at_context(directory,op.get('path'))
+                target=self._at_context(target_directory,op.get('target')) if op.get('kind') in ('link','rename') else base
+                bases.append((base,target))
+            _,pins=self._rpc(12)
+            return self._apply_request(write_api.encode_at(operations,self.credentials,pins,bases))
+
+    def mkdirat(self, directory, path, mode=0o777):
+        return self.applyat([dict(kind='mkdir',path=path,mode=mode)],directory)
+
+    def unlinkat(self, directory, path, *, remove_directory=False):
+        if type(remove_directory) is not bool:raise ValueError('invalid remove-directory flag')
+        return self.applyat([dict(kind='rmdir' if remove_directory else 'unlink',path=path)],directory)
+
+    def renameat(self, source_directory, source, target_directory, target):
+        return self.applyat([dict(kind='rename',path=source,target=target)],source_directory,target_directory=target_directory)
+
+    def linkat(self, source_directory, source, target_directory, target, *, follow_symlinks=False):
+        if type(follow_symlinks) is not bool:raise ValueError('invalid follow option')
+        return self.applyat([dict(kind='link',path=source,target=target,follow_symlinks=follow_symlinks)],source_directory,target_directory=target_directory)
+
+    def symlinkat(self, target, directory, path):
+        return self.applyat([dict(kind='symlink',path=path,target=target)],directory)
 
     def getcwd(self):
         with self._mutex:

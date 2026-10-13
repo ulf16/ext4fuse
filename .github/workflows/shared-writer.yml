@@ -181,6 +181,25 @@ jobs:
           name: directory-reference-validation
           path: ${{ runner.temp }}/shared-writer/directory-refs-results.json
 
+  openat-semantics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build reader and staged writer with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Verify filesystem fixtures and overlay integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify inode-relative open flags, namespace, symlink traversal and recovery
+        run: python3 experimental/shared-writer/test-openat.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save openat validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: openat-validation
+          path: ${{ runner.temp }}/shared-writer/openat-results.json
+
   permission-policy:
     runs-on: ubuntu-latest
     timeout-minutes: 15

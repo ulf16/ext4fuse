@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "mutation.h"
+#include "path-at.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,6 +73,50 @@ errcode_t mutation_parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
     component = slash + 1;
   }
   free(copy);
+  return e;
+}
+errcode_t mutation_parent_at(ext2_filsys fs, const struct mutation *op,
+                             const char *path, int target, ext2_ino_t *dir,
+                             char **leaf, const struct credentials *c) {
+  if (!op->at)
+    return mutation_parent(fs, path, dir, leaf, c);
+  ext2_ino_t start = 0;
+  struct path_result r;
+  errcode_t e =
+      path_base(fs, target ? &op->target_base : &op->base, path, &start);
+  if (!e)
+    e = path_at(fs, start, path, c, AT_PARENT, &r);
+  if (e == EINVAL || e == EBUSY) {
+    struct path_result special;
+    errcode_t resolved = path_at(fs, start, path, c, AT_FOLLOW, &special);
+    if (resolved)
+      return resolved;
+    if (target)
+      return op->kind == MUT_LINK ? EEXIST : EBUSY;
+    if (op->kind == MUT_MKDIR || op->kind == MUT_SYMLINK ||
+        op->kind == MUT_CREATE)
+      return EEXIST;
+    if (op->kind == MUT_LINK)
+      return EPERM;
+    if (op->kind == MUT_UNLINK || op->kind == MUT_WRITE ||
+        op->kind == MUT_TRUNCATE)
+      return EISDIR;
+    if (op->kind == MUT_RENAME || special.inode == EXT2_ROOT_INO)
+      return EBUSY;
+    size_t n = strlen(path);
+    while (n && path[n - 1] == '/')
+      n--;
+    return n >= 2 && path[n - 1] == '.' && path[n - 2] == '.' ? ENOTEMPTY
+                                                              : EINVAL;
+  }
+  if (!e && r.trailing && !r.inode && op->kind != MUT_MKDIR)
+    e = ENOENT;
+  if (!e) {
+    *dir = r.parent;
+    *leaf = strdup(r.leaf);
+    if (!*leaf)
+      e = ENOMEM;
+  }
   return e;
 }
 static errcode_t touch(ext2_filsys fs, ext2_ino_t ino, int clear_privileges) {
@@ -179,10 +224,20 @@ errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *op,
     return EINVAL;
   ext2_ino_t dir, ino;
   char *leaf = NULL;
-  errcode_t e = mutation_parent(fs, op->path, &dir, &leaf, credentials);
+  errcode_t e =
+      mutation_parent_at(fs, op, op->path, 0, &dir, &leaf, credentials);
   if (e)
     return e;
   e = ext2fs_lookup(fs, dir, leaf, strlen(leaf), NULL, &ino);
+  if (op->at && op->kind != MUT_CREATE) {
+    ext2_ino_t start = 0;
+    struct path_result r;
+    e = path_base(fs, &op->base, op->path, &start);
+    if (!e)
+      e = path_at(fs, start, op->path, credentials, AT_FOLLOW, &r);
+    if (!e)
+      ino = r.inode;
+  }
   if (op->kind == MUT_CREATE) {
     if (!e)
       e = EEXIST;
@@ -273,4 +328,87 @@ static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
   if (!e)
     e = close;
   return e ? e : touch(fs, ino, credentials && credentials->uid != 0);
+}
+
+errcode_t mutation_open_at(ext2_filsys fs, const struct mutation *op,
+                           const struct credentials *c, struct inode_grant *g) {
+  unsigned flags = op->offset, access = flags & 3;
+  if (!op->at || op->offset > 255 || policy_credentials(c) || !access ||
+      flags > 255 || op->length || op->mode > 0777 || op->uid || op->gid ||
+      ((flags & (OPEN_APPEND | OPEN_TRUNC)) && !(access & GRANT_WRITE)) ||
+      ((flags & OPEN_EXCL) && !(flags & OPEN_CREATE)) ||
+      ((flags & OPEN_DIRECTORY) && (flags & OPEN_CREATE)))
+    return EINVAL;
+  ext2_ino_t start = 0;
+  struct path_result r;
+  errcode_t e = path_base(fs, &op->base, op->path, &start);
+  unsigned follow =
+      (flags & OPEN_NOFOLLOW) ||
+              ((flags & (OPEN_CREATE | OPEN_EXCL)) == (OPEN_CREATE | OPEN_EXCL))
+          ? 0
+          : AT_FOLLOW;
+  if (!e)
+    e = path_at(fs, start, op->path, c,
+                follow | ((flags & OPEN_CREATE) ? AT_MISSING : 0), &r);
+  if (e)
+    return e;
+  int created = !r.inode;
+  if (!created && (flags & OPEN_EXCL))
+    return EEXIST;
+  if (created) {
+    if (!(flags & OPEN_CREATE) || !r.parent)
+      return ENOENT;
+    struct ext2_inode parent;
+    e = ext2fs_read_inode(fs, r.parent, &parent);
+    if (e)
+      return e;
+    if (!parent.i_links_count)
+      return ENOENT;
+    if (parent.i_flags & (GRANT_UNSUPPORTED | EXT2_INDEX_FL | EXT4_CASEFOLD_FL))
+      return EOPNOTSUPP;
+    struct mutation create = {.kind = MUT_CREATE, .mode = op->mode};
+    unsigned char *acl = NULL;
+    size_t bytes = 0;
+    e = policy_creation(fs, r.parent, c, create.mode, &create.mode, &create.uid,
+                        &create.gid, &acl, &bytes);
+    if (!e)
+      e = create_file(fs, r.parent, r.leaf, &create, &r.inode, acl, bytes);
+    free(acl);
+    if (e)
+      return e;
+  }
+  struct ext2_inode in;
+  e = ext2fs_read_inode(fs, r.inode, &in);
+  if (e)
+    return e;
+  unsigned type = in.i_mode & LINUX_S_IFMT;
+  if (type == LINUX_S_IFLNK)
+    return flags & OPEN_DIRECTORY ? ENOTDIR : ELOOP;
+  if ((flags & OPEN_DIRECTORY) && type != LINUX_S_IFDIR)
+    return ENOTDIR;
+  if (type == LINUX_S_IFDIR && (access & GRANT_WRITE))
+    return EISDIR;
+  if (type != LINUX_S_IFDIR && type != LINUX_S_IFREG)
+    return EOPNOTSUPP;
+  *g = (struct inode_grant){
+      r.inode, in.i_generation, type == LINUX_S_IFDIR ? GRANT_DIR_READ : access,
+      type == LINUX_S_IFDIR ? GRANT_DIRECTORY : !!(flags & OPEN_APPEND)};
+  e = grant_inode(fs, g, &in);
+  if (!e && !created)
+    e = policy_inode(fs, r.inode, c,
+                     (access & GRANT_READ ? 4 : 0) |
+                         (access & GRANT_WRITE ? 2 : 0));
+  if (!e && (access & GRANT_WRITE)) {
+    if ((in.i_flags & EXT2_IMMUTABLE_FL) ||
+        ((in.i_flags & EXT2_APPEND_FL) &&
+         (!(flags & OPEN_APPEND) || (flags & OPEN_TRUNC))))
+      e = EPERM;
+    else
+      e = policy_writable(fs, r.inode);
+  }
+  if (!e && (flags & OPEN_TRUNC)) {
+    struct mutation truncate = {.kind = MUT_TRUNCATE};
+    e = mutation_apply_grant(fs, &truncate, c, g);
+  }
+  return e;
 }

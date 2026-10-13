@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "namespace.h"
+#include "path-at.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,10 +191,10 @@ errcode_t namespace_reap(ext2_filsys fs, const struct inode_pin *pins,
   }
   return 0;
 }
-static errcode_t resolve(ext2_filsys fs, const char *path,
-                         const struct credentials *c, ext2_ino_t *dir,
-                         char **leaf, unsigned want) {
-  errcode_t e = mutation_parent(fs, path, dir, leaf, c);
+static errcode_t resolve(ext2_filsys fs, const struct mutation *op, int target,
+                         const char *path, const struct credentials *c,
+                         ext2_ino_t *dir, char **leaf, unsigned want) {
+  errcode_t e = mutation_parent_at(fs, op, path, target, dir, leaf, c);
   if (!e && c)
     e = policy_inode(fs, *dir, c, want);
   struct ext2_inode in;
@@ -201,6 +202,8 @@ static errcode_t resolve(ext2_filsys fs, const char *path,
     e = ext2fs_read_inode(fs, *dir, &in);
   if (!e && (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
     e = ENOTDIR;
+  if (!e && !in.i_links_count)
+    e = ENOENT;
   if (!e &&
       (in.i_flags & (GRANT_UNSUPPORTED | EXT4_CASEFOLD_FL | EXT2_INDEX_FL)))
     e = EOPNOTSUPP;
@@ -617,7 +620,8 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
   ext2_ino_t from = 0, to = 0, ino = 0, victim = 0;
   char *name = NULL, *newname = NULL, *target = NULL;
   struct ext2_inode in, old;
-  e = resolve(fs, op->path, c, &from, &name, op->kind == MUT_LINK ? 1 : 3);
+  e = resolve(fs, op, 0, op->path, c, &from, &name,
+              op->kind == MUT_LINK ? 1 : 3);
   if (e) {
     free(name);
     return e;
@@ -630,6 +634,15 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
       e = create_entry(fs, from, name, op, c);
     free(name);
     return e;
+  }
+  if (!e && op->at && op->kind == MUT_LINK && (op->at_flags & 1)) {
+    ext2_ino_t start;
+    struct path_result r;
+    e = path_base(fs, &op->base, op->path, &start);
+    if (!e)
+      e = path_at(fs, start, op->path, c, AT_FOLLOW, &r);
+    if (!e)
+      ino = r.inode;
   }
   if (!e)
     e = entry_inode(fs, ino, &in);
@@ -657,7 +670,7 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
       e = ENOMEM;
     else {
       memcpy(target, op->data, op->length);
-      e = resolve(fs, target, c, &to, &newname, 3);
+      e = resolve(fs, op, 1, target, c, &to, &newname, 3);
     }
     if (!e) {
       e = ext2fs_lookup(fs, to, newname, strlen(newname), NULL, &victim);

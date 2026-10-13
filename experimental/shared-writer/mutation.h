@@ -15,7 +15,8 @@ enum mutation_kind {
   MUT_UNLINK = 6,
   MUT_MKDIR = 7,
   MUT_RMDIR = 8,
-  MUT_SYMLINK = 9
+  MUT_SYMLINK = 9,
+  MUT_OPEN = 10
 };
 struct mutation {
   enum mutation_kind kind;
@@ -24,11 +25,26 @@ struct mutation {
   const void *data;
   size_t length;
   uint32_t mode, uid, gid;
+  int at;
+  unsigned at_flags;
+  struct inode_grant base, target_base;
 };
 /* Caller owns the staged transaction. Any error requires discarding the entire
  * writer handle and overlay; never publish partially applied operations. */
 errcode_t mutation_parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
                           char **leaf, const struct credentials *credentials);
+errcode_t mutation_parent_at(ext2_filsys fs, const struct mutation *op,
+                             const char *path, int target, ext2_ino_t *dir,
+                             char **leaf, const struct credentials *c);
+#define OPEN_APPEND 4
+#define OPEN_CREATE 8
+#define OPEN_EXCL 16
+#define OPEN_TRUNC 32
+#define OPEN_NOFOLLOW 64
+#define OPEN_DIRECTORY 128
+errcode_t mutation_open_at(ext2_filsys fs, const struct mutation *op,
+                           const struct credentials *c,
+                           struct inode_grant *grant);
 errcode_t mutation_apply(ext2_filsys fs, const struct mutation *operation);
 errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *operation,
                             const struct credentials *credentials);
