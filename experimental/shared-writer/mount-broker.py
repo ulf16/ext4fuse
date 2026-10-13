@@ -68,7 +68,17 @@ class Broker:
             if self.initialized:raise OSError(errno.EPERM,'handshake already complete')
             self.initialized=True;return 0,b''
         if path and (not path.startswith(b'/') or b'\0' in path):raise OSError(errno.EINVAL,'absolute FUSE path required')
-        if op==1:return 0,self.s._mount_stat(path, self.handle(token) if token else None)
+        if op==1:
+            handle=self.handle(token) if token else None
+            raw=self.s._mount_stat(path,handle)
+            if sys.platform=='darwin':
+                try:acl=self.s.getxattr(path,'system.posix_acl_access',handle=handle)
+                except OSError as e:
+                    if e.errno!=errno.ENODATA:raise
+                else:
+                    mode=struct.unpack_from('<Q',raw,8)[0]
+                    native_acl.render(acl,mode,native_acl.Membership().resolve)
+            return 0,raw
         if op in (2,3,8):
             flags=arg&0xffffffff;mode=arg>>32
             allowed=os.O_ACCMODE
