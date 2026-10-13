@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "handles.h"
 #include "directory-ref.h"
+#include "directory-stream.h"
 #include "ops.h"
 #include "overlay.h"
 #include "path-at.h"
@@ -13,9 +14,18 @@ struct handle {
   uint64_t token;
   struct inode_grant grant;
   int stale, pending;
+  struct directory_stream stream;
 };
 static struct handle table[HANDLE_LIMIT];
 static uint64_t last_token;
+static void clear_handle(struct handle *h) {
+  directory_stream_clear(&h->stream);
+  memset(h, 0, sizeof(*h));
+}
+void handles_destroy(void) {
+  for (unsigned i = 0; i < HANDLE_LIMIT; i++)
+    clear_handle(&table[i]);
+}
 static uint64_t le(const unsigned char *p, unsigned n) {
   uint64_t v = 0;
   for (unsigned i = 0; i < n; i++)
@@ -114,12 +124,12 @@ static errcode_t allocate(ext2_filsys fs, const struct inode_grant *g,
   unsigned n;
   e = pin_snapshot(fs, pins, &n);
   if (e) {
-    memset(h, 0, sizeof(*h));
+    clear_handle(h);
     return e;
   }
   *data = calloc(24, 1);
   if (!*data) {
-    memset(h, 0, sizeof(*h));
+    clear_handle(h);
     return ENOMEM;
   }
   put(*data, h->token, 8);
@@ -177,6 +187,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
     if ((command == 19 || command == 20 || command == 22 || command == 25 ||
          command == 26)
             ? bytes < 9
+        : command == 27 ? bytes != 12
         : command == 24 ? bytes != 24
                         : bytes != 8)
       return EINVAL;
@@ -194,7 +205,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
       if (!h)
         return EBADF;
       if (command == 10) {
-        memset(h, 0, sizeof(*h));
+        clear_handle(h);
         return 0;
       }
       if (h->stale)
@@ -312,7 +323,8 @@ int handles_dispatch(const char *image, const struct credentials *c,
       e = EISDIR;
     if (!e && ((command == 8 && !(h->grant.access & GRANT_READ)) ||
                (command == 11 && !(h->grant.access & GRANT_WRITE)) ||
-               (command == 16 && !(h->grant.access & GRANT_DIR_READ))))
+               ((command == 16 || command >= 27) &&
+                !(h->grant.access & GRANT_DIR_READ))))
       e = EBADF;
     if (!e)
       *size = directory && !in.i_links_count ? 0 : EXT2_I_SIZE(&in);
@@ -355,6 +367,15 @@ int handles_dispatch(const char *image, const struct credentials *c,
     }
     if (!e && command == 16)
       e = directory_names(fs, h->grant.inode, data, count);
+    if (!e && command == 27)
+      e = directory_stream_page(fs, h->grant.inode, &h->stream, offset,
+                                le(path + 8, 4), length, size, data, count);
+    if (!e && command == 28)
+      e = directory_stream_seek(&h->stream, offset, size);
+    if (!e && command == 29) {
+      directory_stream_clear(&h->stream);
+      *size = 0;
+    }
     if (!e && command == 17) {
       e = directory_path(fs, h->grant.inode, data, count);
       if (!e)

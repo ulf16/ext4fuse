@@ -200,6 +200,25 @@ jobs:
           name: openat-validation
           path: ${{ runner.temp }}/shared-writer/openat-results.json
 
+  directory-streams:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build reader and directory stream limit helper with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Verify filesystem fixtures and overlay integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify directory offsets, pagination, snapshots and resource lifetime
+        run: python3 experimental/shared-writer/test-directory-streams.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save directory stream validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: directory-stream-validation
+          path: ${{ runner.temp }}/shared-writer/directory-streams-results.json
+
   permission-policy:
     runs-on: ubuntu-latest
     timeout-minutes: 15

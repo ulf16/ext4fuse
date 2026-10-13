@@ -48,6 +48,7 @@ python3 experimental/shared-writer/test-namespace.py --work "$work"
 python3 experimental/shared-writer/test-directories.py --work "$work"
 python3 experimental/shared-writer/test-directory-refs.py --work "$work"
 python3 experimental/shared-writer/test-openat.py --work "$work"
+python3 experimental/shared-writer/test-directory-streams.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -744,8 +745,7 @@ failed batches/producers, actual torn rmdir, session/crash release, stale/copy
 rejection, slot and 128-ancestor quota boundaries, and checksum-valid corrupt
 ancestry which must fail refresh/attach without reclamation. All 12 filesystem
 configurations run with sanitizers and independent filesystem checks. Indexed/
-casefold directory references and mutation, directory stream offsets, FUSE write
-callbacks and physical-device writes remain unimplemented.
+casefold directory references and mutation, FUSE write callbacks and physical-device writes remain unimplemented.
 
 
 ## Directory-relative open and namespace operations
@@ -823,8 +823,80 @@ The tests compare core pathname outcomes against real host openat, exercise all
 cover permission revocation, renamed/removed dirfds, symlink budgets, raw names,
 quotas, failed producers, actual torn-page recovery and checkpoint retirement.
 
-Mounted writes, kernel dentry integration, directory stream offsets, special-file
-opens, O_PATH/O_TMPFILE, renameat2 extensions, openat2 containment policies and
+Mounted writes, kernel dentry integration, special-file opens, O_PATH/O_TMPFILE, renameat2 extensions, openat2 containment policies and
 indexed/casefold directory references/mutation remain outside this image-only
 prototype. Host descriptor inheritance/nonblocking/direct-I/O flags do not apply
 to its session objects.
+
+
+## Directory stream offsets and paging
+
+`DirectoryHandle.readdir(max_entries=128,max_bytes=65536,offset=None)` returns
+`{"entries": [...], "offset": cookie, "eof": bool}`. Each entry contains `name`
+(decoded with the filesystem codec, preserving raw bytes via surrogate escapes),
+`inode`, numeric POSIX `type` (DT_*; unknown is allowed), and the opaque offset
+immediately after that entry. Linked directory streams include `.` and `..`.
+`offset=None` resumes the native cursor; an explicit cookie resumes immediately
+after that entry. `tell()` returns the current cookie, and `seek(cookie)` selects
+it. Zero denotes the beginning of the current snapshot. Cookies are locators,
+not inode capabilities or byte positions; arithmetic or reuse outside the current
+handle/snapshot is unsupported. Their nonzero ranges are not reused within a
+reader process, so another handle or a rewound snapshot cannot adopt old cookies.
+Streams/cookies are session-local and discarded at restart.
+
+The first page request captures a validated immutable listing. Later successful
+namespace changes, parent renames, failed batches and recovered commits do not
+reset the listing or cursor. Entries deleted or moved since capture may still
+appear in that snapshot; they neither pin child inodes nor authorize opening a
+historical inode. `openat` resolves the current namespace. `listdir()` retains its
+existing live-listing behavior and does not consume the stream cursor.
+`rewind()` drops the snapshot, frees its memory, resets the cursor to zero and
+invalidates every old nonzero cookie. The next read captures the current listing.
+`seek(0)` or `readdir(offset=0)` restarts the existing snapshot without refreshing
+it. Independently opened/duplicated directory handles have independent snapshots
+and cursors. This is the selected mutation policy; POSIX does not promise which
+concurrent directory changes an existing iterator will report.
+
+Pages contain at most 4096 entries and at most 1 MiB of binary reply data. Records
+are never split. A byte budget too small for the next entry returns ERANGE without
+advancing the cursor. Invalid/foreign cookies return EINVAL without changing the
+cursor. EOF is explicit, repeatable and preserves its final cookie. Snapshot
+capture can occur on the first undersized-buffer request, but no record is
+consumed. One stream may retain up to 4 MiB of entry-vector capacity, and a reader
+may retain 32 MiB across all streams. Hitting the individual cap returns EOVERFLOW;
+reader-wide pressure returns ENOMEM, without evicting other snapshots/cookies.
+Release or rewind makes capacity available. Snapshot assembly additionally uses
+at most one 4 MiB candidate vector (allocator reallocation can transiently retain
+the previous vector); a page allocates at most 1 MiB. These limits concern stream
+buffers, rather than libext2fs's filesystem metadata/bitmap allocations.
+
+Every request validates the directory handle's type, allocation and generation
+and observes the publication pause gate. Original read grants survive permission
+revocation; search-only cwd references cannot obtain a stream. Detected stale
+handles remain stale. Existing snapshots can finish after directory removal;
+rewind/fresh capture of a removed directory returns an empty stream, matching
+its logical zero size and empty live listing. Directory and ancestor lifetime
+pins remain independent of cached entry metadata. Release, session shutdown and
+reader EOF free all stream buffers.
+
+Private reader commands 27/28/29 implement page, tell/seek and rewind. Page
+requests contain the directory token and an entry limit; the request offset is
+an opaque cookie (INT64_MAX is the internal current-cursor sentinel). The reply
+size field carries the next cookie, followed by a little-endian EOF/count header
+and length-delimited inode/type/name/next-cookie records. The frontend validates
+record bounds, types, names, cookies, count and EOF before returning a page. A
+future FUSE filler can resume from the cookie of the last entry it accepted even
+if a native page contains additional records. No mounted write callbacks are
+introduced here.
+
+`test-directory-streams.py` checks multiblock classic/extent directories on all
+12 block-size/checksum combinations, compares entry identities/types against
+independent current metadata, and checks byte/entry limits, random cookie seeks,
+EOF, duplicate independence, raw names, rename/mutation snapshots, refresh,
+failed/torn commits, removed/stale/copied handles, permission retention, pause
+admission, malformed replies and release/restart. The isolated
+`reader-server-stream-limits` build links the same stream implementation with
+4 KiB per-stream/8 KiB reader-wide limits to exercise both resource errors and
+capacity reclamation without creating enormous fixtures. It is a test helper,
+not an installed frontend. Owned source images remain byte-identical and resulting
+filesystems are checked independently with e2fsck.

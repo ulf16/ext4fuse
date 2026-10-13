@@ -105,11 +105,14 @@ class Session:
             self._send(REQUEST.pack(b'E4RD0001', op, len(path), offset, length) + path, deadline)
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
-                    or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10) and count)
+                    or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10, 28, 29) and count)
                     or (op == 13 and (count != size or count > 4095))
                     or (op == 12 and (count % 8 or count > 128*8))
                     or (not error and ((op in (7,14,18,19,22,24) and count != 24) or (op in (11,15,21,25) and count != 16)))
                     or (not error and op==23 and count!=8)
+                    or (not error and op==27 and (count<8 or count>length or size>=2**63-1))
+                    or (not error and op==28 and size>=2**63-1)
+                    or (not error and op==29 and size)
                     or (op==26 and (count!=size or count>4095))
                     or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
@@ -588,6 +591,47 @@ class DirectoryHandle(FileHandle):
                 names.append(os.fsdecode(name))
             else:return names
             self._owner._failed=True;raise OSError(errno.EIO,'invalid directory listing')
+
+    def readdir(self, max_entries=128, *, max_bytes=65536, offset=None):
+        """Return entries, next opaque offset, and EOF from a stable snapshot.
+
+        None resumes the native cursor; zero starts the current snapshot. Rewind
+        discards the snapshot and all nonzero cookies associated with it.
+        """
+        if type(max_entries) is not int or not 1<=max_entries<=4096 or type(max_bytes) is not int or not 8<=max_bytes<=LIMIT:
+            raise ValueError('directory page bounds')
+        if offset is not None and (type(offset) is not int or not 0<=offset<2**63-1):
+            raise ValueError('invalid directory offset')
+        with self._owner._mutex:
+            token=self._owner._file(self)
+            next_offset,raw=self._owner._rpc(27,token+struct.pack('<I',max_entries),2**63-1 if offset is None else offset,max_bytes)
+            eof,count=struct.unpack_from('<II',raw);at=8;entries=[];previous=0
+            valid=eof in (0,1) and count<=max_entries
+            for unused in range(count) if valid else ():
+                if at+16>len(raw):valid=False;break
+                cookie,inode,kind,size=struct.unpack_from('<QIHH',raw,at);at+=16
+                if (not 0<cookie<2**63-1 or (previous and cookie<=previous) or not inode or kind not in (0,1,2,4,6,8,10,12) or
+                        not 1<=size<=255 or at+size>len(raw)):
+                    valid=False;break
+                name=raw[at:at+size];at+=size
+                if b'/' in name or b'\0' in name:valid=False;break
+                entries.append(dict(name=os.fsdecode(name),inode=inode,type=kind,offset=cookie));previous=cookie
+            if not valid or at!=len(raw) or (entries and next_offset!=entries[-1]['offset']) or (not entries and not eof):
+                self._owner._failed=True;raise OSError(errno.EIO,'invalid directory page')
+            return dict(entries=entries,offset=next_offset,eof=bool(eof))
+
+    def tell(self):
+        with self._owner._mutex:
+            return self._owner._rpc(28,self._owner._file(self),2**63-1)[0]
+
+    def seek(self, offset):
+        if type(offset) is not int or not 0<=offset<2**63-1:raise ValueError('invalid directory offset')
+        with self._owner._mutex:
+            return self._owner._rpc(28,self._owner._file(self),offset)[0]
+
+    def rewind(self):
+        with self._owner._mutex:
+            self._owner._rpc(29,self._owner._file(self))
 
     def path(self):
         with self._owner._mutex:

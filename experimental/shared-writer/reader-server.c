@@ -91,7 +91,10 @@ int main(int argc, char **argv) {
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
     int shape =
-        op == 23   ? (pathlen || offset || length)
+        op == 27   ? (pathlen != 12 || length < 8)
+        : op == 28 ? (pathlen != 8 || length)
+        : op == 29 ? (pathlen != 8 || offset || length)
+        : op == 23 ? (pathlen || offset || length)
         : op == 24 ? (pathlen != 24 || offset || length)
         : op == 22 ? (pathlen < 9 || !offset || offset > 255 || length)
         : op == 25 ? (pathlen < 9 || offset > 1 || length)
@@ -109,7 +112,7 @@ int main(int argc, char **argv) {
         : op >= 8  ? (pathlen != 8 || (op != 8 && (offset || length)))
         : op == 1 || op == 2 ? !pathlen
                              : (pathlen || offset || length);
-    if (op < 1 || op > 26 ||
+    if (op < 1 || op > 29 ||
         pathlen > ((op == 19 || op == 20 || op == 22 || op == 25 || op == 26)
                        ? 4104
                        : 4096) ||
@@ -227,6 +230,7 @@ int main(int argc, char **argv) {
     }
     free(data);
   }
+  handles_destroy();
   overlay_close(active_overlay);
   return result;
 }
