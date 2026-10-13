@@ -3,6 +3,10 @@
 #include <errno.h>
 #include <stddef.h>
 #include <stdlib.h>
+/* Keep inode bounds compatible with libext2fs before 1.47.4. */
+#define inode_includes(size, field)                                            \
+  ((size) >= offsetof(struct ext2_inode_large, field) +                        \
+                 sizeof(((struct ext2_inode_large *)0)->field))
 static void put(unsigned char *p, uint64_t value) {
   for (unsigned i = 0; i < 8; i++)
     p[i] = value >> (i * 8);
@@ -25,15 +29,15 @@ errcode_t mount_inode_stat(ext2_filsys fs, ext2_ino_t ino, unsigned char **data,
   if (actual > n)
     actual = n;
   uint32_t extra[4] = {0}, base[4] = {in.i_atime, in.i_mtime, in.i_ctime, 0};
-  if (ext2fs_inode_includes(actual, i_atime_extra))
+  if (inode_includes(actual, i_atime_extra))
     extra[0] = in.i_atime_extra;
-  if (ext2fs_inode_includes(actual, i_mtime_extra))
+  if (inode_includes(actual, i_mtime_extra))
     extra[1] = in.i_mtime_extra;
-  if (ext2fs_inode_includes(actual, i_ctime_extra))
+  if (inode_includes(actual, i_ctime_extra))
     extra[2] = in.i_ctime_extra;
-  if (ext2fs_inode_includes(actual, i_crtime))
+  if (inode_includes(actual, i_crtime))
     base[3] = in.i_crtime;
-  if (ext2fs_inode_includes(actual, i_crtime_extra))
+  if (inode_includes(actual, i_crtime_extra))
     extra[3] = in.i_crtime_extra;
   int removed_dir =
       (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR && !in.i_links_count;
