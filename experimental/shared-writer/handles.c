@@ -73,6 +73,8 @@ int handles_dispatch(const char *image, const struct credentials *c,
       e = policy_path(fs, (const char *)path, c, want, &ino);
     if (!e)
       e = ext2fs_read_inode(fs, ino, &in);
+    if (!e && (!in.i_links_count || in.i_dtime))
+      e = ESTALE;
     if (!e && (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFREG)
       e = (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR   ? EISDIR
           : (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFLNK ? ELOOP

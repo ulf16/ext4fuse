@@ -274,6 +274,12 @@ os._exit(0)
             bad=directory/'bad-orphans'
             run(['python3',here/'chain.py','init',seed,bad,args.work/'prototype'])
             s=session.Session(bad,args.work/'mutation-producer',args.work/'reader-server',Credentials(100,200))
+            # A directory entry with a zero-link inode cannot issue a new grant.
+            old=s.open('/existing-file','rw')
+            metadata(s,links=0)
+            denied(lambda:s.open('/existing-file','rw'),errno.ESTALE)
+            denied(lambda:old.read(),errno.ESTALE)
+            metadata(s,links=1);old.close();clean(s)
             f=s.open('/existing-file','rw');bad_inode=stat(s,'/existing-file')[0]
             s.unlink('/existing-file')
             denied(lambda:metadata(s,inode=bad_inode,orphan_next=bad_inode),errno.EIO)

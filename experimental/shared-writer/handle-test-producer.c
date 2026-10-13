@@ -18,8 +18,9 @@ int main(int argc, char **argv) {
              *cap = getenv("EXT4_TEST_HANDLE_CAP"),
              *path = getenv("EXT4_TEST_HANDLE_PATH"),
              *number = getenv("EXT4_TEST_HANDLE_INODE"),
-             *next = getenv("EXT4_TEST_HANDLE_ORPHAN_NEXT");
-  if (!mode && !gen && !flags && !acl && !cap && !next)
+             *next = getenv("EXT4_TEST_HANDLE_ORPHAN_NEXT"),
+             *links = getenv("EXT4_TEST_HANDLE_LINKS");
+  if (!mode && !gen && !flags && !acl && !cap && !next && !links)
     return 2;
   if (!path)
     path = "/existing-file";
@@ -45,6 +46,8 @@ int main(int argc, char **argv) {
   if (!e) {
     if (mode)
       in.i_mode = LINUX_S_IFREG | (strtoul(mode, NULL, 0) & 07777);
+    if (links)
+      in.i_links_count = strtoul(links, NULL, 0);
     if (next)
       in.i_dtime = strtoul(next, NULL, 0);
     if (gen)
