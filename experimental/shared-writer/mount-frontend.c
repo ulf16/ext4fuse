@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
 #define LIMIT (1024U * 1024)
@@ -426,25 +427,84 @@ static void *init_cb(struct fuse_conn_info *info, struct fuse_config *cfg) {
   return NULL;
 }
 static int chmod_cb(const char *p, mode_t m, struct fuse_file_info *fi) {
-  (void)p;
-  (void)m;
-  (void)fi;
-  return -ENOTSUP;
+  return empty(24, p, NULL, 0, fi ? fi->fh : 0, 0, m & 07777);
 }
 static int chown_cb(const char *p, uid_t u, gid_t g,
                     struct fuse_file_info *fi) {
-  (void)p;
-  (void)u;
-  (void)g;
-  (void)fi;
-  return -ENOTSUP;
+  return empty(25, p, NULL, 0, fi ? fi->fh : 0, 0,
+               (uint32_t)u | ((uint64_t)(uint32_t)g << 32));
 }
 static int utimens_cb(const char *p, const struct timespec t[2],
                       struct fuse_file_info *fi) {
-  (void)p;
-  (void)t;
-  (void)fi;
-  return -ENOTSUP;
+  unsigned char payload[32];
+  for (unsigned i = 0; i < 2; i++) {
+    uint64_t ns = UINT64_MAX;
+    int64_t sec = 0;
+    if (t) {
+      sec = t[i].tv_sec;
+      ns = t[i].tv_nsec == UTIME_NOW    ? UINT64_MAX
+           : t[i].tv_nsec == UTIME_OMIT ? UINT64_MAX - 1
+                                        : t[i].tv_nsec;
+      if (ns < UINT64_MAX - 1 && ns >= 1000000000)
+        return -EINVAL;
+    }
+    put(payload + i * 16, sec, 8);
+    put(payload + i * 16 + 8, ns, 8);
+  }
+  return empty(26, p, payload, sizeof(payload), fi ? fi->fh : 0, 0, 0);
+}
+static int setxattr_cb(const char *p, const char *name, const char *value,
+                       size_t n, int flags) {
+  int accepted = XATTR_CREATE | XATTR_REPLACE;
+#ifdef __APPLE__
+  accepted |= XATTR_NOFOLLOW;
+#endif
+  if (flags & ~accepted || ((flags & XATTR_CREATE) && (flags & XATTR_REPLACE)))
+    return -EINVAL;
+  size_t length = strlen(name);
+  if (!length || length > 255 || n > 65536)
+    return -E2BIG;
+  unsigned char *payload = malloc(length + 1 + n);
+  if (!payload)
+    return -ENOMEM;
+  memcpy(payload, name, length + 1);
+  if (n)
+    memcpy(payload + length + 1, value, n);
+  unsigned mode = flags & XATTR_CREATE ? 1 : flags & XATTR_REPLACE ? 2 : 0;
+  int e = empty(27, p, payload, length + 1 + n, 0, 0, mode);
+  free(payload);
+  return e;
+}
+static int attr_read(unsigned op, const char *p, const char *name, char *out,
+                     size_t n) {
+  unsigned char *raw = NULL;
+  size_t bytes;
+  uint64_t value;
+  int e =
+      rpc(op, p, name, name ? strlen(name) : 0, 0, 0, 0, &value, &raw, &bytes);
+  if (e)
+    return e;
+  if (value || bytes > 65536) {
+    free(raw);
+    return -EIO;
+  }
+  if (n && bytes > n) {
+    free(raw);
+    return -ERANGE;
+  }
+  if (n && bytes)
+    memcpy(out, raw, bytes);
+  free(raw);
+  return bytes;
+}
+static int getxattr_cb(const char *p, const char *name, char *value, size_t n) {
+  return attr_read(29, p, name, value, n);
+}
+static int listxattr_cb(const char *p, char *names, size_t n) {
+  return attr_read(30, p, NULL, names, n);
+}
+static int removexattr_cb(const char *p, const char *name) {
+  return empty(28, p, name, strlen(name), 0, 0, 0);
 }
 static const struct fuse_operations operations = {.init = init_cb,
                                                   .getattr = getattr_cb,
@@ -471,7 +531,12 @@ static const struct fuse_operations operations = {.init = init_cb,
                                                   .access = access_cb,
                                                   .chmod = chmod_cb,
                                                   .chown = chown_cb,
-                                                  .utimens = utimens_cb};
+                                                  .utimens = utimens_cb,
+                                                  .setxattr = setxattr_cb,
+                                                  .getxattr = getxattr_cb,
+                                                  .listxattr = listxattr_cb,
+                                                  .removexattr =
+                                                      removexattr_cb};
 int main(int argc, char **argv) {
   if (argc != 2 || getuid() != geteuid()) {
     fprintf(

@@ -2,6 +2,7 @@
 #include "handles.h"
 #include "directory-ref.h"
 #include "directory-stream.h"
+#include "metadata.h"
 #include "mount-metadata.h"
 #include "ops.h"
 #include "overlay.h"
@@ -186,7 +187,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
   int root_request = 0;
   if (command != 7 && command != 12 && command != 14) {
     if ((command == 19 || command == 20 || command == 22 || command == 25 ||
-         command == 26 || command == 31 || command == 34)
+         command == 26 || command == 31 || command == 34 || command == 35)
             ? bytes < 9
         : command == 27 ? bytes != 12
         : command == 24 ? bytes != 24
@@ -196,7 +197,8 @@ int handles_dispatch(const char *image, const struct credentials *c,
     if (!token &&
         (command == 15 || command == 17 || command == 19 || command == 20 ||
          command == 21 || command == 22 || command == 25 || command == 26 ||
-         command == 30 || command == 31 || command == 32 || command == 34))
+         command == 30 || command == 31 || command == 32 || command == 34 ||
+         command == 35 || command == 36))
       root_request = 1;
     else {
       for (unsigned i = 0; i < HANDLE_LIMIT; i++)
@@ -319,7 +321,8 @@ int handles_dispatch(const char *image, const struct credentials *c,
     if (e == ESTALE)
       h->stale = 1;
     int directory = h->grant.flags == GRANT_DIRECTORY;
-    if (!e && command >= 15 && command != 30 && !directory)
+    if (!e && command >= 15 && command != 30 && command != 35 &&
+        command != 36 && !directory)
       e = ENOTDIR;
     if (!e && directory && (command == 8 || command == 11))
       e = EISDIR;
@@ -330,7 +333,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
       e = EBADF;
     if (!e)
       *size = directory && !in.i_links_count ? 0 : EXT2_I_SIZE(&in);
-    if (!e && (command == 11 || command == 21)) {
+    if (!e && (command == 11 || command == 21 || command == 36)) {
       *data = calloc(16, 1);
       if (!*data)
         e = ENOMEM;
@@ -340,6 +343,8 @@ int handles_dispatch(const char *image, const struct credentials *c,
         put(*data + 8, h->grant.access, 4);
         put(*data + 12, h->grant.flags, 4);
         *count = 16;
+        if (command == 36)
+          *size = 0;
       }
     }
     if (!e && command == 8) {
@@ -377,6 +382,37 @@ int handles_dispatch(const char *image, const struct credentials *c,
     if (!e && command == 29) {
       directory_stream_clear(&h->stream);
       *size = 0;
+    }
+    if (!e && command == 35) {
+      const unsigned char *body = path + 8;
+      size_t n = bytes - 8;
+      const unsigned char *sep = memchr(body, 0, n);
+      if (!sep || offset > 1 || length > 1 ||
+          n - (size_t)(sep - body) - 1 > 255 ||
+          memchr(sep + 1, 0, n - (size_t)(sep - body) - 1))
+        e = EINVAL;
+      else {
+        ext2_ino_t ino = h->grant.inode;
+        if (sep != body) {
+          if (!directory)
+            e = ENOTDIR;
+          struct path_result r;
+          if (!e)
+            e = path_at(fs, ino, (const char *)body, c, length ? AT_FOLLOW : 0,
+                        &r);
+          if (!e)
+            ino = r.inode;
+        } else if (root_request)
+          e = EINVAL;
+        size_t namelen = n - (size_t)(sep - body) - 1;
+        if (!e && ((!offset && !namelen) || (offset && namelen)))
+          e = EINVAL;
+        if (!e)
+          e = metadata_query(fs, ino, c, offset ? NULL : (const char *)sep + 1,
+                             data, count);
+        if (!e)
+          *size = *count;
+      }
     }
     if (!e && command == 30)
       e = mount_inode_stat(fs, h->grant.inode, data, count);

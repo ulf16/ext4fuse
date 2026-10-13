@@ -24,6 +24,13 @@ class Broker:
         h=self.handles.get(token)
         if h is None:raise OSError(errno.EBADF,'invalid mounted handle')
         return h
+    def attr_name(self, name):
+        if not name or len(name)>255 or b'\0' in name:raise OSError(errno.EINVAL,'attribute name')
+        if name in (b'system.posix_acl_access',b'system.posix_acl_default'):return name
+        if name.startswith((b'system.',b'security.',b'trusted.')) or name==b'com.apple.system.Security':
+            raise OSError(errno.EOPNOTSUPP,'unsupported privilege/native ACL attribute')
+        return b'user.'+name if sys.platform=='darwin' else name
+
     def dispatch(self,op,path,data,uid,gid,umask,groups,token,offset,arg):
         if uid!=self.owner:raise OSError(errno.EACCES,'private mount owner only')
         if op!=22 and not self.initialized:raise OSError(errno.EBUSY,'mount handshake required')
@@ -103,6 +110,31 @@ class Broker:
             except FileNotFoundError:self.hidden.pop(path,None);return 0,b''
             if (st['inode'],st['generation'])!=identity:raise OSError(errno.ESTALE,'maintenance inode changed')
             self.s.unlinkat(None,path);self.hidden.pop(path,None)
+        elif op in (24,25,26):
+            handle=self.handle(token) if token else None
+            if op==24:self.s.chmod(path,arg,handle=handle,follow_symlinks=False)
+            elif op==25:self.s.chown(path,arg&0xffffffff,arg>>32,handle=handle,follow_symlinks=False)
+            else:
+                if len(data)!=32:raise OSError(errno.EINVAL,'timestamp payload')
+                a,an,m,mn=struct.unpack('<qQqQ',data)
+                def timestamp(sec,ns):
+                    return None if ns==2**64-1 else 'omit' if ns==2**64-2 else (sec,ns)
+                self.s.utimens(path,timestamp(a,an),timestamp(m,mn),handle=handle,follow_symlinks=False)
+        elif op in (27,28,29,30):
+            try:
+                if op==27:
+                    if b'\0' not in data:raise OSError(errno.EINVAL,'attribute payload')
+                    name,value=data.split(b'\0',1)
+                    self.s.setxattr(path,self.attr_name(name),value,arg)
+                elif op==28:self.s.removexattr(path,self.attr_name(data))
+                elif op==29:return 0,self.s.getxattr(path,self.attr_name(data))
+                else:
+                    names=self.s.listxattrs(path)
+                    if sys.platform=='darwin':names=[name[5:] if name.startswith('user.') else name for name in names]
+                    return 0,b''.join(os.fsencode(name)+b'\0' for name in names)
+            except OSError as e:
+                if e.errno==errno.ENODATA and sys.platform=='darwin':raise OSError(errno.ENOATTR,'attribute not found') from e
+                raise
         elif op==18:return 0,self.s._mount_geometry()
         elif op in (19,20):
             # Each data/namespace transaction is already durably committed before

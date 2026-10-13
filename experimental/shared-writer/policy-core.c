@@ -17,7 +17,8 @@ int policy_errno(errcode_t e) {
   if (e == EXT2_ET_NO_MEMORY)
     return ENOMEM;
   if (e == EXT2_ET_BLOCK_ALLOC_FAIL || e == EXT2_ET_INODE_ALLOC_FAIL ||
-      e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM)
+      e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM ||
+      e == EXT2_ET_EA_NO_SPACE)
     return ENOSPC;
   return e > 0 && e < 4096 ? e : EIO;
 }

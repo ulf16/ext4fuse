@@ -12,7 +12,7 @@ from durable import directory
 from credentials import Credentials
 
 HEADER = struct.Struct('<IIIIIIQQ')
-KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6, 'mkdir': 7, 'rmdir': 8, 'symlink': 9}
+KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6, 'mkdir': 7, 'rmdir': 8, 'symlink': 9, 'chmod':11, 'chown':12, 'utimens':13, 'setxattr':14, 'removexattr':15}
 
 
 def encode(operations, credentials=None, *, _at=False):
@@ -28,7 +28,7 @@ def encode(operations, credentials=None, *, _at=False):
     for op in operations:
         if not isinstance(op, dict) or op.get('kind') not in (dict(KINDS,open=10) if _at else KINDS):
             raise ValueError('unknown operation')
-        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target'} | ({'flags','follow_symlinks'} if _at else set())
+        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target'} | ({'flags','follow_symlinks','atime','mtime','name','value_hex'} if _at else set())
         if set(op) - allowed or not isinstance(op.get('path'),(str,bytes) if _at else str):
             raise ValueError('invalid operation fields')
         path = os.fsencode(op['path']) if _at else op['path'].encode('utf-8')
@@ -37,6 +37,8 @@ def encode(operations, credentials=None, *, _at=False):
         kind=op['kind']
         if 'follow_symlinks' in op and type(op['follow_symlinks']) is not bool:
             raise ValueError('invalid follow option')
+        metadata=kind in ('chmod','chown','utimens','setxattr','removexattr')
+        if metadata and not _at:raise ValueError('metadata requires trusted at/session context')
         namespace=kind in ('link','rename','unlink','mkdir','rmdir','symlink')
         creating=kind in ('create','mkdir','symlink')
         if namespace and not _at:
@@ -49,7 +51,41 @@ def encode(operations, credentials=None, *, _at=False):
         mode=op.get('mode',0o777 if kind=='mkdir' else 0o644)
         uid=op.get('uid',credentials.uid if credentials else os.getuid())
         gid=op.get('gid',credentials.gid if credentials else os.getgid())
-        if namespace:
+        if metadata:
+            allowed_fields={'kind','path','follow_symlinks'}
+            mode=uid=gid=offset=0;data=b''
+            if kind=='chmod':
+                allowed_fields.add('mode');mode=op.get('mode')
+            elif kind=='chown':
+                allowed_fields|={'uid','gid'}
+                uid=op.get('uid',-1);gid=op.get('gid',-1)
+                uid=2**32-1 if uid==-1 else uid;gid=2**32-1 if gid==-1 else gid
+            elif kind=='utimens':
+                allowed_fields|={'atime','mtime'}
+                for field in ('atime','mtime'):
+                    value=op.get(field)
+                    if value is None:sec,ns=0,2**64-1
+                    elif value=='omit':sec,ns=0,2**64-2
+                    elif isinstance(value,(tuple,list)) and len(value)==2:
+                        sec,ns=value
+                        if type(sec) is not int or not -2**31<=sec<=15032385535 or type(ns) is not int or not 0<=ns<10**9:raise ValueError('invalid timestamp')
+                    else:raise ValueError('invalid timestamp')
+                    data+=struct.pack('<qQ',sec,ns)
+            else:
+                allowed_fields.add('name')
+                name=op.get('name')
+                if not isinstance(name,(str,bytes)):raise ValueError('invalid attribute name')
+                name=os.fsencode(name)
+                if not 1<=len(name)<=255 or b'\0' in name:raise ValueError('invalid attribute name')
+                data=struct.pack('<I',len(name))+name
+                if kind=='setxattr':
+                    allowed_fields|={'value_hex','flags'};mode=op.get('flags',0)
+                    value=op.get('value_hex')
+                    if not isinstance(value,str) or len(value)>2*65536:raise ValueError('attribute value limit')
+                    data+=bytes.fromhex(value)
+                    if type(mode) is not int or not 0<=mode<=2:raise ValueError('invalid attribute flags')
+            if set(op)-allowed_fields:raise ValueError('invalid metadata fields')
+        elif namespace:
             allowed_fields={'kind','path'}
             if kind in ('link','rename','symlink'):allowed_fields.add('target')
             if kind=='mkdir':allowed_fields|={'mode','uid','gid'}
@@ -79,12 +115,12 @@ def encode(operations, credentials=None, *, _at=False):
             if not isinstance(text,str) or len(text)>8*1024*1024:raise ValueError('data limit')
             data=bytes.fromhex(text);offset=op.get('offset',0)
             if kind=='create' and offset:raise ValueError('create offset must be zero')
-        for name,value,maximum in (('offset',offset,64*1024*1024),('mode',mode,0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
+        for name,value,maximum in (('offset',offset,64*1024*1024),('mode',mode,0o7777 if kind=='chmod' else 0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
             if type(value) is not int or not 0<=value<=maximum:raise ValueError('invalid '+name)
         total += len(data)
         if total > 4 * 1024 * 1024 or offset + len(data) > 64 * 1024 * 1024:
             raise ValueError('transaction bounds')
-        result += HEADER.pack(10 if kind=='open' else KINDS[kind], len(path), mode, uid, gid, int(op.get('follow_symlinks',False)), offset, len(data)) + path + data
+        result += HEADER.pack(10 if kind=='open' else KINDS[kind], len(path), mode, uid, gid, int(op.get('follow_symlinks',metadata)), offset, len(data)) + path + data
     return result
 
 
@@ -141,6 +177,16 @@ def encode_at(operations, credentials, pins, bases):
     if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>1024:
         raise ValueError('invalid pins')
     return b'E4REQ005'+request[8:16+n]+struct.pack('<I',len(pins)//8)+pins+records
+
+
+def encode_metadata_grant(operation, credentials, grant, pins):
+    """Private V6: live handle metadata, with current authorization and pins."""
+    if not isinstance(grant,bytes) or len(grant)!=16:raise ValueError('invalid metadata grant')
+    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>1024:raise ValueError('invalid pins')
+    op=dict(operation,path='/');request=encode([op],credentials,_at=True)
+    n=struct.unpack_from('<I',request,12)[0];body=request[16+n:];fields=list(HEADER.unpack_from(body));pathbytes=fields[1]
+    fields[1]=16;fields[5]=0
+    return b'E4REQ006'+request[8:16+n]+struct.pack('<I',len(pins)//8)+pins+HEADER.pack(*fields)+grant+body[HEADER.size+pathbytes:]
 
 
 def apply(root, producer, operations, credentials=None):

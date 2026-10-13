@@ -16,7 +16,12 @@ enum mutation_kind {
   MUT_MKDIR = 7,
   MUT_RMDIR = 8,
   MUT_SYMLINK = 9,
-  MUT_OPEN = 10
+  MUT_OPEN = 10,
+  MUT_CHMOD = 11,
+  MUT_CHOWN = 12,
+  MUT_UTIMENS = 13,
+  MUT_SETXATTR = 14,
+  MUT_REMOVEXATTR = 15
 };
 struct mutation {
   enum mutation_kind kind;

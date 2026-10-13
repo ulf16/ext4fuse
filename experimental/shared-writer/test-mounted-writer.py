@@ -129,8 +129,7 @@ try:
             check((directory/'item-039').read_bytes()==b'39')
             for child in directory.iterdir():child.unlink()
             directory.rmdir();check(not directory.exists())
-            # Invalid/unsupported mutations must not turn into success.
-            denied(lambda:os.chmod(append,0o600),errno.ENOTSUP)
+            os.chmod(append,0o600);check(stat.S_IMODE(append.stat().st_mode)==0o600)
             check(append.read_bytes()==b'first+last')
             check(not any(name.startswith('.fuse_hidden') for name in os.listdir(mount)),'deferred-removal name leaked after final close')
             # The chain lock excludes another controller/mount while mounted.

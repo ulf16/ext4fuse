@@ -51,6 +51,7 @@ python3 experimental/shared-writer/test-directories.py --work "$work"
 python3 experimental/shared-writer/test-directory-refs.py --work "$work"
 python3 experimental/shared-writer/test-openat.py --work "$work"
 python3 experimental/shared-writer/test-directory-streams.py --work "$work"
+python3 experimental/shared-writer/test-metadata.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -936,10 +937,11 @@ cannot prevent an unrelated program from directly editing its files.
 
 Supported callbacks are stat/getattr/statfs/access, open/create/read/write,
 truncate, flush/fsync, mkdir/rmdir, hard link, symlink/readlink, rename/unlink, and
-directory open/read/release/fsync. Rename extensions, chmod/chown/utimens, special
-file creation, xattr mutation and native mounted ACL delivery are not implemented.
-Unsupported metadata mutation returns ENOTSUP rather than pretending success.
-Mounted creation accepts ordinary permission bits (mkdir also permits sticky);
+directory open/read/release/fsync, chmod/chown/utimens and user/POSIX ACL
+xattr get/list/set/remove. Rename extensions, special file creation, privileged
+security/trusted attributes and native macOS ACL delivery/writes are not implemented.
+Unsupported operations return an error rather than pretending success.
+Creation accepts ordinary permission bits (mkdir also permits sticky);
 setgid inheritance is still derived by the backend. The backend's 64 MiB mutation
 size, 128 handle/pin, 4 MiB stream and 32 MiB reader stream limits still apply.
 Larger existing regular files can be read, but writable sizing beyond that limit
@@ -999,7 +1001,7 @@ tracked hidden cleanup, rename/size errors and malformed transport across all
 and mounts only owned temporary clones. It verifies regular writes, sparse
 truncate/growth, allocation, fd metadata, hard-link/rename/unlink-open lifetime,
 dup/flush/fsync, append/exclusive creation, kernel buffer pagination of long
-names, symlink/directory changes, unsupported metadata operations, lock exclusion,
+names, symlink/directory changes, mode mutation, lock exclusion,
 restart, independent e2fsck/debugfs contents and unchanged inputs. Its first
 configuration injects a verified one-shot EIO after an actual half-page replay;
 the failed syscall is followed by checks that the sealed mutation completed
@@ -1007,3 +1009,66 @@ through recovery and that subsequent mounted operations still succeed.
 It never deletes a still-mounted tree; failed fixtures/logs are retained. The new
 Linux CI mount job requires /dev/fuse and fusermount3 rather than silently skipping
 kernel integration. Native macFUSE is validated separately on this host.
+
+
+## Transactional metadata mutations
+
+The experimental mount supports chmod/fchmod, chown/fchown/lchown, utimens with
+explicit nanoseconds or NOW/OMIT, and user extended attribute get/list/set/remove.
+The session exposes `chmod`, `chown`, `utimens`, `setxattr`, `removexattr`,
+`getxattr` and `listxattrs`; each accepts a live handle instead of a path where
+appropriate. Path mutations also work in atomic `applyat` batches with a held
+directory base and explicit `follow_symlinks`. Handle metadata uses a private V6
+request with the current caller, generation-checked inode grant and complete live
+pin snapshot. A read-only data handle can change metadata when the current caller
+has authority; an old write grant never substitutes for ownership or group checks.
+Rename/unlink and removed-directory handles retain their inode identity.
+
+Modes accept the full 07777 permission range. Ownership changes preserve 32-bit
+numeric IDs; -1 leaves that identity unchanged. An unprivileged caller must own
+the inode, cannot give it to another UID, and can choose only a member group.
+Unprivileged chmod drops setgid when the caller is outside the inode's group;
+regular-file chown clears setuid/setgid. Existing file capabilities continue to
+block mode/ownership changes conservatively rather than preserving stale
+privileges through an unsupported killpriv transition. Immutable/append-only
+inodes reject metadata mutations. A both-OMIT timestamp request leaves inode
+metadata unchanged. Explicit timestamps require ownership/root; both-NOW also
+allows current write permission. ctime updates on actual metadata operations;
+mtime and atime are preserved by unrelated changes. Extended timestamp epochs
+and nanoseconds are encoded only where the actual inode contains those fields.
+Older 128-byte inodes accept whole-second signed-32-bit timestamps and reject
+unrepresentable precision/ranges with EOVERFLOW. Birth time remains unchanged.
+
+User attributes enforce current inode read/write rights, plus sticky-directory
+ownership rules. Values are bounded to 64 KiB and names to 255 bytes; the ext4 EA
+block/inline storage limit can be smaller and returns ENOSPC. Create-only and
+replace-only flags, empty/binary values, missing attributes and short output
+buffers have explicit errno semantics. The broker maps native macOS user names
+such as `com.apple.FinderInfo` to `user.com.apple.FinderInfo` on disk and reverses
+that mapping for listing. Linux uses native `user.*` names. Privileged
+`security.*`, `trusted.*` and unknown `system.*` namespaces fail closed.
+macOS `com.apple.system.Security` is deliberately unsupported: native ACE/UUID
+ACL editing needs a separate representability and identity-mapping implementation.
+
+Numeric POSIX access/default ACL attributes use Linux xattr v2 at the API boundary
+and packed ext4 v1 on disk. Incoming ACLs are validated for entry ordering,
+permissions, masks, IDs and undefined fields. Setting an access ACL updates its
+mode class bits atomically; an equivalent three-entry ACL is represented by mode
+alone. chmod adjusts owner/mask-or-group/other permissions while preserving named
+entries. Default ACLs apply only to directories and retain existing creation
+inheritance. ACL removal preserves current mode bits. Changes to attributes can
+allocate or replace EA blocks; the writer refreshes the inode before updating
+ordinary metadata so allocation/checksum fields are preserved. All staged errors
+roll back the whole batch, and sealed interrupted replay completes before the
+resident reader resumes. This remains managed-image redo recovery and the private
+owner mount, without native JBD2 journal or physical-device writing.
+
+`test-metadata.py` covers current authority versus retained data grants, high IDs,
+special bits, ACL/mode coherence and default inheritance, binary values/flags,
+symlink and removed-inode metadata, immutable/append-only protections, legacy
+inode overflow, staged rollback and an observed half-page replay failure.
+`test-mounted-metadata.py` uses actual FUSE 3 mounts and native libc xattr APIs
+on both platforms. It verifies modes/ownership/nanosecond timestamps, descriptor
+metadata after unlink, size/ERANGE/missing-attribute behavior, ACL preservation and
+copy tools (`cp -p` on macOS, `shutil.copy2` on Linux), then checks e2fsck, contents
+and source hashes after unmount. Both suites run all 12 filesystem profiles in CI.

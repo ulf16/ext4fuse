@@ -117,6 +117,8 @@ class Session:
                     or (not error and op in (30,31) and count!=128)
                     or (not error and op==32 and count!=80)
                     or (op in (33,34) and (count or size))
+                    or (not error and op==35 and (count!=size or count>65536))
+                    or (not error and op==36 and (count!=16 or size))
                     or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
@@ -308,6 +310,50 @@ class Session:
 
     def symlinkat(self, target, directory, path):
         return self.applyat([dict(kind='symlink',path=path,target=target)],directory)
+
+    def _metadata(self, operation, path=None, handle=None, follow_symlinks=True):
+        with self._mutex:
+            self._ready()
+            if self.credentials is None:raise OSError(errno.EOPNOTSUPP,'metadata requires bound credentials')
+            if handle is None:return self.applyat([dict(operation,path=path,follow_symlinks=follow_symlinks)])
+            _,grant=self._rpc(36,self._file(handle));_,pins=self._rpc(12)
+            return self._apply_request(write_api.encode_metadata_grant(operation,self.credentials,grant,pins))
+
+    def chmod(self, path, mode, *, handle=None, follow_symlinks=True):
+        return self._metadata(dict(kind='chmod',mode=mode),path,handle,follow_symlinks)
+
+    def chown(self, path, uid=-1, gid=-1, *, handle=None, follow_symlinks=True):
+        return self._metadata(dict(kind='chown',uid=uid,gid=gid),path,handle,follow_symlinks)
+
+    def utimens(self, path, atime=None, mtime=None, *, handle=None, follow_symlinks=True):
+        return self._metadata(dict(kind='utimens',atime=atime,mtime=mtime),path,handle,follow_symlinks)
+
+    def setxattr(self, path, name, value, flags=0, *, handle=None, follow_symlinks=False):
+        if not isinstance(value,bytes):raise ValueError('attribute value must be bytes')
+        return self._metadata(dict(kind='setxattr',name=name,value_hex=value.hex(),flags=flags),path,handle,follow_symlinks)
+
+    def removexattr(self, path, name, *, handle=None, follow_symlinks=False):
+        return self._metadata(dict(kind='removexattr',name=name),path,handle,follow_symlinks)
+
+    def _xattr_query(self, path, name, handle, follow_symlinks):
+        if type(follow_symlinks) is not bool:raise ValueError('invalid follow option')
+        if name is not None:
+            name=os.fsencode(name)
+            if not 1<=len(name)<=255 or b'\0' in name:raise ValueError('invalid attribute name')
+        with self._mutex:
+            self._ready()
+            token=self._file(handle) if handle is not None else struct.pack('<Q',0)
+            raw=b'' if handle is not None else self._at_path(path)
+            return self._rpc(35,token+raw+b'\0'+(name or b''),int(name is None),int(follow_symlinks))[1]
+
+    def getxattr(self,path,name,*,handle=None,follow_symlinks=False):
+        return self._xattr_query(path,name,handle,follow_symlinks)
+
+    def listxattrs(self,path,*,handle=None,follow_symlinks=False):
+        raw=self._xattr_query(path,None,handle,follow_symlinks)
+        if raw and (not raw.endswith(b'\0') or any(not name or len(name)>255 for name in raw[:-1].split(b'\0'))):
+            self._failed=True;raise OSError(errno.EIO,'invalid attribute list')
+        return [os.fsdecode(name) for name in raw[:-1].split(b'\0')] if raw else []
 
     def _mount_context(self, credentials):
         """Private authenticated mount broker entry; not JSON caller input."""

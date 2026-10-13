@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+#include "metadata.h"
 #include "mutation.h"
 #include "namespace.h"
 #include "overlay.h"
@@ -50,7 +51,9 @@ int main(int argc, char **argv) {
   struct inode_grant grants[64] = {0};
   errcode_t e = read_all(input, header, 12);
   if (!e) {
-    if (!memcmp(header, "E4REQ005", 8))
+    if (!memcmp(header, "E4REQ006", 8))
+      enforce = broker = by_inode = 1;
+    else if (!memcmp(header, "E4REQ005", 8))
       enforce = broker = at = 1;
     else if (!memcmp(header, "E4REQ004", 8))
       enforce = broker = 1;
@@ -127,7 +130,8 @@ int main(int argc, char **argv) {
       break;
     }
     ops[i].at_flags = little(header + 20, 4);
-    if (ops[i].at_flags > 1 || (ops[i].at_flags && ops[i].kind != MUT_LINK)) {
+    if (ops[i].at_flags > 1 || (ops[i].at_flags && ops[i].kind != MUT_LINK &&
+                                ops[i].kind < MUT_CHMOD)) {
       e = EINVAL;
       break;
     }
@@ -185,7 +189,10 @@ int main(int argc, char **argv) {
     e = namespace_reap(fs, pins, pin_count);
   struct inode_grant opened[64] = {0};
   for (unsigned i = 0; !e && i < count; i++)
-    e = ops[i].kind == MUT_OPEN && at
+    e = ops[i].kind >= MUT_CHMOD
+            ? metadata_apply(fs, &ops[i], enforce ? &credentials : NULL,
+                             by_inode ? &grants[i] : NULL)
+        : ops[i].kind == MUT_OPEN && at
             ? mutation_open_at(fs, &ops[i], &credentials, &opened[i])
         : ops[i].kind >= MUT_LINK && !by_inode
             ? namespace_apply(fs, &ops[i], enforce ? &credentials : NULL, pins,

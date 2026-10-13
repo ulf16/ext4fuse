@@ -47,6 +47,7 @@ prototype = compile_source(here / 'prototype.c', 'prototype')
 policy_core = compile_source(here / 'policy-core.c', 'policy-core')
 policy_fs = compile_source(here / 'policy-fs.c', 'policy-fs')
 policy_acl = compile_source(repo / 'acl.c', 'policy-acl')
+metadata = compile_source(here/'metadata.c','metadata')
 mount_metadata = compile_source(here/'mount-metadata.c','mount-metadata')
 path_at = compile_source(here / 'path-at.c', 'path-at')
 directory_stream = compile_source(here / 'directory-stream.c', 'directory-stream')
@@ -68,9 +69,9 @@ unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
 for name, objects in [('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
-                      ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, mutation, path_at, producer]),
+                      ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, mutation, metadata, path_at, producer]),
                       ('handle-test-producer', [overlay, manager, handle_test]),
-                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, mutation, path_at, directory_ref, directory_stream, mount_metadata, handles, reader, server, *server_readers]),
+                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, mutation, path_at, directory_ref, directory_stream, mount_metadata, metadata, handles, reader, server, *server_readers]),
                       ('reader-watch', [overlay, reader, watch, *reader_objects]),
                       ('verify-reader', [overlay, reader, verify, *reader_objects]),
                       ('policy-unit', [policy_core, policy_acl, policy_unit]),
@@ -80,7 +81,7 @@ for name, objects in [('prototype', [overlay, manager, reader, prototype, *reade
 limited = work / 'directory-stream-limited.o'
 subprocess.run(compiler + flags + ['-DDIRECTORY_STREAM_BYTES=4096','-DDIRECTORY_STREAM_TOTAL=8192',
                '-c',str(here/'directory-stream.c'),'-o',str(limited)],check=True)
-objects=[overlay,manager,policy_core,policy_fs,grant,namespace,mutation,path_at,directory_ref,str(limited),mount_metadata,handles,reader,server,*server_readers]
+objects=[overlay,manager,policy_core,policy_fs,grant,namespace,mutation,path_at,directory_ref,str(limited),mount_metadata,metadata,handles,reader,server,*server_readers]
 subprocess.run(compiler + flags + objects + libs + ['-o',str(work/'reader-server-stream-limits')],check=True)
 mount_frontend=compile_source(here/'mount-frontend.c','mount-frontend')
 subprocess.run(compiler+flags+[mount_frontend]+libs+['-o',str(work/'mount-frontend')],check=True)

@@ -219,6 +219,25 @@ jobs:
           name: directory-stream-validation
           path: ${{ runner.temp }}/shared-writer/directory-streams-results.json
 
+  metadata-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build metadata engine with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Prepare and validate filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify metadata authority, ACL consistency, lifetime and recovery
+        run: python3 experimental/shared-writer/test-metadata.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save metadata mutation validation
+        uses: actions/upload-artifact@v4
+        with:
+          name: metadata-mutation-validation
+          path: ${{ runner.temp }}/shared-writer/metadata-results.json
+
   mount-broker:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -253,6 +272,8 @@ jobs:
         run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify real mounted mutations, inode handles and recovery
         run: python3 experimental/shared-writer/test-mounted-writer.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify real mounted metadata and copy preservation
+        run: python3 experimental/shared-writer/test-mounted-metadata.py --work "$RUNNER_TEMP/shared-writer"
       - name: Save mounted validation and logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -260,6 +281,8 @@ jobs:
           name: mounted-fuse3-validation
           path: |
             ${{ runner.temp }}/shared-writer/mounted-writer-results.json
+            ${{ runner.temp }}/shared-writer/mounted-metadata-results.json
+            ${{ runner.temp }}/shared-writer/mounted-metadata-*/*-mount.log
             ${{ runner.temp }}/shared-writer/mounted-writer-*/**/*-mount.log
 
   permission-policy:

@@ -9,9 +9,10 @@
  * 22=read-only at-open admission,23=reserve slot/pin,24=activate committed
  * open, 25=statat,26=readlinkat,27=directory
  * page,28=tell/seek,29=rewind,30=handle full stat, 31=path full stat,32=mounted
- * geometry/admission,34=access. Command 33 updates trusted mount credentials in
- * reader-server. Token zero is the immutable virtual root for
- * 15/17/19/20/21/22/25/26/30/31/32/34; no root slot or non-root pin is implied.
+ * geometry/admission,34=access,35=bounded xattr query,36=metadata grant.
+ * Command 33 updates trusted mount credentials in reader-server. Token zero is
+ * the immutable virtual root for 15/17/19/20/21/22/25/26/30/31/32/34/35/36; no
+ * root slot or non-root pin is implied.
  */
 void handles_destroy(void);
 int handles_dispatch(const char *image, const struct credentials *credentials,
