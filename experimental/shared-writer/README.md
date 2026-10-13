@@ -939,7 +939,8 @@ Supported callbacks are stat/getattr/statfs/access, open/create/read/write,
 truncate, flush/fsync, mkdir/rmdir, hard link, symlink/readlink, rename/unlink, and
 directory open/read/release/fsync, chmod/chown/utimens and user/POSIX ACL
 xattr get/list/set/remove. Rename extensions, special file creation, privileged
-security/trusted attributes and native macOS ACL delivery/writes are not implemented.
+security/trusted attributes remain unsupported. Native macOS access ACL editing
+is supported for the representable subset described below.
 Unsupported operations return an error rather than pretending success.
 Creation accepts ordinary permission bits (mkdir also permits sticky);
 setgid inheritance is still derived by the backend. The backend's 64 MiB mutation
@@ -954,7 +955,8 @@ append safeguards. Caller uid/gid/umask originate in FUSE context. Where FUSE ca
 provide supplementary groups, those are supplied for the request; otherwise the
 broker uses only the authenticated primary gid, rather than granting the daemon's
 potentially broader group list. Linux kernel ACL enforcement is not advertised;
-macOS uses defer_permissions for the broker policy. nodev/nosuid are fixed.
+macOS uses default_permissions plus extended_security for native kernel checks
+and retains broker authorization. nodev/nosuid are fixed.
 Lifecycle-only handle release/flush/fsync and kernel metadata requests can use the
 mount owner's context; they grant no new data or namespace access. This is not a
 multi-user mount or a replacement for the stable native macOS ACL reader.
@@ -1047,8 +1049,8 @@ buffers have explicit errno semantics. The broker maps native macOS user names
 such as `com.apple.FinderInfo` to `user.com.apple.FinderInfo` on disk and reverses
 that mapping for listing. Linux uses native `user.*` names. Privileged
 `security.*`, `trusted.*` and unknown `system.*` namespaces fail closed.
-macOS `com.apple.system.Security` is deliberately unsupported: native ACE/UUID
-ACL editing needs a separate representability and identity-mapping implementation.
+macOS `com.apple.system.Security` is handled by the bounded native ACL editor
+below rather than stored as an opaque user attribute.
 
 Numeric POSIX access/default ACL attributes use Linux xattr v2 at the API boundary
 and packed ext4 v1 on disk. Incoming ACLs are validated for entry ordering,
@@ -1072,3 +1074,74 @@ on both platforms. It verifies modes/ownership/nanosecond timestamps, descriptor
 metadata after unlink, size/ERANGE/missing-attribute behavior, ACL preservation and
 copy tools (`cp -p` on macOS, `shutil.copy2` on Linux), then checks e2fsck, contents
 and source hashes after unmount. Both suites run all 12 filesystem profiles in CI.
+
+
+## Native macOS access ACL editing
+
+The experimental macFUSE mount now supports `acl_set_file`/`acl_get_file`, native
+ACL removal (`chmod -N`) and explicit-position edits such as:
+
+```sh
+chmod +a# 0 'user:daemon allow read,write,append' MOUNTPOINT/path
+ls -le MOUNTPOINT/path
+chmod -N MOUNTPOINT/path
+```
+
+The projected POSIX selection rules require ordered allow/deny entries. macOS
+`chmod +a` can reject this as noncanonical order before calling the filesystem;
+`+a#` explicitly specifies the insertion position. Edits normalize the effective
+POSIX entries, rather than preserving arbitrary native ACE bytes or inactive
+masked permissions. Reading a native ACL returns a projection of current POSIX
+permissions. Writing the identical projected payload preserves the existing raw
+ACL, including masked bits. Mode-equivalent rules may become mode bits without
+an extended ACL. The mode group class reports the POSIX mask; ACL removal retains
+those current mode bits. Numeric POSIX access/default attribute APIs remain usable.
+
+`native_acl.py` validates Apple's big-endian filesec header and bounded ACE array.
+Only non-inheriting access rules with representable read/write/append/execute
+behavior are accepted. Directory delete-child rights must agree with POSIX write
+plus search. Explicit delete-self, generic rights, independent metadata/owner/
+security rights, inheritance flags and owner/group UUID header changes are
+rejected with EOPNOTSUPP. This is a POSIX data-access compatibility layer;
+attribute authority continues to follow the existing POSIX metadata policy and
+cannot become an independent native ACE grant. Native access editing does not
+modify default ACLs or implement macOS per-entry inheritance.
+
+UUIDs resolve through Membership's UID/GID APIs and must round-trip to the same
+UUID. Reserved principals use their defined owner/owning-group/everybody roles;
+unknown, ambiguous and unsupported reserved identities fail closed. The editor
+checks every referenced user/owner/other identity class, every combination of
+referenced groups, and every combined data-right request against the candidate
+POSIX ACL. Mixed group accumulation, UID permissions dependent on group membership,
+or independent write versus append behavior have no supported equivalent and
+are rejected before mutation. Bounds are 128 ACEs, 32 named users and eight group
+classes including the owning group. This check is exhaustive within those bounds,
+not random sampling or a union-of-allow-bits conversion.
+
+Native writes require current ownership/root, then use the existing staged POSIX
+ACL/mode mutation transaction and recovery engine. `XATTR_NOSECURITY`, supplied
+internally by macOS for ACL transport, is accepted only for the native Security
+attribute; it never bypasses broker authorization. Rejected changes do not create
+AppleDouble fallbacks or alter the image. Native removal clears the POSIX access
+ACL and preserves the current modes. ACL read/write and ACL-preserving `cp -p`
+use the actual platform APIs.
+
+The mount enables macFUSE `extended_security` and `default_permissions` alongside
+broker enforcement. Deferred permission checks permitted macFUSE to reuse a held
+read handle for a new open after revocation; native kernel checks now deny that
+new open while the original descriptor retains its POSIX open-time data grant.
+Supported native projections therefore participate in macOS permission checks;
+unprojectable ACLs fail closed rather than falling back to an overly broad mode
+mask. The stable production reader and Linux experimental mount options are
+unchanged.
+
+`test-native-acl-edit.py` tests 256 deterministic randomized file/directory ACLs,
+round-trip data decisions, ordered insertion, combined group requests, UUID and
+proof bounds, malformed headers and rejected rights. It runs portably in Linux
+CI. `test-mounted-native-acl.py` runs natively on macOS across all 12 profiles:
+actual `acl_set_file`/`acl_get_file`, `chmod +a#`/`-N`, ACL-preserving copy, unchanged
+images on rejected edits, owner read revocation with a live old descriptor,
+foreign-owner rejection, and namespace operations through a foreign-owned parent
+with a named-user ACL. Every completed mount is unmounted and fsck-checked and its
+source hashes remain unchanged. Existing mounted metadata and writer regressions
+are rerun with native kernel permission checks.

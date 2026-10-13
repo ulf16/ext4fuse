@@ -230,13 +230,17 @@ jobs:
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Prepare and validate filesystem profiles
         run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Verify native ACL editing representability model
+        run: python3 experimental/shared-writer/test-native-acl-edit.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify metadata authority, ACL consistency, lifetime and recovery
         run: python3 experimental/shared-writer/test-metadata.py --work "$RUNNER_TEMP/shared-writer"
       - name: Save metadata mutation validation
         uses: actions/upload-artifact@v4
         with:
           name: metadata-mutation-validation
-          path: ${{ runner.temp }}/shared-writer/metadata-results.json
+          path: |
+            ${{ runner.temp }}/shared-writer/metadata-results.json
+            ${{ runner.temp }}/shared-writer/native-acl-edit-results.json
 
   mount-broker:
     runs-on: ubuntu-latest

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import chain
 import session
+import native_acl
 from credentials import Credentials
 HEADER=struct.Struct('<8sIIIIIIIQQQ')
 REPLY=struct.Struct('<8sIIQQ')
@@ -24,6 +25,32 @@ class Broker:
         h=self.handles.get(token)
         if h is None:raise OSError(errno.EBADF,'invalid mounted handle')
         return h
+    def native_get(self,path):
+        fields=struct.unpack('<8QqQqQqQqQ',self.s._mount_stat(path))
+        raw=self.s.getxattr(path,'system.posix_acl_access')
+        return native_acl.render(raw,fields[1],native_acl.Membership().resolve)
+
+    def native_set(self,path,value,flags=0):
+        fields=struct.unpack('<8QqQqQqQqQ',self.s._mount_stat(path))
+        if self.s.credentials.uid not in (0,fields[3]):raise OSError(errno.EPERM,'native ACL editing requires ownership')
+        try:old=self.s.getxattr(path,'system.posix_acl_access')
+        except OSError as e:
+            if e.errno!=errno.ENODATA:raise
+            old=None
+        if flags==1 and old is not None:raise OSError(errno.EEXIST,'native ACL exists')
+        if flags==2 and old is None:raise OSError(errno.ENODATA,'native ACL missing')
+        membership=native_acl.Membership()
+        if old is not None:
+            try:projected=native_acl.render(old,fields[1],membership.resolve)
+            except OSError as e:
+                if e.errno not in (errno.EOPNOTSUPP,errno.E2BIG):raise
+            else:
+                if value==projected:return
+        converted=native_acl.decode(value,fields[1],fields[3],fields[4],membership.identify)
+        if converted is None:
+            if old is not None:self.s.removexattr(path,'system.posix_acl_access')
+        else:self.s.setxattr(path,'system.posix_acl_access',converted)
+
     def attr_name(self, name):
         if not name or len(name)>255 or b'\0' in name:raise OSError(errno.EINVAL,'attribute name')
         if name in (b'system.posix_acl_access',b'system.posix_acl_default'):return name
@@ -125,12 +152,16 @@ class Broker:
                 if op==27:
                     if b'\0' not in data:raise OSError(errno.EINVAL,'attribute payload')
                     name,value=data.split(b'\0',1)
-                    self.s.setxattr(path,self.attr_name(name),value,arg)
-                elif op==28:self.s.removexattr(path,self.attr_name(data))
-                elif op==29:return 0,self.s.getxattr(path,self.attr_name(data))
+                    if sys.platform=='darwin' and name==b'com.apple.system.Security':self.native_set(path,value,arg)
+                    else:self.s.setxattr(path,self.attr_name(name),value,arg)
+                elif op==28:
+                    self.s.removexattr(path,'system.posix_acl_access' if sys.platform=='darwin' and data==b'com.apple.system.Security' else self.attr_name(data))
+                elif op==29:return 0,self.native_get(path) if sys.platform=='darwin' and data==b'com.apple.system.Security' else self.s.getxattr(path,self.attr_name(data))
                 else:
                     names=self.s.listxattrs(path)
-                    if sys.platform=='darwin':names=[name[5:] if name.startswith('user.') else name for name in names]
+                    if sys.platform=='darwin':
+                        if 'system.posix_acl_access' in names:names.append('com.apple.system.Security')
+                        names=[name[5:] if name.startswith('user.') else name for name in names]
                     return 0,b''.join(os.fsencode(name)+b'\0' for name in names)
             except OSError as e:
                 if e.errno==errno.ENODATA and sys.platform=='darwin':raise OSError(errno.ENOATTR,'attribute not found') from e

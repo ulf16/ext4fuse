@@ -458,6 +458,8 @@ static int setxattr_cb(const char *p, const char *name, const char *value,
   int accepted = XATTR_CREATE | XATTR_REPLACE;
 #ifdef __APPLE__
   accepted |= XATTR_NOFOLLOW;
+  if (!strcmp(name, "com.apple.system.Security"))
+    accepted |= XATTR_NOSECURITY;
 #endif
   if (flags & ~accepted || ((flags & XATTR_CREATE) && (flags & XATTR_REPLACE)))
     return -EINVAL;
@@ -560,7 +562,7 @@ int main(int argc, char **argv) {
                   "-onodev,nosuid,fsname=ext4fuse-experimental"
 #ifdef __APPLE__
                   ,
-                  "-odefer_permissions"
+                  "-odefault_permissions,extended_security"
 #endif
   };
   return fuse_main(sizeof(args) / sizeof(args[0]), args, &operations, NULL);
