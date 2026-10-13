@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     e = ext2fs_read_inode_full(fs, ino, (struct ext2_inode *)&in, bytes);
   if (!e) {
     if (mode)
-      in.i_mode = LINUX_S_IFREG | (strtoul(mode, NULL, 0) & 07777);
+      in.i_mode = (in.i_mode & LINUX_S_IFMT) | (strtoul(mode, NULL, 0) & 07777);
     if (links)
       in.i_links_count = strtoul(links, NULL, 0);
     if (next)

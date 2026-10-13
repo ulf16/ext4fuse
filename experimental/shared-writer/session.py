@@ -104,6 +104,7 @@ class Session:
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
                     or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10) and count)
+                    or (op == 13 and (count != size or count > 4095))
                     or (op == 12 and (count % 8 or count > 128*8))
                     or (not error and ((op == 7 and count != 24) or (op == 11 and count != 16)))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
@@ -172,6 +173,21 @@ class Session:
 
     def unlink(self, path):
         return self.apply([dict(kind='unlink',path=path)])
+
+    def mkdir(self, path, mode=0o777):
+        return self.apply([dict(kind='mkdir',path=path,mode=mode)])
+
+    def rmdir(self, path):
+        return self.apply([dict(kind='rmdir',path=path)])
+
+    def symlink(self, target, path):
+        return self.apply([dict(kind='symlink',path=path,target=target)])
+
+    def readlink(self, path):
+        path=self._path(path)
+        with self._mutex:
+            self._ready()
+            return self._rpc(13,path)[1]
 
     def _apply_request(self, request):
         with self._mutex:

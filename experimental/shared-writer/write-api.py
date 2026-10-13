@@ -12,7 +12,7 @@ from durable import directory
 from credentials import Credentials
 
 HEADER = struct.Struct('<IIIIIIQQ')
-KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6}
+KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6, 'mkdir': 7, 'rmdir': 8, 'symlink': 9}
 
 
 def encode(operations, credentials=None):
@@ -34,42 +34,47 @@ def encode(operations, credentials=None):
         path = op['path'].encode('utf-8')
         if not 1 <= len(path) <= 4096 or b'\0' in path:
             raise ValueError('invalid path')
-        if op['kind'] in ('link','rename','unlink'):
-            for candidate in (op['path'],op.get('target',op['path'])):
+        kind=op['kind']
+        namespace=kind in ('link','rename','unlink','mkdir','rmdir','symlink')
+        creating=kind in ('create','mkdir','symlink')
+        if namespace:
+            candidates=(op['path'],op['target']) if kind in ('link','rename') and 'target' in op else (op['path'],)
+            for candidate in candidates:
                 if not isinstance(candidate,str) or not candidate.startswith('/') or candidate=='/' or any(c in ('','.','..') or len(c.encode('utf-8'))>255 for c in candidate[1:].split('/')):
                     raise ValueError('invalid namespace path')
-        if credentials and op['kind'] == 'create' and set(op) & {'uid', 'gid'}:
+        if credentials and creating and set(op)&{'uid','gid'}:
             raise ValueError('creation ownership is derived from caller credentials')
-        if op['kind'] not in ('link','rename','unlink') and 'target' in op:
-            raise ValueError('target belongs to namespace operations')
-        namespace = op['kind'] in ('link','rename','unlink')
+        mode=op.get('mode',0o777 if kind=='mkdir' else 0o644)
+        uid=op.get('uid',credentials.uid if credentials else os.getuid())
+        gid=op.get('gid',credentials.gid if credentials else os.getgid())
         if namespace:
-            if set(op) != ({'kind','path'} if op['kind']=='unlink' else {'kind','path','target'}):
-                raise ValueError('invalid namespace fields')
-            data = b'' if op['kind']=='unlink' else op['target'].encode('utf-8') if isinstance(op['target'],str) else None
-            if data is None or len(data)>4096 or b'\0' in data:
-                raise ValueError('invalid target path')
-            offset = 0
-        elif op['kind'] == 'truncate':
-            if set(op) != {'kind', 'path', 'size'}:
-                raise ValueError('truncate needs path and size')
-            offset = op['size']
-            data = b''
+            allowed_fields={'kind','path'}
+            if kind in ('link','rename','symlink'):allowed_fields.add('target')
+            if kind=='mkdir':allowed_fields|={'mode','uid','gid'}
+            if kind=='symlink':allowed_fields|={'uid','gid'}
+            if set(op)-allowed_fields:raise ValueError('invalid namespace fields')
+            if kind in ('link','rename','symlink'):
+                target=op.get('target')
+                if not isinstance(target,str):raise ValueError('target must be a string')
+                data=target.encode('utf-8')
+                if not data or len(data)>4096 or b'\0' in data:raise ValueError('invalid target')
+            else:data=b''
+            offset=0
+            if not creating:mode=uid=gid=0
+            if kind=='symlink':mode=0o777
+        elif kind=='truncate':
+            if set(op)!={'kind','path','size'}:raise ValueError('truncate needs path and size')
+            offset=op['size'];data=b''
         else:
-            if 'size' in op or (op['kind'] == 'write' and set(op) - {'kind', 'path', 'offset', 'data_hex'}):
-                raise ValueError('invalid write/create fields')
-            text = op.get('data_hex', '')
-            if not isinstance(text, str) or len(text) > 8 * 1024 * 1024:
-                raise ValueError('data limit')
-            data = bytes.fromhex(text)
-            offset = op.get('offset', 0)
-            if op['kind'] == 'create' and offset:
-                raise ValueError('create offset must be zero')
-        mode, uid, gid = op.get('mode', 0o644), op.get('uid', credentials.uid if credentials else os.getuid()), op.get('gid', credentials.gid if credentials else os.getgid())
-        if namespace: mode=uid=gid=0
-        for name, value, maximum in (('offset', offset, 64 * 1024 * 1024), ('mode', mode, 0o777), ('uid', uid, 2**32-1), ('gid', gid, 2**32-1)):
-            if type(value) is not int or not 0 <= value <= maximum:
-                raise ValueError('invalid ' + name)
+            fields={'kind','path','offset','data_hex'}
+            if kind=='create':fields|={'mode','uid','gid'}
+            if set(op)-fields:raise ValueError('invalid write/create fields')
+            text=op.get('data_hex','')
+            if not isinstance(text,str) or len(text)>8*1024*1024:raise ValueError('data limit')
+            data=bytes.fromhex(text);offset=op.get('offset',0)
+            if kind=='create' and offset:raise ValueError('create offset must be zero')
+        for name,value,maximum in (('offset',offset,64*1024*1024),('mode',mode,0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
+            if type(value) is not int or not 0<=value<=maximum:raise ValueError('invalid '+name)
         total += len(data)
         if total > 4 * 1024 * 1024 or offset + len(data) > 64 * 1024 * 1024:
             raise ValueError('transaction bounds')

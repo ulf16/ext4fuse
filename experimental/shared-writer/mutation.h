@@ -12,7 +12,10 @@ enum mutation_kind {
   MUT_CREATE = 3,
   MUT_LINK = 4,
   MUT_RENAME = 5,
-  MUT_UNLINK = 6
+  MUT_UNLINK = 6,
+  MUT_MKDIR = 7,
+  MUT_RMDIR = 8,
+  MUT_SYMLINK = 9
 };
 struct mutation {
   enum mutation_kind kind;

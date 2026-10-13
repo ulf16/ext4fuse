@@ -45,6 +45,7 @@ python3 experimental/shared-writer/test-session.py --work "$work"
 python3 experimental/shared-writer/test-policy.py --work "$work"
 python3 experimental/shared-writer/test-handles.py --work "$work"
 python3 experimental/shared-writer/test-namespace.py --work "$work"
+python3 experimental/shared-writer/test-directories.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -78,8 +79,8 @@ performance have not been benchmarked for this backend.
 - Incremental durable transactions and in-place crash recovery; the full-image redo
   experiment below is not an ext4 journal commit.
 - Feature admission, corruption handling and complete mutation semantics, including
-  directory creation/removal/rename, ownership, ACLs and attributes; regular-file
-  namespace mutations and open-but-deleted lifetime are now exercised offline.
+  ownership, ACLs, attributes and directory-handle/cwd lifetime; basic file,
+  directory and symlink namespace mutations are now exercised offline.
 - Concurrency, reader/writer cache invalidation and stable inode/file-handle lifetime.
 - FUSE frontend semantics, device locking, journal interaction and multi-mount protection.
 - Resource/error bounds, fault injection at every durability boundary and independent
@@ -542,7 +543,7 @@ and `target`, or `kind: unlink` with `path`. All directory entries, inode link
 counts, ctime and affected parent mtime/ctime are published together through the
 existing undo/redo recovery chain. Rename replaces an existing regular target;
 renaming two names for the same inode is a no-op. Hard links cannot replace an
-entry. Neither a directory nor a symlink is mutated by this interface.
+entry. Directory and symlink extensions are described below.
 
 Source/destination traversal checks search permission; namespace changes check
 parent write/search permission and sticky-directory ownership. Hard-link source
@@ -553,8 +554,9 @@ block removal/rename; immutable parents block changes and append-only parents
 allow addition but forbid removal or replacement. Indexed/casefold directories,
 quota/bigalloc/EA-inode filesystems, unsupported regular-file layouts and active
 orphan-file recovery (`orphan_present`) are rejected rather than modified.
-Directory creation/removal/moves, symlink mutation, rename-exchange/noreplace
-flags and linking an unlinked inode through a handle remain unimplemented.
+Indexed/casefold directory mutation, rename-exchange/noreplace flags and linking
+an unlinked inode through a handle remain unimplemented. Directory creation,
+removal, moves and symlink mutation are described below.
 
 Before each namespace transaction the broker obtains a unique snapshot of all
 live inode/generation pairs from the resident handle table, under the session
@@ -598,3 +600,68 @@ e2fsck checks clean post-reclamation images and independently recovers orphan
 copies. A test-only next-pointer corruption must poison refresh/attach without
 reclamation. This remains an offline managed-image prototype, with physical-device
 and mounted writes disabled.
+
+## Directory and symbolic-link mutations
+
+`Session.mkdir(path, mode=0o777)`, `rmdir(path)` and `symlink(target, path)` add
+staged directory and link creation/removal. `rename` now moves directories and
+renames/replaces symbolic links; `unlink` removes links themselves. `link` can
+hard-link a symlink owned by the caller/root, while directory hard links are
+forbidden. Operation batches use `kind: mkdir` with `path` and optional `mode`,
+`kind: rmdir` with `path`, and `kind: symlink` with `path` and `target`. Bound
+credentials determine creation UID/GID; explicit ownership remains available
+only in the administrative offline encoder. All final entry operations use
+lookup without following a symbolic link, and intermediate symlinks in mutation
+paths still return ELOOP. No target file is opened or modified by symlink mutation.
+
+New directories inherit umask, setgid group/bit and default ACLs. Inherited
+access ACLs are masked by requested permissions, while the parent's unmodified
+default ACL is copied for descendants. Requested mkdir modes support permission
+and sticky bits through 01777; callers cannot request setuid/setgid bits (the
+inherited setgid bit is applied separately). Symlinks receive mode 0777 regardless
+of umask, inherit a setgid parent's group, and receive no inherited access/default
+ACL. Targets must be nonempty UTF-8 strings without NUL; their encoded bytes must
+be shorter than the filesystem block size. Dangling, relative and absolute
+targets are stored verbatim. Both inode-stored fast links (<60 bytes) and
+block-backed links are handled; unsupported inline-data creation is rejected.
+
+Directory creation initializes `.` and `..`, accounts for directory allocation,
+and increments the parent link count. Removal accepts only an empty directory
+with valid dot entries and a consistent two-link count; files/symlinks return
+ENOTDIR and nonempty directories return ENOTEMPTY. Cross-parent rename rejects
+moves into the directory itself or its descendants, bounds/checks ancestor
+traversal, requires source-directory write access to update `..`, and changes
+both parent link counts in the same recoverable transaction. Same-parent moves
+do not require write access to the moved directory itself. An existing directory
+target must be empty; directory/non-directory replacement mismatches fail with
+ENOTDIR/EISDIR. The same-inode rename no-op is retained. Parent overflow/underflow
+and malformed dot entries fail before publication.
+
+New directory and symlink allocations advance the previous inode generation.
+Directory data checksums depend on generation, so the freshly initialized block
+is checksummed again after that identity change. Empty-directory deletion frees
+its data/xattrs and decrements allocated-directory accounting. Fast-symlink
+reclamation skips block punching because `i_block` contains target bytes rather
+than block numbers. Symlinks have no file handles in this API and are reclaimed
+immediately after their final link is removed. Regular files replaced by a
+symlink remain pinned for their existing open handles using the preceding orphan
+mechanism. Directory handles, active cwd references and removed-but-open directory
+lifetime are still absent; these are required before a mounted frontend.
+
+`Session.readlink(path)` returns target **bytes** using the unchanged native
+symlink reader. The private pipe command 13 checks the reader pause gate,
+ancestor search permissions, symlink type and bounded target size; it does not
+follow the target. This makes the prototype usable and lets tests verify native
+fast/slow symlink reads after mutations.
+
+`test-directories.py` runs all 12 filesystem configurations with sanitizers.
+It checks dot entries and parent counts, subtree moves with a live regular-file
+handle, cycles, empty replacement, nonempty removal, type mismatches, source and
+parent permissions, sticky/immutable restrictions, generation reuse, inherited
+setgid/default ACL policy through a separate numeric caller, fast/slow/Unicode
+and dangling symlinks, hard-link and no-follow replacement behavior, block-size
+limits, directory/symlink accounting, failed batches/producers, and a real torn
+cross-parent rename. debugfs independently inspects topology/metadata, the native
+reader compares file/link bytes, and e2fsck checks each successful configuration.
+Physical-device writes, FUSE write callbacks and installed reader packaging are
+unchanged. Indexed/casefold directory mutation remains rejected.
