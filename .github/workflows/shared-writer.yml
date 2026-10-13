@@ -71,8 +71,12 @@ jobs:
         run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/policy-writer"
       - name: Verify credential-bound sessions and committed ACL metadata
         run: python3 experimental/shared-writer/test-policy.py --work "$RUNNER_TEMP/policy-writer"
+      - name: Verify existing-file handle grants, identity and interrupted recovery
+        run: python3 experimental/shared-writer/test-handles.py --work "$RUNNER_TEMP/policy-writer"
       - name: Save policy validation summary
         uses: actions/upload-artifact@v4
         with:
           name: permission-policy-validation
-          path: ${{ runner.temp }}/policy-writer/policy-results.json
+          path: |
+            ${{ runner.temp }}/policy-writer/policy-results.json
+            ${{ runner.temp }}/policy-writer/handles-results.json

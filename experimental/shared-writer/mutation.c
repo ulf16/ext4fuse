@@ -153,6 +153,10 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
     e = touch(fs, dir, 0);
   return e;
 }
+static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
+                             ext2_ino_t ino,
+                             const struct credentials *credentials,
+                             const struct inode_grant *grant);
 errcode_t mutation_apply(ext2_filsys fs, const struct mutation *op) {
   return mutation_apply_as(fs, op, NULL);
 }
@@ -191,8 +195,26 @@ errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *op,
   free(leaf);
   if (e)
     return e;
+  return apply_inode(fs, op, ino, credentials, NULL);
+}
+errcode_t mutation_apply_grant(ext2_filsys fs, const struct mutation *op,
+                               const struct credentials *credentials,
+                               const struct inode_grant *grant) {
+  if (policy_credentials(credentials) || grant_valid(grant) || !op ||
+      (op->kind != MUT_WRITE && op->kind != MUT_TRUNCATE) || op->mode ||
+      op->uid || op->gid)
+    return EINVAL;
+  if (!(grant->access & GRANT_WRITE))
+    return EBADF;
+  return apply_inode(fs, op, grant->inode, credentials, grant);
+}
+static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
+                             ext2_ino_t ino,
+                             const struct credentials *credentials,
+                             const struct inode_grant *grant) {
   struct ext2_inode in;
-  e = ext2fs_read_inode(fs, ino, &in);
+  errcode_t e =
+      grant ? grant_inode(fs, grant, &in) : ext2fs_read_inode(fs, ino, &in);
   if (e)
     return e;
   unsigned type = in.i_mode & LINUX_S_IFMT;
@@ -205,11 +227,20 @@ errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *op,
   if (in.i_flags & UNSUPPORTED)
     return EOPNOTSUPP;
   uint64_t size = EXT2_I_SIZE(&in);
+  struct mutation resolved = *op;
+  if (grant && (grant->flags & GRANT_APPEND) && op->kind == MUT_WRITE)
+    resolved.offset = size;
+  op = &resolved;
+  if (op->length > MAX_DATA || op->offset > MAX_FILE ||
+      op->length > MAX_FILE - op->offset || (op->length && !op->data) ||
+      (op->kind == MUT_TRUNCATE && op->length))
+    return EINVAL;
   if ((in.i_flags & EXT2_APPEND_FL) &&
-      (op->kind == MUT_TRUNCATE || op->offset != size))
+      (op->kind == MUT_TRUNCATE || (grant && !(grant->flags & GRANT_APPEND)) ||
+       op->offset != size))
     return EPERM;
   if (credentials && op->kind != MUT_CREATE) {
-    e = policy_inode(fs, ino, credentials, 2);
+    e = grant ? 0 : policy_inode(fs, ino, credentials, 2);
     if (!e)
       e = policy_writable(fs, ino);
     if (e)

@@ -62,6 +62,24 @@ def encode(operations, credentials=None):
     return result
 
 
+def encode_grant(credentials, grant, kind, offset=0, data=b''):
+    """Internal trusted broker format; never accept inode grants from JSON."""
+    if not isinstance(credentials, Credentials) or not isinstance(grant, bytes) or len(grant) != 16:
+        raise ValueError('invalid broker grant')
+    if kind not in ('write', 'truncate') or type(offset) is not int or not 0 <= offset <= 64*1024*1024:
+        raise ValueError('invalid handle operation')
+    if not isinstance(data, bytes) or len(data)>4*1024*1024 or (kind=='truncate' and data):
+        raise ValueError('invalid handle payload')
+    inode, generation, access, flags = struct.unpack('<IIII',grant)
+    if not inode or not 1<=access<=3 or flags>1 or not access&2:
+        raise ValueError('invalid write grant')
+    if (kind=='truncate' or not flags) and offset+len(data)>64*1024*1024:
+        raise ValueError('transaction bounds')
+    context=credentials.encode()
+    return (b'E4REQ003'+struct.pack('<II',1,len(context))+context+
+            HEADER.pack(KINDS[kind],16,0,0,0,0,offset,len(data))+grant+data)
+
+
 def apply(root, producer, operations, credentials=None):
     request = encode(operations, credentials)
     with chain.locked(root) as root:

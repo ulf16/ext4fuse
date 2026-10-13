@@ -43,6 +43,7 @@ python3 experimental/shared-writer/test-write-api.py --work "$work"
 python3 experimental/shared-writer/test-session.py --work "$work"
 "$work/policy-unit"
 python3 experimental/shared-writer/test-policy.py --work "$work"
+python3 experimental/shared-writer/test-handles.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -318,7 +319,7 @@ until independently validated. Unindexed directories can expand when full.
 
 The CLI and calls without credentials retain administrative offline behavior.
 The optional trusted credential policy below adds access checks, creation
-inheritance and a caller umask. Persistent open-handle/namespace semantics and
+inheritance and a caller umask. Existing-file handles are described below; namespace mutation and
 mounted writes remain disabled; the future frontend must bind authenticated
 caller context and implement those lifetime rules.
 
@@ -363,7 +364,7 @@ the recovered head before retrying a non-idempotent request.
 The private binary pipe protocol bounds paths to 4096 bytes and individual reads
 to 1 MiB. The Python API accepts canonical absolute UTF-8 paths, explicit bounded
 read ranges, sizes and free-block/free-inode counters. The reader resolves each
-request afresh; persistent open-file handles are still absent. Requests without
+request afresh; the optional inode-bound handles below retain open-time grants. Requests without
 credentials retain administrative behavior; credential-bound sessions enforce
 the numeric policy below. The image identity and resident reader process are retained across
 successful transactions. Locks protect cooperating processes, not external disk
@@ -431,7 +432,8 @@ Non-root content changes conservatively clear setuid/setgid bits; zero-byte
 writes do not clear them. Credential-bound writes to files carrying
 `security.capability` are rejected until killpriv semantics are implemented.
 No capability sets, security-module policy, ID mapping, permission-changing APIs,
-open-time grants, retained handles or multi-user mounted frontend are introduced.
+multi-user mounted frontend are introduced. Existing-file open-time grants
+and session-local handles are described below.
 
 Credential batches use `E4REQ002`; legacy administrative `E4REQ001` is retained.
 Permission/error rejections emit a bounded `E4ER0001` frame with a POSIX errno;
@@ -453,4 +455,80 @@ and e2fsck verifies all valid committed images. Deliberately invalid ACL fixture
 are separate and must remain byte-for-byte unchanged by rejected mutations.
 These tests use explicit logical callers, not host credential changes or mounted
 kernel authorization. Physical devices and installed read-only behavior remain
+unchanged.
+
+## Existing-file handles and open-time grants
+
+Credential-bound sessions can open an existing regular file with access `r`, `w`
+or `rw`, optional `append=True`, and optional `truncate=True` requiring write
+access. Use the returned `FileHandle` as a context manager or close it explicitly.
+Reads/writes take explicit offsets; there is no implicit seek cursor or duplicated
+open-file description API. The positional interface is intended for later FUSE
+callbacks, not a complete replacement for POSIX file descriptors.
+
+```python
+with fs.open("/existing-file", "rw") as file:
+    old = file.read(offset=0, length=4096)
+    file.write(b"caller bytes", offset=17)
+    file.truncate(9000)
+with fs.open("/existing-file", "w", append=True) as file:
+    file.write(b"tail")  # EOF is selected inside the serialized transaction
+```
+
+Open checks ancestor search, the complete requested read/write permission mask,
+regular-file type, supported inode features, allocation, link count and inode
+generation. Write opens additionally enforce immutable/append-only inode flags
+and reject file capabilities. Store the granted access, inode number/generation
+and append status in the resident reader's bounded table. Every handle read or
+writer-grant request validates the current inode allocation and identity. Native
+reads use the opened inode directly; writes use its granted identity, not the
+original pathname. Mode or POSIX ACL changes do not revoke a successful open-time
+grant. New path opens and path mutations still run current permission checks.
+This follows the [open-file description model](https://man7.org/linux/man-pages/man2/open.2.html).
+
+The private writer format `E4REQ003` contains credential context and a trusted
+16-byte inode grant instead of a pathname. It is an internal broker privilege:
+it is not authenticated, must never be accepted from untrusted callers, and is
+not exposed in the JSON operation interface. The session validates its registered
+file object and obtains write authority from the resident table before encoding
+a request. The C producer independently checks allocation, inode generation,
+live regular-file identity, write access, flags and payload bounds before staging.
+It deliberately does not rerun path DAC/ACL checks for a granted descriptor.
+Current immutable/append-only flags and file-capability restrictions still apply;
+non-root data changes still clear privilege bits under the existing policy.
+
+Append status selects the current EOF in the same serialized writer transaction,
+ignoring the supplied write offset. This is the prototype's append behavior, not
+a claim to implement every POSIX/Linux positional-I/O flag distinction. Truncate
+on an append-status handle is allowed for a normal file, but an append-only inode
+rejects truncation and requires an append-status handle for writes. A truncating
+open obtains a handle slot before touching data; failure releases that slot, and
+quota failure cannot truncate an existing file.
+
+At most 128 handles may be active in one session. Released tokens are not reused
+within the reader process; Python file objects are bound to their issuing session
+and become EBADF after close/session shutdown. A detected stale generation is
+sticky for that table entry, even if the generation is later restored. Slots can
+still be closed while reads are suspended. No descriptor survives process/session
+restart, and failed recovery/reader transport still blocks all operations.
+
+These are existing *linked* regular-file handles. Namespace mutation, create-and-
+open, orphan/inode pinning across unlink, deleted-file reclamation, ID mapping,
+credential transfer, shared seek offsets and mounted writes remain absent. A
+missing/free/deleted/retyped inode fails with ESTALE instead of being served or
+reallocated through an old handle. Inode generation is an identity check, not a
+substitute for the pinning required before enabling unlink/reuse. Exclusive chain
+locking and immutable managed-image identity remain required; external writers
+are outside the cooperative-process model. Identity checks currently load inode
+bitmaps through libext2fs; large-filesystem latency/memory have not been benchmarked.
+
+The handle matrix checks access-mode separation, mode/named-ACL grant retention,
+sparse truncate/regrow, live reads after commits, serialized concurrent appends,
+truncating-open failure/quota atomicity, dynamic immutable/append-only/capability
+restrictions, stale-generation rejection in both reader and writer, token/session
+invalidation, paused native handle reads and recovery after an actual torn page.
+The same resident reader process and image inode are retained. debugfs compares
+contents and e2fsck checks all 12 configurations. `handle-test-producer` is a
+separate test-only staged metadata helper, not a user metadata API or installed
+target. Physical devices, installed reader behavior and release packaging remain
 unchanged.

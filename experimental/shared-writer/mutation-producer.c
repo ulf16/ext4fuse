@@ -43,10 +43,13 @@ int main(int argc, char **argv) {
   unsigned count = 0;
   size_t total = 0;
   struct credentials credentials = {0};
-  int enforce = 0;
+  int enforce = 0, by_inode = 0;
+  struct inode_grant grants[64] = {0};
   errcode_t e = read_all(input, header, 12);
   if (!e) {
-    if (!memcmp(header, "E4REQ002", 8))
+    if (!memcmp(header, "E4REQ003", 8))
+      enforce = by_inode = 1;
+    else if (!memcmp(header, "E4REQ002", 8))
       enforce = 1;
     else if (memcmp(header, "E4REQ001", 8))
       e = EINVAL;
@@ -75,8 +78,9 @@ int main(int argc, char **argv) {
       break;
     uint32_t pathlen = little(header + 4, 4);
     uint64_t length = little(header + 32, 8);
-    if (!pathlen || pathlen > 4096 || length > 4 * 1024 * 1024 ||
-        length > 4 * 1024 * 1024 - total || little(header + 20, 4)) {
+    if ((by_inode && pathlen != 16) || !pathlen || pathlen > 4096 ||
+        length > 4 * 1024 * 1024 || length > 4 * 1024 * 1024 - total ||
+        little(header + 20, 4)) {
       e = EINVAL;
       break;
     }
@@ -95,8 +99,16 @@ int main(int argc, char **argv) {
       break;
     }
     e = read_all(input, path, pathlen);
-    if (!e && memchr(path, 0, pathlen))
+    if (!e && !by_inode && memchr(path, 0, pathlen))
       e = EINVAL;
+    if (!e && by_inode) {
+      grants[i].inode = little((unsigned char *)path, 4);
+      grants[i].generation = little((unsigned char *)path + 4, 4);
+      grants[i].access = little((unsigned char *)path + 8, 4);
+      grants[i].flags = little((unsigned char *)path + 12, 4);
+      if (grant_valid(&grants[i]))
+        e = EINVAL;
+    }
     if (!e)
       e = read_all(input, data, length);
     total += length;
@@ -124,7 +136,9 @@ int main(int argc, char **argv) {
   if (!e && failure)
     overlay_fail_writes(overlay, strtol(failure, NULL, 10));
   for (unsigned i = 0; !e && i < count; i++)
-    e = mutation_apply_as(fs, &ops[i], enforce ? &credentials : NULL);
+    e = by_inode
+            ? mutation_apply_grant(fs, &ops[i], &credentials, &grants[i])
+            : mutation_apply_as(fs, &ops[i], enforce ? &credentials : NULL);
   if (!e) {
     e = ext2fs_close(fs);
     fs = NULL;

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef EXPERIMENTAL_MUTATION_H
 #define EXPERIMENTAL_MUTATION_H
+#include "grant.h"
 #include "policy.h"
 #include <ext2fs/ext2fs.h>
 #include <stddef.h>
@@ -19,4 +20,7 @@ struct mutation {
 errcode_t mutation_apply(ext2_filsys fs, const struct mutation *operation);
 errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *operation,
                             const struct credentials *credentials);
+errcode_t mutation_apply_grant(ext2_filsys fs, const struct mutation *operation,
+                               const struct credentials *credentials,
+                               const struct inode_grant *grant);
 #endif
