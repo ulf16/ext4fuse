@@ -195,8 +195,8 @@ class Broker:
                     names=self.s.listxattrs(path)
                     if sys.platform=='darwin':
                         if 'system.posix_acl_access' in names or native_acl.INHERIT_KEY in names:names.append('com.apple.system.Security')
-                        names=[name for name in names if name!=native_acl.INHERIT_KEY]
-                        names=[name[5:] if name.startswith('user.') else name for name in names]
+                    names=[name for name in names if name not in (native_acl.INHERIT_KEY,native_acl.LEGACY_KEY)]
+                    if sys.platform=='darwin':names=[name[5:] if name.startswith('user.') else name for name in names]
                     return 0,b''.join(os.fsencode(name)+b'\0' for name in names)
             except OSError as e:
                 if e.errno==errno.ENODATA and sys.platform=='darwin':raise OSError(errno.ENOATTR,'attribute not found') from e

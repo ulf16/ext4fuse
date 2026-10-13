@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Native inheritance transaction, authority, propagation and recovery tests."""
-import argparse,errno,hashlib,importlib.util,json,shutil,struct,subprocess,tempfile
+import argparse,errno,hashlib,importlib.util,json,os,shutil,struct,subprocess,tempfile
 from types import SimpleNamespace
 from unittest.mock import patch
 from pathlib import Path
@@ -53,6 +53,11 @@ with tempfile.TemporaryDirectory(prefix='native-inherit-',dir=a.work) as tmp:
    s.mkdirat(None,'/parent',0o700)
    s.setxattr('/parent',n.INHERIT_KEY,policy(1,2))
    check(n.INHERIT_KEY in s.listxattrs('/parent'))
+   public=broker.Broker(s)
+   public.dispatch(22,b'',b'',os.getuid(),os.getgid(),0o077,[],0,0,0)
+   listing=public.dispatch(30,b'/parent',b'',os.getuid(),os.getgid(),0o077,[],0,0,0)[1]
+   check(n.INHERIT_KEY.encode() not in listing and n.LEGACY_KEY.encode() not in listing)
+   s._mount_context(owner)
    atomic(s,lambda:s.setxattr('/parent',n.LEGACY_KEY,policy(1,2)),errno.EOPNOTSUPP)
    h=s.openat(None,'/parent/file','w',create=True,exclusive=True,mode=0o200);h.write(b'inherited');h.close()
    check(mode(s,'/parent/file')==0o240);check((2,4,2001) in n.posix(s.getxattr('/parent/file','system.posix_acl_access')))
