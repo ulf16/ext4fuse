@@ -47,6 +47,7 @@ prototype = compile_source(here / 'prototype.c', 'prototype')
 policy_core = compile_source(here / 'policy-core.c', 'policy-core')
 policy_fs = compile_source(here / 'policy-fs.c', 'policy-fs')
 policy_acl = compile_source(repo / 'acl.c', 'policy-acl')
+namespace = compile_source(here / 'namespace.c', 'namespace')
 grant = compile_source(here / 'grant.c', 'grant')
 handles = compile_source(here / 'handles.c', 'handles')
 mutation = compile_source(here / 'mutation.c', 'mutation')
@@ -54,6 +55,8 @@ handle_test = compile_source(here / 'handle-test-producer.c', 'handle-test-produ
 producer = compile_source(here / 'mutation-producer.c', 'mutation-producer')
 step = compile_source(here / 'step-writer.c', 'step-writer')
 verify = compile_source(here / 'verify-reader.c', 'verify-reader')
+session_super = compile_source(here / 'super-session.c', 'super-session')
+server_readers = [obj for obj in reader_objects if Path(obj).name != 'reader-super.o'] + [session_super]
 server = compile_source(here / 'reader-server.c', 'reader-server')
 watch = compile_source(here / 'reader-watch.c', 'reader-watch')
 policy_unit = compile_source(here / 'policy-unit.c', 'policy-unit')
@@ -61,9 +64,9 @@ unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
 for name, objects in [('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
-                      ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, mutation, producer]),
+                      ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, mutation, producer]),
                       ('handle-test-producer', [overlay, manager, handle_test]),
-                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, handles, reader, server, *reader_objects]),
+                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, mutation, handles, reader, server, *server_readers]),
                       ('reader-watch', [overlay, reader, watch, *reader_objects]),
                       ('verify-reader', [overlay, reader, verify, *reader_objects]),
                       ('policy-unit', [policy_core, policy_acl, policy_unit]),

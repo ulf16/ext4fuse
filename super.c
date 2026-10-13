@@ -141,7 +141,11 @@ int super_fill(void)
     ret = reject_features("read-only-compatible", super.s_feature_ro_compat & ~RO_COMPAT_SUPPORTED,
                           ro_names, sizeof(ro_names) / sizeof(ro_names[0]));
     if (ret < 0) return ret;
-    if (!(super.s_state & 1) || (super.s_state & ~1) || super.s_last_orphan)
+    if (!(super.s_state & 1) || (super.s_state & ~1)
+#ifndef EXT4_EXPERIMENTAL_SESSION_ORPHANS
+        || super.s_last_orphan
+#endif
+    )
         return invalid("filesystem is not clean; unmount/check it on Linux before reading (no journal replay)");
     if (super.s_log_block_size > 2)
         return invalid("unsupported block size (only 1024, 2048, 4096 bytes are supported)");

@@ -44,6 +44,7 @@ python3 experimental/shared-writer/test-session.py --work "$work"
 "$work/policy-unit"
 python3 experimental/shared-writer/test-policy.py --work "$work"
 python3 experimental/shared-writer/test-handles.py --work "$work"
+python3 experimental/shared-writer/test-namespace.py --work "$work"
 ```
 
 Linux: install `libfuse3-dev libext2fs-dev e2fsprogs pkg-config`, and use `/tmp`
@@ -77,7 +78,8 @@ performance have not been benchmarked for this backend.
 - Incremental durable transactions and in-place crash recovery; the full-image redo
   experiment below is not an ext4 journal commit.
 - Feature admission, corruption handling and complete mutation semantics, including
-  unlink, directory rename, ownership, ACLs, attributes and open-but-deleted files.
+  directory creation/removal/rename, ownership, ACLs and attributes; regular-file
+  namespace mutations and open-but-deleted lifetime are now exercised offline.
 - Concurrency, reader/writer cache invalidation and stable inode/file-handle lifetime.
 - FUSE frontend semantics, device locking, journal interaction and multi-mount protection.
 - Resource/error bounds, fault injection at every durability boundary and independent
@@ -319,9 +321,9 @@ until independently validated. Unindexed directories can expand when full.
 
 The CLI and calls without credentials retain administrative offline behavior.
 The optional trusted credential policy below adds access checks, creation
-inheritance and a caller umask. Existing-file handles are described below; namespace mutation and
-mounted writes remain disabled; the future frontend must bind authenticated
-caller context and implement those lifetime rules.
+inheritance and a caller umask. Existing-file handles and regular-file namespace
+operations are described below. Mounted writes remain disabled; the future
+frontend must bind authenticated caller context and implement its lifetime rules.
 
 The API matrix verifies unaligned binary overwrites, EOF growth, sparse gaps,
 non-block-aligned shrink/regrow zeroing, nested/empty creation and high uid/gid
@@ -512,15 +514,14 @@ sticky for that table entry, even if the generation is later restored. Slots can
 still be closed while reads are suspended. No descriptor survives process/session
 restart, and failed recovery/reader transport still blocks all operations.
 
-These are existing *linked* regular-file handles. Namespace mutation, create-and-
-open, orphan/inode pinning across unlink, deleted-file reclamation, ID mapping,
-credential transfer, shared seek offsets and mounted writes remain absent. A
-missing/free/deleted/retyped inode fails with ESTALE instead of being served or
-reallocated through an old handle. Inode generation is an identity check, not a
-substitute for the pinning required before enabling unlink/reuse. Exclusive chain
-locking and immutable managed-image identity remain required; external writers
-are outside the cooperative-process model. Identity checks currently load inode
-bitmaps through libext2fs; large-filesystem latency/memory have not been benchmarked.
+Opening still requires an existing linked regular file. A granted inode can
+subsequently have zero links while it belongs to the validated durable orphan
+chain described below. Missing/free/retyped/recycled identities fail ESTALE.
+Create-and-open, descriptor transfer, shared seek offsets, ID mapping and mounted
+writes remain absent. Exclusive chain locking and immutable managed-image
+identity remain required; external writers are outside the cooperative-process
+model. Identity checks load inode bitmaps through libext2fs; large-filesystem
+latency/memory have not been benchmarked.
 
 The handle matrix checks access-mode separation, mode/named-ACL grant retention,
 sparse truncate/regrow, live reads after commits, serialized concurrent appends,
@@ -532,3 +533,68 @@ contents and e2fsck checks all 12 configurations. `handle-test-producer` is a
 separate test-only staged metadata helper, not a user metadata API or installed
 target. Physical devices, installed reader behavior and release packaging remain
 unchanged.
+
+## Regular-file namespace and durable open-but-unlinked lifetime
+
+`Session.link(source, target)`, `rename(source, target)` and `unlink(path)` are
+serialized staged transactions. Batches accept `kind: link/rename` with `path`
+and `target`, or `kind: unlink` with `path`. All directory entries, inode link
+counts, ctime and affected parent mtime/ctime are published together through the
+existing undo/redo recovery chain. Rename replaces an existing regular target;
+renaming two names for the same inode is a no-op. Hard links cannot replace an
+entry. Neither a directory nor a symlink is mutated by this interface.
+
+Source/destination traversal checks search permission; namespace changes check
+parent write/search permission and sticky-directory ownership. Hard-link source
+traversal only needs search, and the protected-hardlink policy allows an inode
+owner/root, or a non-owner with read/write access to a regular file without
+setuid or executable-setgid privilege. Immutable and append-only inode flags
+block removal/rename; immutable parents block changes and append-only parents
+allow addition but forbid removal or replacement. Indexed/casefold directories,
+quota/bigalloc/EA-inode filesystems, unsupported regular-file layouts and active
+orphan-file recovery (`orphan_present`) are rejected rather than modified.
+Directory creation/removal/moves, symlink mutation, rename-exchange/noreplace
+flags and linking an unlinked inode through a handle remain unimplemented.
+
+Before each namespace transaction the broker obtains a unique snapshot of all
+live inode/generation pairs from the resident handle table, under the session
+mutex and chain lock. The private `E4REQ004` envelope includes that snapshot;
+zero operations are reserved for internal orphan cleanup. These pins are trusted
+broker authority, not authenticated input, and must never come from an untrusted
+client or the JSON operation interface. The producer validates allocation,
+generation and regular-file identity before staging, and rejects stale or
+duplicate pins without publishing. The 128-handle limit also bounds orphan-list
+length; no live pinned inode can be allocated for another file.
+
+Removing the last filename of a pinned inode sets its link count to zero and
+adds it to the legacy ext orphan chain (`s_last_orphan` / `i_dtime`), in the same
+recoverable transaction as the directory deletion. Its data, xattrs and allocation
+remain live; all existing handles retain their granted access. Replacing a pinned
+rename destination uses the same mechanism. Closing a nonfinal handle keeps the
+orphan pinned. Final close, normal session shutdown, or a subsequent session after
+a coordinator crash reclaims unpinned orphans in a staged transaction, freeing
+data/indirect/extent and external attribute storage through libext2fs accounting.
+Newly allocated files advance the retained inode generation so recycled identities
+cannot satisfy an old grant. If final-close cleanup fails, the handle is still
+released and the durable orphan is retried by a later batch/session; close reports
+the error. Open handles never survive session/process restart.
+
+A live orphan chain needs recovery and is not a clean export for another reader.
+The normal production reader still rejects a nonempty orphan list. Only the
+isolated `reader-server` links `super-session.c`, which permits that list after
+checking its bounds, allocation, type and cycles on attach and every refresh.
+Dirty/journal-recovery checks remain active. Corrupt lists fail closed before any
+reclamation. Use a normal close/checkpoint before exporting an image; never mount
+or run a repairing tool against an active session image. Independent e2fsck
+recovery is tested on disposable copies after the coordinator has exited.
+
+`test-namespace.py` runs the 12 classic/extent, 1/2/4 KiB, checksum on/off fixtures.
+It checks cross-parent rename, replacement and same-inode semantics, hard-link
+counts, parent/sticky/protected-link permissions, inode flags, multiple orphan
+ordering, final-close/session/crash reclamation, external xattrs, generation
+reuse, malformed pins, failed batches/producers and actual torn-page recovery.
+Native handles compare byte contents; debugfs checks identity/link counts;
+e2fsck checks clean post-reclamation images and independently recovers orphan
+copies. A test-only next-pointer corruption must poison refresh/attach without
+reclamation. This remains an offline managed-image prototype, with physical-device
+and mounted writes disabled.

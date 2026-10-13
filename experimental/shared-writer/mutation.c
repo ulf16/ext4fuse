@@ -10,8 +10,8 @@
   (EXT2_COMPR_FL | EXT4_ENCRYPT_FL | EXT4_VERITY_FL | EXT4_INLINE_DATA_FL |    \
    EXT4_EA_INODE_FL)
 
-static errcode_t parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
-                        char **leaf, const struct credentials *credentials) {
+errcode_t mutation_parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
+                          char **leaf, const struct credentials *credentials) {
   if (!path || path[0] != '/' || strlen(path) > 4096 || !path[1] ||
       path[strlen(path) - 1] == '/')
     return EINVAL;
@@ -106,7 +106,14 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
   e = ext2fs_new_inode(fs, dir, LINUX_S_IFREG | op->mode, NULL, ino);
   if (e)
     return e;
+  struct ext2_inode previous;
+  e = ext2fs_read_inode(fs, *ino, &previous);
+  if (e)
+    return e;
+  if (previous.i_generation == UINT32_MAX)
+    return EOVERFLOW;
   struct ext2_inode in = {0};
+  in.i_generation = previous.i_generation + 1;
   in.i_mode = LINUX_S_IFREG | op->mode;
   in.i_uid = op->uid & 0xffff;
   in.i_gid = op->gid & 0xffff;
@@ -172,7 +179,7 @@ errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *op,
     return EINVAL;
   ext2_ino_t dir, ino;
   char *leaf = NULL;
-  errcode_t e = parent(fs, op->path, &dir, &leaf, credentials);
+  errcode_t e = mutation_parent(fs, op->path, &dir, &leaf, credentials);
   if (e)
     return e;
   e = ext2fs_lookup(fs, dir, leaf, strlen(leaf), NULL, &ino);

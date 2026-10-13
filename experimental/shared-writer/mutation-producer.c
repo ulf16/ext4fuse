@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "mutation.h"
+#include "namespace.h"
 #include "overlay.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -43,11 +44,15 @@ int main(int argc, char **argv) {
   unsigned count = 0;
   size_t total = 0;
   struct credentials credentials = {0};
-  int enforce = 0, by_inode = 0;
+  int enforce = 0, by_inode = 0, broker = 0;
+  struct inode_pin pins[PIN_LIMIT] = {0};
+  unsigned pin_count = 0;
   struct inode_grant grants[64] = {0};
   errcode_t e = read_all(input, header, 12);
   if (!e) {
-    if (!memcmp(header, "E4REQ003", 8))
+    if (!memcmp(header, "E4REQ004", 8))
+      enforce = broker = 1;
+    else if (!memcmp(header, "E4REQ003", 8))
       enforce = by_inode = 1;
     else if (!memcmp(header, "E4REQ002", 8))
       enforce = 1;
@@ -56,7 +61,7 @@ int main(int argc, char **argv) {
   }
   if (!e) {
     count = little(header + 8, 4);
-    if (!count || count > 64) {
+    if ((!count && !broker) || count > 64) {
       count = 0;
       e = EINVAL;
     }
@@ -65,12 +70,25 @@ int main(int argc, char **argv) {
     unsigned char context[16 + 4 * POLICY_GROUPS];
     e = read_all(input, header, 4);
     size_t bytes = little(header, 4);
-    if (!e && (bytes < 16 || bytes > sizeof(context)))
+    if (!e && ((!broker || bytes) && (bytes < 16 || bytes > sizeof(context))))
       e = EINVAL;
     if (!e)
       e = read_all(input, context, bytes);
-    if (!e)
+    if (!e && bytes)
       e = policy_decode(context, bytes, &credentials);
+    if (!e && !bytes)
+      enforce = 0;
+  }
+  if (!e && broker) {
+    e = read_all(input, header, 4);
+    pin_count = little(header, 4);
+    if (!e && pin_count > PIN_LIMIT)
+      e = EINVAL;
+    for (unsigned i = 0; !e && i < pin_count; i++) {
+      e = read_all(input, header, 8);
+      pins[i].inode = little(header, 4);
+      pins[i].generation = little(header + 4, 4);
+    }
   }
   for (unsigned i = 0; !e && i < count; i++) {
     e = read_all(input, header, 40);
@@ -135,10 +153,17 @@ int main(int argc, char **argv) {
   const char *failure = getenv("EXT4_TEST_MUTATION_FAIL_WRITES");
   if (!e && failure)
     overlay_fail_writes(overlay, strtol(failure, NULL, 10));
+  if (!e && broker)
+    e = namespace_reap(fs, pins, pin_count);
   for (unsigned i = 0; !e && i < count; i++)
-    e = by_inode
+    e = ops[i].kind >= MUT_LINK && !by_inode
+            ? namespace_apply(fs, &ops[i], enforce ? &credentials : NULL, pins,
+                              pin_count)
+        : by_inode
             ? mutation_apply_grant(fs, &ops[i], &credentials, &grants[i])
             : mutation_apply_as(fs, &ops[i], enforce ? &credentials : NULL);
+  if (!e && broker)
+    e = namespace_reap(fs, pins, pin_count);
   if (!e) {
     e = ext2fs_close(fs);
     fs = NULL;
@@ -154,7 +179,7 @@ int main(int argc, char **argv) {
     free((void *)ops[i].path);
     free((void *)ops[i].data);
   }
-  if (e && enforce) {
+  if (e && (enforce || broker)) {
     /* Complete bounded error frame, distinct from a successful overlay. */
     unsigned char failure[24] = "E4ER0001";
     unsigned code = policy_errno(e);

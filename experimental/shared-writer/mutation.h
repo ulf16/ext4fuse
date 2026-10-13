@@ -6,7 +6,14 @@
 #include <ext2fs/ext2fs.h>
 #include <stddef.h>
 #include <stdint.h>
-enum mutation_kind { MUT_WRITE = 1, MUT_TRUNCATE = 2, MUT_CREATE = 3 };
+enum mutation_kind {
+  MUT_WRITE = 1,
+  MUT_TRUNCATE = 2,
+  MUT_CREATE = 3,
+  MUT_LINK = 4,
+  MUT_RENAME = 5,
+  MUT_UNLINK = 6
+};
 struct mutation {
   enum mutation_kind kind;
   const char *path;
@@ -17,6 +24,8 @@ struct mutation {
 };
 /* Caller owns the staged transaction. Any error requires discarding the entire
  * writer handle and overlay; never publish partially applied operations. */
+errcode_t mutation_parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
+                          char **leaf, const struct credentials *credentials);
 errcode_t mutation_apply(ext2_filsys fs, const struct mutation *operation);
 errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *operation,
                             const struct credentials *credentials);

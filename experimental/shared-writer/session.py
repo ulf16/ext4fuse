@@ -22,7 +22,7 @@ LIMIT = 1024 * 1024
 
 
 class Session:
-    """Optional trusted numeric permission policy; no persistent file handles.
+    """Trusted numeric permission policy and session-local inode handles.
 
     Hold the global chain lock for the entire session. Readers and mutations are
     serialized inside this object; other cooperating processes are excluded.
@@ -50,6 +50,7 @@ class Session:
             if credentials is not None:
                 self._rpc(6, credentials.encode())
             self._rpc(4)
+            self._cleanup_orphans()
         except BaseException:
             self.close()
             raise
@@ -103,6 +104,7 @@ class Session:
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
                     or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10) and count)
+                    or (op == 12 and (count % 8 or count > 128*8))
                     or (not error and ((op == 7 and count != 24) or (op == 11 and count != 16)))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
@@ -150,7 +152,26 @@ class Session:
             return struct.unpack('<QQ', data)
 
     def apply(self, operations):
-        return self._apply_request(write_api.encode(operations, self._credentials))
+        with self._mutex:
+            self._ready()
+            if not isinstance(operations,list) or not 1<=len(operations)<=64:
+                raise ValueError('expected 1..64 operations')
+            _, pins = self._rpc(12)
+            return self._apply_request(write_api.encode_broker(operations,self._credentials,pins))
+
+    def _cleanup_orphans(self):
+        head,pins=self._rpc(12)
+        if head:
+            self._apply_request(write_api.encode_broker([],self._credentials,pins))
+
+    def link(self, source, target):
+        return self.apply([dict(kind='link',path=source,target=target)])
+
+    def rename(self, source, target):
+        return self.apply([dict(kind='rename',path=source,target=target)])
+
+    def unlink(self, path):
+        return self.apply([dict(kind='unlink',path=path)])
 
     def _apply_request(self, request):
         with self._mutex:
@@ -215,10 +236,20 @@ class Session:
         with self._mutex:
             if self._closed:
                 return
-            self._closed = True
+            tokens=[handle._token for handle in self._files]
             for handle in self._files:
                 handle._closed = True
             self._files.clear()
+            cleanup_error=None
+            if self._process is not None and not self._failed:
+                try:
+                    # Reader handles must be released before taking an empty pin snapshot.
+                    for token in tokens:
+                        self._rpc(10,struct.pack('<Q',token))
+                    self._cleanup_orphans()
+                except BaseException as e:
+                    cleanup_error=e
+            self._closed=True
             try:
                 if self._process is not None:
                     try:
@@ -233,13 +264,15 @@ class Session:
                     self._process.stdout.close()
             finally:
                 self._lock.__exit__(None, None, None)
+            if cleanup_error is not None:
+                raise cleanup_error
 
 
 class FileHandle:
     """Session-local positional I/O; append ignores the supplied write offset.
 
-    Construct via Session.open. No namespace mutation or persistent orphan pin
-    exists yet; lost/recycled/unlinked inode identities fail closed with ESTALE.
+    Construct via Session.open. Last-link removal retains a durable orphan
+    until the final handle closes; restart reclaims abandoned session orphans.
     """
     __slots__ = ('_owner','_token','_closed')
 
@@ -298,3 +331,4 @@ class FileHandle:
             self._owner._files.discard(self)
             if not self._owner._closed and not self._owner._failed:
                 self._owner._rpc(10,struct.pack('<Q',self._token))
+                self._owner._cleanup_orphans()

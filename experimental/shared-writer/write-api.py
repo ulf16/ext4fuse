@@ -12,7 +12,7 @@ from durable import directory
 from credentials import Credentials
 
 HEADER = struct.Struct('<IIIIIIQQ')
-KINDS = {'write': 1, 'truncate': 2, 'create': 3}
+KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6}
 
 
 def encode(operations, credentials=None):
@@ -28,15 +28,29 @@ def encode(operations, credentials=None):
     for op in operations:
         if not isinstance(op, dict) or op.get('kind') not in KINDS:
             raise ValueError('unknown operation')
-        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid'}
+        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target'}
         if set(op) - allowed or not isinstance(op.get('path'), str):
             raise ValueError('invalid operation fields')
         path = op['path'].encode('utf-8')
         if not 1 <= len(path) <= 4096 or b'\0' in path:
             raise ValueError('invalid path')
+        if op['kind'] in ('link','rename','unlink'):
+            for candidate in (op['path'],op.get('target',op['path'])):
+                if not isinstance(candidate,str) or not candidate.startswith('/') or candidate=='/' or any(c in ('','.','..') or len(c.encode('utf-8'))>255 for c in candidate[1:].split('/')):
+                    raise ValueError('invalid namespace path')
         if credentials and op['kind'] == 'create' and set(op) & {'uid', 'gid'}:
             raise ValueError('creation ownership is derived from caller credentials')
-        if op['kind'] == 'truncate':
+        if op['kind'] not in ('link','rename','unlink') and 'target' in op:
+            raise ValueError('target belongs to namespace operations')
+        namespace = op['kind'] in ('link','rename','unlink')
+        if namespace:
+            if set(op) != ({'kind','path'} if op['kind']=='unlink' else {'kind','path','target'}):
+                raise ValueError('invalid namespace fields')
+            data = b'' if op['kind']=='unlink' else op['target'].encode('utf-8') if isinstance(op['target'],str) else None
+            if data is None or len(data)>4096 or b'\0' in data:
+                raise ValueError('invalid target path')
+            offset = 0
+        elif op['kind'] == 'truncate':
             if set(op) != {'kind', 'path', 'size'}:
                 raise ValueError('truncate needs path and size')
             offset = op['size']
@@ -52,6 +66,7 @@ def encode(operations, credentials=None):
             if op['kind'] == 'create' and offset:
                 raise ValueError('create offset must be zero')
         mode, uid, gid = op.get('mode', 0o644), op.get('uid', credentials.uid if credentials else os.getuid()), op.get('gid', credentials.gid if credentials else os.getgid())
+        if namespace: mode=uid=gid=0
         for name, value, maximum in (('offset', offset, 64 * 1024 * 1024), ('mode', mode, 0o777), ('uid', uid, 2**32-1), ('gid', gid, 2**32-1)):
             if type(value) is not int or not 0 <= value <= maximum:
                 raise ValueError('invalid ' + name)
@@ -78,6 +93,26 @@ def encode_grant(credentials, grant, kind, offset=0, data=b''):
     context=credentials.encode()
     return (b'E4REQ003'+struct.pack('<II',1,len(context))+context+
             HEADER.pack(KINDS[kind],16,0,0,0,0,offset,len(data))+grant+data)
+
+
+def encode_broker(operations, credentials, pins):
+    """Private V4 envelope: live inode identities, never accepted from JSON."""
+    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>128*8:
+        raise ValueError('invalid pin snapshot')
+    if operations:
+        request=encode(operations,credentials)
+        count=request[8:12]
+        if credentials:
+            size=struct.unpack('<I',request[12:16])[0]
+            context=request[12:16+size]; records=request[16+size:]
+        else:
+            context=struct.pack('<I',0); records=request[12:]
+    else:
+        if operations != []: raise ValueError('expected operation list')
+        count=struct.pack('<I',0)
+        raw=credentials.encode() if credentials else b''
+        context=struct.pack('<I',len(raw))+raw; records=b''
+    return b'E4REQ004'+count+context+struct.pack('<I',len(pins)//8)+pins+records
 
 
 def apply(root, producer, operations, credentials=None):

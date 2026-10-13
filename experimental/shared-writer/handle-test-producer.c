@@ -16,8 +16,10 @@ int main(int argc, char **argv) {
              *flags = getenv("EXT4_TEST_HANDLE_FLAGS"),
              *acl = getenv("EXT4_TEST_HANDLE_DROP_ACL"),
              *cap = getenv("EXT4_TEST_HANDLE_CAP"),
-             *path = getenv("EXT4_TEST_HANDLE_PATH");
-  if (!mode && !gen && !flags && !acl && !cap)
+             *path = getenv("EXT4_TEST_HANDLE_PATH"),
+             *number = getenv("EXT4_TEST_HANDLE_INODE"),
+             *next = getenv("EXT4_TEST_HANDLE_ORPHAN_NEXT");
+  if (!mode && !gen && !flags && !acl && !cap && !next)
     return 2;
   if (!path)
     path = "/existing-file";
@@ -30,7 +32,9 @@ int main(int argc, char **argv) {
   if (!e)
     e = ext2fs_read_bitmaps(fs);
   ext2_ino_t ino;
-  if (!e)
+  if (!e && number)
+    ino = strtoul(number, NULL, 0);
+  else if (!e)
     e = ext2fs_namei(fs, EXT2_ROOT_INO, EXT2_ROOT_INO, path, &ino);
   struct ext2_inode_large in = {0};
   unsigned bytes = fs ? EXT2_INODE_SIZE(fs->super) : 0;
@@ -41,6 +45,8 @@ int main(int argc, char **argv) {
   if (!e) {
     if (mode)
       in.i_mode = LINUX_S_IFREG | (strtoul(mode, NULL, 0) & 07777);
+    if (next)
+      in.i_dtime = strtoul(next, NULL, 0);
     if (gen)
       in.i_generation = strtoul(gen, NULL, 0);
     if (flags)

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "grant.h"
+#include "namespace.h"
 #include <errno.h>
 int grant_valid(const struct inode_grant *g) {
   return !g || !g->inode || !g->access || g->access > 3 ||
@@ -25,8 +26,22 @@ errcode_t grant_inode(ext2_filsys fs, const struct inode_grant *g,
   e = ext2fs_read_inode(fs, g->inode, in);
   if (e)
     return e;
-  if (in->i_generation != g->generation || !in->i_links_count || in->i_dtime ||
+  if (in->i_generation != g->generation ||
       (in->i_mode & LINUX_S_IFMT) != LINUX_S_IFREG)
+    return ESTALE;
+  if (!in->i_links_count) {
+    ext2_ino_t list[PIN_LIMIT];
+    unsigned n;
+    int found = 0;
+    e = namespace_orphans(fs, list, &n);
+    if (e)
+      return e;
+    for (unsigned i = 0; i < n; i++)
+      if (list[i] == g->inode)
+        found = 1;
+    if (!found)
+      return ESTALE;
+  } else if (in->i_dtime)
     return ESTALE;
   return in->i_flags & GRANT_UNSUPPORTED ? EOPNOTSUPP : 0;
 }

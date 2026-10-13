@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "handles.h"
+#include "namespace.h"
 #include "ops.h"
 #include "overlay.h"
 #include <errno.h>
@@ -28,10 +29,10 @@ int handles_dispatch(const char *image, const struct credentials *c,
                      unsigned command, const unsigned char *path, size_t bytes,
                      uint64_t offset, uint64_t length, uint64_t *size,
                      unsigned char **data, size_t *count) {
-  if (!c)
+  if (!c && command != 12)
     return EPERM;
   struct handle *h = NULL;
-  if (command != 7) {
+  if (command != 7 && command != 12) {
     if (bytes != 8)
       return EINVAL;
     uint64_t token = le(path, 8);
@@ -103,6 +104,38 @@ int handles_dispatch(const char *image, const struct credentials *c,
         *count = 24;
         *size = EXT2_I_SIZE(&in);
       }
+    }
+  } else if (!e && command == 12) {
+    *data = calloc(PIN_LIMIT * 8, 1);
+    if (!*data)
+      e = ENOMEM;
+    ext2_ino_t seen[PIN_LIMIT];
+    unsigned n = 0;
+    for (unsigned i = 0; !e && i < HANDLE_LIMIT; i++) {
+      if (!table[i].token || table[i].stale)
+        continue;
+      e = grant_inode(fs, &table[i].grant, &in);
+      if (e == ESTALE) {
+        table[i].stale = 1;
+        e = 0;
+        continue;
+      }
+      if (e)
+        break;
+      int duplicate = 0;
+      for (unsigned j = 0; j < n; j++)
+        if (seen[j] == table[i].grant.inode)
+          duplicate = 1;
+      if (duplicate)
+        continue;
+      seen[n] = table[i].grant.inode;
+      put(*data + n * 8, table[i].grant.inode, 4);
+      put(*data + n * 8 + 4, table[i].grant.generation, 4);
+      n++;
+    }
+    if (!e) {
+      *count = n * 8;
+      *size = fs->super->s_last_orphan;
     }
   } else if (!e) {
     e = grant_inode(fs, &h->grant, &in);

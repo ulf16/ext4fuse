@@ -2,6 +2,7 @@
  * Private pipe transport for one resident reader. No FUSE mount or writes.
  */
 #include "handles.h"
+#include "namespace.h"
 #include "ops.h"
 #include "overlay.h"
 #include "policy.h"
@@ -13,6 +14,19 @@
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 extern struct struct_io_manager staged_manager;
+static int valid_orphans(const char *image) {
+  ext2_filsys fs = NULL;
+  errcode_t e =
+      ext2fs_open(image, EXT2_FLAG_64BITS, 0, 0, &staged_manager, &fs);
+  if (!e && fs->super->s_last_orphan) {
+    ext2_ino_t list[PIN_LIMIT];
+    unsigned count;
+    e = namespace_orphans(fs, list, &count);
+  }
+  if (fs)
+    ext2fs_free(fs);
+  return policy_errno(e);
+}
 static int authorize(const char *image, const char *path,
                      const struct credentials *c, unsigned want) {
   ext2_filsys fs = NULL;
@@ -61,7 +75,7 @@ int main(int argc, char **argv) {
   if (argc != 2)
     return 2;
   active_overlay = overlay_open(argv[1], 1);
-  if (!active_overlay || reader_attach(argv[1]))
+  if (!active_overlay || valid_orphans(argv[1]) || reader_attach(argv[1]))
     return 2;
   unsigned char header[32];
   int result = 0, enforce = 0;
@@ -76,13 +90,14 @@ int main(int argc, char **argv) {
     }
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
-    int shape = op == 6   ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
+    int shape = op == 12  ? (pathlen || offset || length)
+                : op == 6 ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
                              offset || length)
                 : op == 7 ? (!pathlen || offset < 1 || offset > 3 || length > 1)
                 : op >= 8 ? (pathlen != 8 || (op != 8 && (offset || length)))
                 : (op == 1 || op == 2) ? !pathlen
                                        : (pathlen || offset || length);
-    if (op < 1 || op > 11 || pathlen > 4096 || length > READ_LIMIT ||
+    if (op < 1 || op > 12 || pathlen > 4096 || length > READ_LIMIT ||
         offset > INT64_MAX || shape || (op == 1 && (offset || length))) {
       result = 2;
       break;
@@ -111,6 +126,8 @@ int main(int argc, char **argv) {
       overlay_suspend(active_overlay);
     } else if (op == 4) {
       e = overlay_publish(active_overlay);
+      if (!e)
+        e = valid_orphans(argv[1]);
       if (!e)
         e = reader_refresh();
       if (e)
