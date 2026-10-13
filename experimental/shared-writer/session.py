@@ -291,6 +291,9 @@ class FileHandle:
         with self._owner._mutex:
             if self._closed:
                 return
+            if self not in self._owner._files:
+                self._closed=True
+                raise OSError(errno.EBADF,'unregistered file handle')
             self._closed=True
             self._owner._files.discard(self)
             if not self._owner._closed and not self._owner._failed:

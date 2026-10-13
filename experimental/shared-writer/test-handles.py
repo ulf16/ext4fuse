@@ -3,6 +3,7 @@
 """Open-time grants, inode identity, append serialization and handle recovery."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import copy
 import errno
 import hashlib
 import json
@@ -180,6 +181,10 @@ with tempfile.TemporaryDirectory(prefix='handles-',dir=args.work) as directory:
             model=bytearray(b'new contents');verify(s,r,model)
             check(t.closed);denied(lambda:t.read(),errno.EBADF)
             # Closed identifiers are never recycled within the reader process.
+            duplicate=copy.copy(r)
+            denied(lambda:duplicate.read(),errno.EBADF)
+            denied(lambda:duplicate.close(),errno.EBADF)
+            check(r.read(0,len(model))==model, 'copied object released original handle')
             old=r._token;r.close();r.close()
             denied(lambda:r.read(),errno.EBADF)
             denied(lambda:s._rpc(8,struct.pack('<Q',old),0,1),errno.EBADF)
