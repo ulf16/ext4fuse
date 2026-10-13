@@ -38,6 +38,9 @@ class Broker:
         if op in (2,3,8):
             flags=arg&0xffffffff;mode=arg>>32
             allowed=os.O_ACCMODE
+            # Linux FUSE sends the kernel O_LARGEFILE bit even where 64-bit
+            # userspace exposes os.O_LARGEFILE as zero. It is a status hint.
+            if sys.platform=='linux':allowed|=0o100000
             for name in ('O_CREAT','O_EXCL','O_TRUNC','O_APPEND','O_NOFOLLOW','O_DIRECTORY','O_CLOEXEC','O_NONBLOCK','O_NOCTTY','O_SYNC','O_DSYNC','O_LARGEFILE'):
                 allowed|=getattr(os,name,0)
             if flags&~allowed:raise OSError(errno.EOPNOTSUPP,'unsupported mounted open flags')

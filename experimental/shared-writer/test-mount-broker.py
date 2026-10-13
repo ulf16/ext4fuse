@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import shutil
 import struct
+import sys
 import subprocess
 import tempfile
 from types import SimpleNamespace
@@ -54,6 +55,8 @@ with tempfile.TemporaryDirectory(prefix='mount-broker-',dir=a.work) as tmp:
             stat=call(1,b'/')[1];check(len(stat)==128);f=struct.unpack('<8QqQqQqQqQ',stat)
             check(f[0]==2 and f[1]&0o170000==0o040000 and f[3]==os.getuid());check(f[7]==int(source.name.split('-')[0]))
             geom=struct.unpack('<10Q',call(18)[1]);check(geom[0]==geom[1]==f[7] and geom[8]==255 and geom[9]==0)
+            if sys.platform=='linux':
+                large,_=call(2,b'/existing-file',arg=0o100000);call(7,token=large);check(True)
             token,_=call(3,b'/file',arg=(0o666<<32)|os.O_RDWR|os.O_CREAT|os.O_EXCL,mask=0o077)
             check(call(1,b'/file')[1][0:8]==call(1,token=token)[1][0:8])
             f=struct.unpack('<8QqQqQqQqQ',call(1,token=token)[1]);check(f[1]&0o777==0o600)

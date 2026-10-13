@@ -63,9 +63,14 @@ try:
         root=temp/source.stem;chain.clone(seed,root);check(sha(root/'image.img')==seed_sha,'clone changed contents')
         mount=temp/(source.stem+'-mount');mount.mkdir()
         logpath=temp/(source.stem+'-mount.log');log=logpath.open('wb')
-        env=dict(os.environ)
-        if not rows:env['EXT4_INPLACE_EXIT_PHASE']='half-page'
-        process=subprocess.Popen([sys.executable,here/'mount-broker.py','--work',args.work,'--root',root,'--mountpoint',mount],stdout=log,stderr=log,env=env)
+        launcher=here/'mount-broker.py'
+        marker=temp/'torn-replay-observed'
+        if not rows:
+            launcher=temp/'fault-broker.py'
+            launcher.write_text('import sys,runpy\n'+'sys.path.insert(0,'+repr(str(here))+')\n'+
+                'from fault_injection import torn_replay\n'+
+                'with torn_replay('+repr(str(marker))+'):\n    runpy.run_path('+repr(str(here/'mount-broker.py'))+',run_name="__main__")\n')
+        process=subprocess.Popen([sys.executable,launcher,'--work',args.work,'--root',root,'--mountpoint',mount],stdout=log,stderr=log)
         mounted=False
         try:
             for unused in range(120):
@@ -78,6 +83,11 @@ try:
             check(set(os.listdir(mount/'listed'))==set(long_names))
             before=os.statvfs(mount);check(not before.f_flag&os.ST_RDONLY)
             check(before.f_frsize==int(source.name.split('-')[0]));check(before.f_namemax==255)
+            if not rows:
+                denied(lambda:(mount/'recovery-probe').mkdir(),errno.EIO)
+                check(marker.read_text()=='half:0:0\n','partial replay was not injected')
+                check((mount/'recovery-probe').is_dir(),'sealed mutation was not recovered')
+                (mount/'recovery-probe').rmdir()
             path=mount/'created'
             fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o660)
             try:

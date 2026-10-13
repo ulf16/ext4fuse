@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 from unittest.mock import patch
 import session
+from fault_injection import torn_replay
 from credentials import Credentials
 here=Path(__file__).resolve().parent
 parser=argparse.ArgumentParser(description=__doc__)
@@ -206,8 +207,10 @@ with tempfile.TemporaryDirectory(prefix='openat-',dir=args.work) as temp:
             check(len(s._files)==slots);check(s.readat(d,'zero')==b'after truncation+')
             atomic(s,lambda:s.statat(d,'failed'),errno.ENOENT)
             # A real torn-page commit recovers the open grant before activation.
-            with patch.dict(os.environ,{'EXT4_INPLACE_EXIT_PHASE':'half-page'}):
-                with s.openat(d,'recovered','rw',create=True) as f:f.write(b'recovered grant')
+            with torn_replay() as fault:
+                denied(lambda:s.openat(d,'recovered','rw',create=True),errno.EIO)
+            check(fault['hit']);check(s.readat(d,'recovered')==b'')
+            with s.openat(d,'recovered','rw') as f:f.write(b'recovered grant')
             check(s.readat(d,'recovered')==b'recovered grant');s.unlinkat(d,'recovered')
             clean(s)
             if not rows:

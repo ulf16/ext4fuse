@@ -1001,7 +1001,9 @@ truncate/growth, allocation, fd metadata, hard-link/rename/unlink-open lifetime,
 dup/flush/fsync, append/exclusive creation, kernel buffer pagination of long
 names, symlink/directory changes, unsupported metadata operations, lock exclusion,
 restart, independent e2fsck/debugfs contents and unchanged inputs. Its first
-configuration forces half-page replay interruptions during mounted transactions.
+configuration injects a verified one-shot EIO after an actual half-page replay;
+the failed syscall is followed by checks that the sealed mutation completed
+through recovery and that subsequent mounted operations still succeed.
 It never deletes a still-mounted tree; failed fixtures/logs are retained. The new
 Linux CI mount job requires /dev/fuse and fusermount3 rather than silently skipping
 kernel integration. Native macFUSE is validated separately on this host.

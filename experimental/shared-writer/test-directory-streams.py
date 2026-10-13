@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 from unittest.mock import patch
 import session
+from fault_injection import torn_replay
 from credentials import Credentials
 here=Path(__file__).resolve().parent
 parser=argparse.ArgumentParser(description=__doc__)
@@ -134,7 +135,9 @@ with tempfile.TemporaryDirectory(prefix='dirstream-',dir=args.work) as temp:
             with patch.dict(os.environ,{'EXT4_TEST_MUTATION_FAIL_WRITES':'0'}):
                 unchanged(s,lambda:s.mkdirat(d,'failed'),errno.ENOSPC)
             check(d.tell()==snapshot_position)
-            with patch.dict(os.environ,{'EXT4_INPLACE_EXIT_PHASE':'half-page'}):s.mkdirat(d,'recovered')
+            with torn_replay() as fault:
+                denied(lambda:s.mkdirat(d,'recovered'),errno.EIO)
+            check(fault['hit'])
             check(d.tell()==snapshot_position);check(d.readdir(4096)['entries']==fresh[2:])
             d.rewind();check('recovered' in {e['name'] for e in drain(d)})
             # Read permission is an open-time grant; copied, search-only, file,
