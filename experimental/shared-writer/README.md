@@ -1166,7 +1166,9 @@ accepted but is not stored as historical provenance.
 
 macOS grants can exceed creation mode bits, so substituting a POSIX default ACL
 would lose permissions. The writer instead persists a versioned numeric ordered
-policy in the reserved `user.ext4fuse.native_inherit` attribute. The mounted xattr
+policy in the reserved `trusted.ext4fuse.native_inherit` attribute. Linux restricts the trusted
+namespace to CAP_SYS_ADMIN, so a non-owner with directory write permission cannot
+forge the policy through ordinary Linux xattr calls. The mounted xattr
 API hides it and rejects direct edits. The transaction backend requires inode
 ownership, directory type and bounded valid encoding even for direct Session
 operations. Parent access ACL and native template edits share one staged/durable
@@ -1204,3 +1206,10 @@ rollback and an observed half-page durable replay across all 12 profiles. CI run
 both suites. `test-mounted-native-acl.py` additionally exercises native chmod,
 ACL APIs, removal and grandchild propagation through actual macFUSE mounts,
 followed by e2fsck and unchanged source hashes.
+
+The short-lived initial implementation used `user.ext4fuse.native_inherit`.
+That legacy key is rejected at mounted getattr/native ACL reads and before child
+creation, and cannot be set by the writer. It is not automatically promoted into
+trusted policy. An owner can remove it through the offline Session API, then
+reapply the desired native ACL through the mounted editor. No released reader or
+installed Homebrew formula has used this experimental inheritance format.

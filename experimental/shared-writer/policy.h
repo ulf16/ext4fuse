@@ -4,7 +4,8 @@
 #include <ext2fs/ext2fs.h>
 #include <stddef.h>
 #include <stdint.h>
-#define NATIVE_INHERIT_KEY "user.ext4fuse.native_inherit"
+#define NATIVE_INHERIT_KEY "trusted.ext4fuse.native_inherit"
+#define NATIVE_LEGACY_KEY "user.ext4fuse.native_inherit"
 #define POLICY_GROUPS 64
 #define POLICY_ACL_LIMIT 4096
 struct credentials {

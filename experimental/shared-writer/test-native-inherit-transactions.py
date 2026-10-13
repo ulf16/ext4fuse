@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Native inheritance transaction, authority, propagation and recovery tests."""
-import argparse,errno,hashlib,json,struct,subprocess,tempfile
+import argparse,errno,hashlib,importlib.util,json,shutil,struct,subprocess,tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 from pathlib import Path
 import chain,native_acl as n,session
 from credentials import Credentials
 from fault_injection import torn_replay
+spec=importlib.util.spec_from_file_location('mount_broker',Path(__file__).with_name('mount-broker.py'))
+broker=importlib.util.module_from_spec(spec);spec.loader.exec_module(broker)
 p=argparse.ArgumentParser();p.add_argument('--work',type=Path,required=True);p.add_argument('--fixtures',type=Path);p.add_argument('--limit',type=int);a=p.parse_args();checks=0;rows=[]
 def check(v):
  global checks
@@ -27,10 +31,29 @@ if a.limit:sources=sources[:a.limit]
 check(bool(sources))
 with tempfile.TemporaryDirectory(prefix='native-inherit-',dir=a.work) as tmp:
  for source in sources:
-  before=sha(source);managed=Path(tmp)/source.stem;chain.clone(source,managed)
+  before=sha(source);managed=Path(tmp)/source.stem
+  seed=Path(tmp)/(source.stem+'-seed.img');shutil.copyfile(source,seed)
+  payload=Path(tmp)/'legacy.policy';payload.write_bytes(policy(1,2))
+  commands=Path(tmp)/'legacy.commands';commands.write_text(f'mkdir /legacy\nset_inode_field /legacy uid 1001\nset_inode_field /legacy mode 040777\nea_set -f {payload} /legacy {n.LEGACY_KEY}\nset_inode_field /existing-file uid 1001\nea_set -f {payload} /existing-file {n.LEGACY_KEY}\n')
+  result=subprocess.run(['debugfs','-w','-f',commands,seed],capture_output=True);check(result.returncode==0)
+  chain.clone(seed,managed)
   with session.Session(managed,a.work/'mutation-producer',a.work/'reader-server',root) as s:
-   s.chmod('/',0o777);s._mount_context(owner);s.mkdirat(None,'/parent',0o700)
+   s.chmod('/',0o777);s._mount_context(owner)
+   check(s.getxattr('/legacy',n.LEGACY_KEY)==policy(1,2))
+   atomic(s,lambda:s.openat(None,'/legacy/rejected','w',create=True,mode=0o600),errno.EOPNOTSUPP)
+   b=broker.Broker(s)
+   with patch.object(n,'Membership',return_value=SimpleNamespace(resolve=None)):
+    atomic(s,lambda:b.native_get('/legacy'),errno.EOPNOTSUPP)
+    atomic(s,lambda:b.native_set('/legacy',n.pack_native([])),errno.EOPNOTSUPP)
+   s._mount_context(peer);atomic(s,lambda:s.removexattr('/legacy',n.LEGACY_KEY),errno.EPERM)
+   s._mount_context(owner);s.removexattr('/legacy',n.LEGACY_KEY);s.removexattr('/existing-file',n.LEGACY_KEY)
+   with patch.object(n,'Membership',return_value=SimpleNamespace(resolve=None)):
+    denied(lambda:b.native_get('/legacy'),errno.ENODATA)
+   h=s.openat(None,'/legacy/cleaned','w',create=True,mode=0o600);h.close()
+   s.mkdirat(None,'/parent',0o700)
    s.setxattr('/parent',n.INHERIT_KEY,policy(1,2))
+   check(n.INHERIT_KEY in s.listxattrs('/parent'))
+   atomic(s,lambda:s.setxattr('/parent',n.LEGACY_KEY,policy(1,2)),errno.EOPNOTSUPP)
    h=s.openat(None,'/parent/file','w',create=True,exclusive=True,mode=0o200);h.write(b'inherited');h.close()
    check(mode(s,'/parent/file')==0o240);check((2,4,2001) in n.posix(s.getxattr('/parent/file','system.posix_acl_access')))
    s.mkdirat(None,'/parent/sub',0o700);check(mode(s,'/parent/sub')==0o740)

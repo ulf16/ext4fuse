@@ -66,7 +66,9 @@ static errcode_t name_valid(const char *name) {
   size_t n = strlen(name);
   if (!n || n > 255)
     return EINVAL;
-  return user_name(name) || acl_name(name) ? 0 : EOPNOTSUPP;
+  return user_name(name) || acl_name(name) || !strcmp(name, NATIVE_INHERIT_KEY)
+             ? 0
+             : EOPNOTSUPP;
 }
 static errcode_t stamp(struct ext2_inode_large *in, size_t n, unsigned which,
                        int64_t sec, uint64_t ns) {
@@ -345,11 +347,14 @@ errcode_t metadata_apply(ext2_filsys fs, const struct mutation *op,
       if (e)
         return e;
     }
-    int native = !strcmp(name, NATIVE_INHERIT_KEY);
+    int legacy = !strcmp(name, NATIVE_LEGACY_KEY);
+    if (legacy && op->kind == MUT_SETXATTR)
+      return EOPNOTSUPP;
+    int native = !strcmp(name, NATIVE_INHERIT_KEY) || legacy;
     if (native) {
       if (!owner)
         return EPERM;
-      if (type != LINUX_S_IFDIR)
+      if (!legacy && type != LINUX_S_IFDIR)
         return EACCES;
       if (op->kind == MUT_SETXATTR) {
         e = policy_native_valid(value, bytes);
@@ -443,7 +448,7 @@ static int list_attr(char *name, char *value, size_t bytes, void *raw) {
   (void)value;
   (void)bytes;
   struct list *list = raw;
-  if (!user_name(name) && !acl_name(name))
+  if (!user_name(name) && !acl_name(name) && strcmp(name, NATIVE_INHERIT_KEY))
     return 0;
   size_t n = strlen(name) + 1;
   if (n > 256 || n > METADATA_LIMIT - list->bytes) {
@@ -479,7 +484,7 @@ errcode_t metadata_query(ext2_filsys fs, ext2_ino_t ino,
     *bytes = list.bytes;
   } else if (!e) {
     e = name_valid(name);
-    if (!e && user_name(name) && strcmp(name, NATIVE_INHERIT_KEY))
+    if (!e && user_name(name) && strcmp(name, NATIVE_LEGACY_KEY))
       e = policy_inode(fs, ino, c, 4);
     if (!e)
       e = ext2fs_xattr_get(h, name, (void **)data, bytes);

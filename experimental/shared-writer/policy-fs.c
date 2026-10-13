@@ -133,6 +133,9 @@ errcode_t policy_creation(ext2_filsys fs, ext2_ino_t parent,
     return ENOTDIR;
   *uid = c->uid;
   *gid = in.i_mode & LINUX_S_ISGID ? inode_gid(in) : c->gid;
+  e = reject_xattr(fs, parent, NATIVE_LEGACY_KEY);
+  if (e)
+    return e;
   unsigned char *native = NULL;
   size_t native_length = 0;
   e = xattr(fs, parent, NATIVE_INHERIT_KEY, &native, &native_length);

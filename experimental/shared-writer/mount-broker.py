@@ -32,12 +32,14 @@ class Broker:
             return None
 
     def native_get(self,path):
+        if self.optional_attr(path,native_acl.LEGACY_KEY) is not None:raise OSError(errno.EOPNOTSUPP,'legacy user-namespace inheritance requires owner removal')
         fields=struct.unpack('<8QqQqQqQqQ',self.s._mount_stat(path))
         return native_acl.project(self.optional_attr(path,'system.posix_acl_access'),
                                   self.optional_attr(path,native_acl.INHERIT_KEY),
                                   fields[1],native_acl.Membership().resolve)
 
     def native_set(self,path,value,flags=0):
+        if self.optional_attr(path,native_acl.LEGACY_KEY) is not None:raise OSError(errno.EOPNOTSUPP,'legacy user-namespace inheritance requires owner removal')
         fields=struct.unpack('<8QqQqQqQqQ',self.s._mount_stat(path))
         if self.s.credentials.uid not in (0,fields[3]):raise OSError(errno.EPERM,'native ACL editing requires ownership')
         old=self.optional_attr(path,'system.posix_acl_access')
@@ -65,7 +67,7 @@ class Broker:
 
     def attr_name(self, name):
         if not name or len(name)>255 or b'\0' in name:raise OSError(errno.EINVAL,'attribute name')
-        if name in (native_acl.INHERIT_KEY.encode(),native_acl.INHERIT_KEY[5:].encode()):raise OSError(errno.EOPNOTSUPP,'reserved native inheritance attribute')
+        if name in (native_acl.INHERIT_KEY.encode(),native_acl.INHERIT_KEY.split('.',1)[1].encode(),native_acl.LEGACY_KEY.encode()):raise OSError(errno.EOPNOTSUPP,'reserved native inheritance attribute')
         if name in (b'system.posix_acl_access',b'system.posix_acl_default'):return name
         if name.startswith((b'system.',b'security.',b'trusted.')) or name==b'com.apple.system.Security':
             raise OSError(errno.EOPNOTSUPP,'unsupported privilege/native ACL attribute')
@@ -92,6 +94,7 @@ class Broker:
                 else:
                     mode=struct.unpack_from('<Q',raw,8)[0]
                     native_acl.render(acl,mode,native_acl.Membership().resolve)
+                if self.optional_attr(path,native_acl.LEGACY_KEY,handle) is not None:raise OSError(errno.EOPNOTSUPP,'legacy user-namespace inheritance requires owner removal')
                 policy=self.optional_attr(path,native_acl.INHERIT_KEY,handle)
                 if policy is not None:
                     mode=struct.unpack_from("<Q",raw,8)[0]

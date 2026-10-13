@@ -162,7 +162,8 @@ class Membership:
 
 # Native inheritance is not a POSIX default ACL: macOS grants survive creation
 # mode clipping. Persist numeric ordered rules and evaluate at child creation.
-INHERIT_KEY='user.ext4fuse.native_inherit'
+INHERIT_KEY='trusted.ext4fuse.native_inherit'
+LEGACY_KEY='user.ext4fuse.native_inherit'
 INHERITED=1<<4
 BOTH=(1<<5)|(1<<6)
 ONLY=1<<8
