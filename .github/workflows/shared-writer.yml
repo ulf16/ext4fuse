@@ -12,7 +12,7 @@ on:
 permissions:
   contents: read
 jobs:
-  shared-writer:
+  transaction-logs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -29,14 +29,80 @@ jobs:
         run: python3 experimental/shared-writer/test-durable.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify incremental log bounds and interrupted block replay
         run: python3 experimental/shared-writer/test-block-log.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: transaction-logs-validation
+          path: |
+            ${{ runner.temp }}/shared-writer/matrix-results.json
+            ${{ runner.temp }}/shared-writer/durable-results.json
+            ${{ runner.temp }}/shared-writer/block-log-results.json
+
+  overlay-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build existing reader and experimental overlay with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Check overlay publication, randomized reads and resource limits
+        run: '"$RUNNER_TEMP/shared-writer/overlay-unit"'
+      - name: Verify mutations, rollback and independent filesystem integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify direct C overlay capture and failed producers
         run: python3 experimental/shared-writer/test-overlay-log.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify disposable in-place commits and torn-page recovery
         run: python3 experimental/shared-writer/test-inplace.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-recovery-validation
+          path: |
+            ${{ runner.temp }}/shared-writer/matrix-results.json
+            ${{ runner.temp }}/shared-writer/overlay-log-results.json
+            ${{ runner.temp }}/shared-writer/inplace-results.json
+
+  chain-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build existing reader and experimental overlay with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Check overlay publication, randomized reads and resource limits
+        run: '"$RUNNER_TEMP/shared-writer/overlay-unit"'
+      - name: Verify mutations, rollback and independent filesystem integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify transaction chains and resident reader refresh
         run: python3 experimental/shared-writer/test-chain.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify checkpoints and interrupted log retirement
         run: python3 experimental/shared-writer/test-checkpoint.py --work "$RUNNER_TEMP/shared-writer"
+      - name: Save validation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-recovery-validation
+          path: |
+            ${{ runner.temp }}/shared-writer/matrix-results.json
+            ${{ runner.temp }}/shared-writer/chain-results.json
+            ${{ runner.temp }}/shared-writer/checkpoint-results.json
+
+  writer-sessions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install filesystem development dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Build existing reader and experimental overlay with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
+      - name: Check overlay publication, randomized reads and resource limits
+        run: '"$RUNNER_TEMP/shared-writer/overlay-unit"'
+      - name: Verify mutations, rollback and independent filesystem integrity
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify caller-data write API and atomic mutation batches
         run: python3 experimental/shared-writer/test-write-api.py --work "$RUNNER_TEMP/shared-writer"
       - name: Verify coordinated resident reader sessions and competing requests
@@ -44,15 +110,9 @@ jobs:
       - name: Save validation summary
         uses: actions/upload-artifact@v4
         with:
-          name: shared-writer-validation
+          name: writer-sessions-validation
           path: |
             ${{ runner.temp }}/shared-writer/matrix-results.json
-            ${{ runner.temp }}/shared-writer/durable-results.json
-            ${{ runner.temp }}/shared-writer/block-log-results.json
-            ${{ runner.temp }}/shared-writer/overlay-log-results.json
-            ${{ runner.temp }}/shared-writer/inplace-results.json
-            ${{ runner.temp }}/shared-writer/chain-results.json
-            ${{ runner.temp }}/shared-writer/checkpoint-results.json
             ${{ runner.temp }}/shared-writer/write-api-results.json
             ${{ runner.temp }}/shared-writer/session-results.json
 
