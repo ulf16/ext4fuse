@@ -82,7 +82,8 @@ static errcode_t reclaim(ext2_filsys fs, ext2_ino_t ino) {
        type != LINUX_S_IFLNK) ||
       (in.i_flags & GRANT_UNSUPPORTED))
     return EIO;
-  if (!ext2fs_is_fast_symlink((struct ext2_inode *)&in))
+  if (!ext2fs_is_fast_symlink((struct ext2_inode *)&in) ||
+      (in.i_flags & EXT4_EXTENTS_FL))
     e = ext2fs_punch(fs, ino, (struct ext2_inode *)&in, NULL, 0, ~0ULL);
   else
     memset(in.i_block, 0, sizeof(in.i_block));
@@ -169,6 +170,9 @@ static errcode_t entry_inode(ext2_filsys fs, ext2_ino_t ino,
   if (type == LINUX_S_IFDIR &&
       (in->i_flags & (EXT2_INDEX_FL | EXT4_CASEFOLD_FL)))
     return EOPNOTSUPP;
+  if (type == LINUX_S_IFLNK &&
+      (!EXT2_I_SIZE(in) || EXT2_I_SIZE(in) >= fs->blocksize))
+    return EIO;
   if (!in->i_links_count || in->i_dtime)
     return EIO;
   if (in->i_flags & GRANT_UNSUPPORTED)
@@ -451,6 +455,8 @@ static errcode_t create_entry(ext2_filsys fs, ext2_ino_t dir, const char *name,
    * advance identity, then rewrite its checksum through libext2fs. */
   if (!e && directory) {
     e = ext2fs_bmap2(fs, ino, &in, NULL, 0, 0, NULL, &physical);
+    if (!e && !physical)
+      e = EIO;
     if (!e) {
       block = malloc(fs->blocksize);
       if (!block)

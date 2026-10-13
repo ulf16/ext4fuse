@@ -19,8 +19,9 @@ int main(int argc, char **argv) {
              *path = getenv("EXT4_TEST_HANDLE_PATH"),
              *number = getenv("EXT4_TEST_HANDLE_INODE"),
              *next = getenv("EXT4_TEST_HANDLE_ORPHAN_NEXT"),
-             *links = getenv("EXT4_TEST_HANDLE_LINKS");
-  if (!mode && !gen && !flags && !acl && !cap && !next && !links)
+             *links = getenv("EXT4_TEST_HANDLE_LINKS"),
+             *size = getenv("EXT4_TEST_HANDLE_SIZE");
+  if (!mode && !gen && !flags && !acl && !cap && !next && !links && !size)
     return 2;
   if (!path)
     path = "/existing-file";
@@ -43,6 +44,9 @@ int main(int argc, char **argv) {
     bytes = sizeof(in);
   if (!e)
     e = ext2fs_read_inode_full(fs, ino, (struct ext2_inode *)&in, bytes);
+  if (!e && size)
+    e = ext2fs_inode_size_set(fs, (struct ext2_inode *)&in,
+                              strtoull(size, NULL, 0));
   if (!e) {
     if (mode)
       in.i_mode = (in.i_mode & LINUX_S_IFMT) | (strtoul(mode, NULL, 0) & 07777);

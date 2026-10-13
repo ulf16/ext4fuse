@@ -163,6 +163,11 @@ with tempfile.TemporaryDirectory(prefix='directories-',dir=args.work) as directo
                 s.rename(name,name+'-moved');check(s.readlink(name+'-moved')==target.encode('utf-8'))
                 s.unlink(name+'-alias');check(stat(s,name+'-moved')['links']==1)
                 s.unlink(name+'-moved');check(s.counters()==free);clean(s)
+            # Zero-length corrupt symlinks cannot make target bytes into block pointers.
+            s.symlink('temporary-target','/damaged-link');metadata(s,'/damaged-link',size=0)
+            atomic(s,lambda:s.unlink('/damaged-link'),errno.EIO)
+            metadata(s,'/damaged-link',size=len('temporary-target'))
+            check(s.readlink('/damaged-link')==b'temporary-target');s.unlink('/damaged-link');clean(s)
             s.symlink('does-not-exist','/dangling');check(s.readlink('/dangling')==b'does-not-exist')
             s.symlink('/newparent','/directory-link');atomic(s,lambda:s.rmdir('/directory-link'),errno.ENOTDIR)
             s.unlink('/directory-link');check(stat(s,'/newparent')['links']>=2)
