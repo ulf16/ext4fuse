@@ -323,7 +323,40 @@ errcode_t metadata_apply(ext2_filsys fs, const struct mutation *op,
     size_t bytes = op->length - 4 - namebytes;
     if (op->kind == MUT_REMOVEXATTR && (bytes || op->mode))
       return EINVAL;
-    if (user_name(name)) {
+    if (op->kind == MUT_SETXATTR && bytes &&
+        (!strcmp(name, NATIVE_INHERIT_KEY) ||
+         !strcmp(name, "system.posix_acl_default"))) {
+      struct ext2_xattr_handle *check = NULL;
+      void *conflict = NULL;
+      size_t length = 0;
+      e = opened(fs, ino, &check);
+      if (!e)
+        e = ext2fs_xattr_get(check,
+                             !strcmp(name, NATIVE_INHERIT_KEY)
+                                 ? "system.posix_acl_default"
+                                 : NATIVE_INHERIT_KEY,
+                             &conflict, &length);
+      free(conflict);
+      if (!e)
+        e = EOPNOTSUPP;
+      else if (e == EXT2_ET_EA_KEY_NOT_FOUND)
+        e = 0;
+      e = closed(&check, e);
+      if (e)
+        return e;
+    }
+    int native = !strcmp(name, NATIVE_INHERIT_KEY);
+    if (native) {
+      if (!owner)
+        return EPERM;
+      if (type != LINUX_S_IFDIR)
+        return EACCES;
+      if (op->kind == MUT_SETXATTR) {
+        e = policy_native_valid(value, bytes);
+        if (e)
+          return e;
+      }
+    } else if (user_name(name)) {
       if (type == LINUX_S_IFLNK)
         return EOPNOTSUPP;
       if (type == LINUX_S_IFDIR && (in.i_mode & LINUX_S_ISVTX) && !owner)
@@ -446,7 +479,7 @@ errcode_t metadata_query(ext2_filsys fs, ext2_ino_t ino,
     *bytes = list.bytes;
   } else if (!e) {
     e = name_valid(name);
-    if (!e && user_name(name))
+    if (!e && user_name(name) && strcmp(name, NATIVE_INHERIT_KEY))
       e = policy_inode(fs, ino, c, 4);
     if (!e)
       e = ext2fs_xattr_get(h, name, (void **)data, bytes);

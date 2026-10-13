@@ -1098,14 +1098,13 @@ an extended ACL. The mode group class reports the POSIX mask; ACL removal retain
 those current mode bits. Numeric POSIX access/default attribute APIs remain usable.
 
 `native_acl.py` validates Apple's big-endian filesec header and bounded ACE array.
-Only non-inheriting access rules with representable read/write/append/execute
-behavior are accepted. Directory delete-child rights must agree with POSIX write
+Access rules with representable read/write/append/execute behavior are accepted. Directory delete-child rights must agree with POSIX write
 plus search. Explicit delete-self, generic rights, independent metadata/owner/
-security rights, inheritance flags and owner/group UUID header changes are
+security rights, unsupported inheritance flags and owner/group UUID header changes are
 rejected with EOPNOTSUPP. This is a POSIX data-access compatibility layer;
 attribute authority continues to follow the existing POSIX metadata policy and
-cannot become an independent native ACE grant. Native access editing does not
-modify default ACLs or implement macOS per-entry inheritance.
+cannot become an independent native ACE grant. Native access editing preserves POSIX default ACLs. Native inheritance uses the
+separate policy described below; the two inheritance authorities cannot coexist.
 
 UUIDs resolve through Membership's UID/GID APIs and must round-trip to the same
 UUID. Reserved principals use their defined owner/owning-group/everybody roles;
@@ -1145,3 +1144,63 @@ foreign-owner rejection, and namespace operations through a foreign-owned parent
 with a named-user ACL. Every completed mount is unmounted and fsck-checked and its
 source hashes remain unchanged. Existing mounted metadata and writer regressions
 are rerun with native kernel permission checks.
+
+
+## Native macOS ACL inheritance
+
+The experimental writer accepts uniform `file_inherit,directory_inherit` rules,
+with optional `only_inherit`, through native ACL APIs and explicit-position chmod:
+
+```sh
+chmod +a# 0 'user:daemon allow read,file_inherit,directory_inherit,only_inherit' MOUNTPOINT/directory
+```
+
+`only_inherit` leaves the directory's access rights alone. Without it, the rule
+also changes the directory's access ACL. Child directories retain the template
+for further propagation. Existing descendants are unchanged by parent edits or
+`chmod -N`; native removal clears that inode's access ACL and native template.
+Symlinks do not inherit access ACLs. Native ACE provenance and ordering are
+normalized on reads: access is projected from POSIX permissions, and the numeric
+template is returned as inherit-only entries. The inherited annotation is
+accepted but is not stored as historical provenance.
+
+macOS grants can exceed creation mode bits, so substituting a POSIX default ACL
+would lose permissions. The writer instead persists a versioned numeric ordered
+policy in the reserved `user.ext4fuse.native_inherit` attribute. The mounted xattr
+API hides it and rejects direct edits. The transaction backend requires inode
+ownership, directory type and bounded valid encoding even for direct Session
+operations. Parent access ACL and native template edits share one staged/durable
+transaction. The template is copied onto new child directories in the same
+creation transaction. On regular-file/directory creation, the producer evaluates
+native ordered allow/deny decisions against the requested mode after umask,
+then materializes a standard ext4 POSIX access ACL. A named read grant therefore
+survives a requested file mode of 0200 with umask 0077. Child UID aliases and
+owning-group membership are evaluated using the actual new inode identity.
+
+The producer checks all relevant owner/named-user/other identities, both owning-
+group membership states, and every combined read/write/append/execute request
+(including directory delete-child). If that child policy cannot be represented
+by POSIX class selection, creation fails before allocating an inode. For example,
+a named read allow combined with unequal group/other write fallback can depend
+on group membership, which a POSIX named-user entry cannot express. Accepted
+parent templates consequently do not guarantee that every possible child
+creation mode will succeed. Write and append must agree; directory deletion must
+match write plus search. There are at most 32 inheritable ACEs and eight distinct
+numeric named users. Owner, owning-group and everybody roles are supported;
+named-group templates, file-only/directory-only propagation, `limit_inherit`,
+independent metadata/security grants and generic rights remain unsupported.
+
+The numeric policy is an experimental ext4fuse extension, not an ext4 kernel
+inheritance feature. Linux and other writers understand the already-created
+children's standard access ACLs, but do not inherit this template when creating
+new children themselves. Ordinary POSIX default ACL behavior remains unchanged;
+attempts to combine a default ACL with a native template fail atomically.
+
+`test-native-inherit.py` compares the Python native ACL evaluator and the C
+producer over all 512 BSD modes, files/directories, owner aliases and allow/deny
+policies. `test-native-inherit-transactions.py` verifies authority, umask, grants
+beyond creation mode, propagation, symlink exclusion, conflict/encoding rejection,
+rollback and an observed half-page durable replay across all 12 profiles. CI runs
+both suites. `test-mounted-native-acl.py` additionally exercises native chmod,
+ACL APIs, removal and grandchild propagation through actual macFUSE mounts,
+followed by e2fsck and unchanged source hashes.

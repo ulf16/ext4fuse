@@ -479,7 +479,7 @@ static errcode_t set_acl(ext2_filsys fs, ext2_ino_t ino, const char *key,
   return e;
 }
 static errcode_t copy_default_acl(ext2_filsys fs, ext2_ino_t parent,
-                                  ext2_ino_t ino) {
+                                  ext2_ino_t ino, const char *key) {
   struct ext2_xattr_handle *h = NULL;
   unsigned flags = XATTR_HANDLE_FLAG_RAW;
   unsigned char *value = NULL;
@@ -490,8 +490,7 @@ static errcode_t copy_default_acl(ext2_filsys fs, ext2_ino_t parent,
   if (!e)
     e = ext2fs_xattrs_read(h);
   if (!e)
-    e = ext2fs_xattr_get(h, "system.posix_acl_default", (void **)&value,
-                         &length);
+    e = ext2fs_xattr_get(h, key, (void **)&value, &length);
   if (h) {
     errcode_t close = ext2fs_xattrs_close(&h);
     if (!e)
@@ -500,7 +499,7 @@ static errcode_t copy_default_acl(ext2_filsys fs, ext2_ino_t parent,
   if (e == EXT2_ET_EA_KEY_NOT_FOUND)
     e = 0;
   else if (!e)
-    e = set_acl(fs, ino, "system.posix_acl_default", value, length);
+    e = set_acl(fs, ino, key, value, length);
   free(value);
   return e;
 }
@@ -524,7 +523,8 @@ static errcode_t create_entry(ext2_filsys fs, ext2_ino_t dir, const char *name,
   unsigned char *acl = NULL;
   size_t acl_length = 0;
   if (c && directory)
-    e = policy_creation(fs, dir, c, mode, &mode, &uid, &gid, &acl, &acl_length);
+    e = policy_creation(fs, dir, c, mode, 1, &mode, &uid, &gid, &acl,
+                        &acl_length);
   else if (c) {
     uid = c->uid;
     gid = (parent.i_mode & LINUX_S_ISGID) ? inode_gid(parent) : c->gid;
@@ -587,7 +587,9 @@ static errcode_t create_entry(ext2_filsys fs, ext2_ino_t dir, const char *name,
   if (!e && acl)
     e = set_acl(fs, ino, "system.posix_acl_access", acl, acl_length);
   if (!e && directory && c && acl)
-    e = copy_default_acl(fs, dir, ino);
+    e = copy_default_acl(fs, dir, ino, "system.posix_acl_default");
+  if (!e && directory && c)
+    e = copy_default_acl(fs, dir, ino, NATIVE_INHERIT_KEY);
   free(acl);
   if (!e)
     e = link_name(fs, dir, name, ino,

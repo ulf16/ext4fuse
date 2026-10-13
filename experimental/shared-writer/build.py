@@ -65,9 +65,11 @@ server_readers = [obj for obj in reader_objects if Path(obj).name != 'reader-sup
 server = compile_source(here / 'reader-server.c', 'reader-server')
 watch = compile_source(here / 'reader-watch.c', 'reader-watch')
 policy_unit = compile_source(here / 'policy-unit.c', 'policy-unit')
+native_unit = compile_source(here / 'native-inherit-unit.c', 'native-inherit-unit')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
-for name, objects in [('prototype', [overlay, manager, reader, prototype, *reader_objects]),
+for name, objects in [('native-inherit-unit', [policy_core, policy_acl, native_unit]),
+                      ('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
                       ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, mutation, metadata, path_at, producer]),
                       ('handle-test-producer', [overlay, manager, handle_test]),

@@ -2,6 +2,7 @@
 #include "acl.h"
 #include "policy.h"
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 static uint32_t le(const unsigned char *p, unsigned n) {
   uint32_t v = 0;
@@ -147,5 +148,159 @@ int policy_inherit(unsigned char *acl, size_t n, unsigned requested,
     acl[p + 3] = 0;
     p += tag == 2 || tag == 8 ? 8 : 4;
   }
+  return 0;
+}
+
+/* Versioned numeric native template. Uniform file/directory inheritance only;
+ * no UUID resolution in the producer and no reliance on POSIX mode clipping. */
+#define NDATA (2 | 4 | 8 | 32)
+static unsigned nrights(unsigned p, int dir) {
+  return (p & 4 ? 2 : 0) | (p & 2 ? 36 : 0) | (p & 1 ? 8 : 0) |
+         (dir && (p & 3) == 3 ? 64 : 0);
+}
+int policy_native_valid(const unsigned char *data, size_t n) {
+  if (!data || n < 12 || memcmp(data, "NACL0001", 8))
+    return EIO;
+  unsigned count = le(data + 8, 4), users = 0;
+  uint32_t ids[8];
+  if (!count || count > 32 || n != 12 + 16 * count)
+    return EIO;
+  for (size_t at = 12; at < n; at += 16) {
+    unsigned tag = le(data + at, 4), kind = le(data + at + 8, 4);
+    uint32_t id = le(data + at + 4, 4), bits = le(data + at + 12, 4);
+    if ((tag != 1 && tag != 2 && tag != 4 && tag != 32) ||
+        (kind != 1 && kind != 2) || (bits & ~(NDATA | 64)) ||
+        (tag == 2 ? id == UINT32_MAX : id != UINT32_MAX))
+      return EIO;
+    if (tag == 2) {
+      unsigned i;
+      for (i = 0; i < users && ids[i] != id; i++)
+        ;
+      if (i == users) {
+        if (users == 8)
+          return E2BIG;
+        ids[users++] = id;
+      }
+    }
+  }
+  return 0;
+}
+static int native_decision(const unsigned char *data, size_t n, unsigned mode,
+                           uint32_t owner, uint32_t uid, int group,
+                           unsigned requested, int directory) {
+  unsigned remaining = requested;
+  for (size_t at = 12; at < n; at += 16) {
+    unsigned tag = le(data + at, 4), kind = le(data + at + 8, 4);
+    uint32_t id = le(data + at + 4, 4), bits = le(data + at + 12, 4);
+    if (!directory)
+      bits &= ~64U;
+    if (!(tag == 32 || (tag == 1 && uid == owner) || (tag == 2 && uid == id) ||
+          (tag == 4 && group)))
+      continue;
+    if (kind == 2 && (bits & requested))
+      return 0;
+    if (kind == 1) {
+      remaining &= ~bits;
+      if (!remaining)
+        return 1;
+    }
+  }
+  unsigned fallback = uid == owner ? mode >> 6 : group ? mode >> 3 : mode;
+  return !(remaining & ~nrights(fallback & 7, directory));
+}
+static int native_perm(const unsigned char *data, size_t n, unsigned mode,
+                       uint32_t owner, uint32_t uid, int group, int dir) {
+  int r = native_decision(data, n, mode, owner, uid, group, 2, dir);
+  int w = native_decision(data, n, mode, owner, uid, group, 4, dir);
+  int a = native_decision(data, n, mode, owner, uid, group, 32, dir);
+  int x = native_decision(data, n, mode, owner, uid, group, 8, dir);
+  return w != a ? -1 : (r ? 4 : 0) | (w ? 2 : 0) | (x ? 1 : 0);
+}
+static void nput(unsigned char *p, uint32_t v, unsigned bytes) {
+  for (unsigned i = 0; i < bytes; i++)
+    p[i] = v >> (8 * i);
+}
+int policy_native_create(const unsigned char *data, size_t n, unsigned baseline,
+                         uint32_t owner, int dir, unsigned *mode,
+                         unsigned char **acl, size_t *length) {
+  if (baseline > 0777 || owner == UINT32_MAX || (dir != 0 && dir != 1))
+    return EINVAL;
+  int error = policy_native_valid(data, n);
+  if (error)
+    return error;
+  uint32_t users[8];
+  unsigned count = 0;
+  for (size_t at = 12; at < n; at += 16) {
+    uint32_t id = le(data + at + 4, 4);
+    if (le(data + at, 4) != 2 || id == owner ||
+        !(le(data + at + 12, 4) & (NDATA | (dir ? 64 : 0))))
+      continue;
+    unsigned i;
+    for (i = 0; i < count && users[i] != id; i++)
+      ;
+    if (i == count)
+      users[count++] = id;
+  }
+  for (unsigned i = 0; i < count; i++)
+    for (unsigned j = i + 1; j < count; j++)
+      if (users[j] < users[i]) {
+        uint32_t t = users[i];
+        users[i] = users[j];
+        users[j] = t;
+      }
+  uint32_t other = UINT32_MAX;
+  int perms[11];
+  perms[0] = native_perm(data, n, baseline, owner, owner, 0, dir);
+  for (unsigned i = 0; i < count; i++)
+    perms[i + 1] = native_perm(data, n, baseline, owner, users[i], 0, dir);
+  perms[count + 1] = native_perm(data, n, baseline, owner, other, 1, dir);
+  perms[count + 2] = native_perm(data, n, baseline, owner, other, 0, dir);
+  for (unsigned i = 0; i < count + 3; i++)
+    if (perms[i] < 0)
+      return EOPNOTSUPP;
+  for (unsigned i = 0; i < count + 2; i++) {
+    uint32_t uid = i == 0 ? owner : i <= count ? users[i - 1] : other;
+    for (int group = 0; group < 2; group++)
+      for (unsigned subset = 1; subset < (dir ? 32 : 16); subset++) {
+        unsigned requested = (subset & 1 ? 2 : 0) | (subset & 2 ? 4 : 0) |
+                             (subset & 4 ? 32 : 0) | (subset & 8 ? 8 : 0) |
+                             (subset & 16 ? 64 : 0);
+        unsigned want = (subset & 1 ? 4 : 0) | (subset & 6 ? 2 : 0) |
+                        (subset & 8 ? 1 : 0) | (subset & 16 ? 3 : 0);
+        int perm = i <= count ? perms[i] : perms[count + (group ? 1 : 2)];
+        if (native_decision(data, n, baseline, owner, uid, group, requested,
+                            dir) != ((perm & want) == want))
+          return EOPNOTSUPP;
+      }
+  }
+  unsigned mask = perms[count + 1];
+  for (unsigned i = 1; i <= count; i++)
+    mask |= perms[i];
+  *mode = (perms[0] << 6) | (mask << 3) | perms[count + 2];
+  *length = 4 + 4 * (3 + (count ? 1 : 0)) + 8 * count;
+  *acl = calloc(*length, 1);
+  if (!*acl)
+    return ENOMEM;
+  nput(*acl, 1, 4);
+  size_t at = 4;
+  nput(*acl + at, 1, 2);
+  nput(*acl + at + 2, perms[0], 2);
+  at += 4;
+  for (unsigned i = 0; i < count; i++) {
+    nput(*acl + at, 2, 2);
+    nput(*acl + at + 2, perms[i + 1], 2);
+    nput(*acl + at + 4, users[i], 4);
+    at += 8;
+  }
+  nput(*acl + at, 4, 2);
+  nput(*acl + at + 2, perms[count + 1], 2);
+  at += 4;
+  if (count) {
+    nput(*acl + at, 16, 2);
+    nput(*acl + at + 2, mask, 2);
+    at += 4;
+  }
+  nput(*acl + at, 32, 2);
+  nput(*acl + at + 2, perms[count + 2], 2);
   return 0;
 }

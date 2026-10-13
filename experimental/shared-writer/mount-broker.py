@@ -25,34 +25,47 @@ class Broker:
         h=self.handles.get(token)
         if h is None:raise OSError(errno.EBADF,'invalid mounted handle')
         return h
+    def optional_attr(self,path,name,handle=None):
+        try:return self.s.getxattr(path,name,handle=handle)
+        except OSError as e:
+            if e.errno!=errno.ENODATA:raise
+            return None
+
     def native_get(self,path):
         fields=struct.unpack('<8QqQqQqQqQ',self.s._mount_stat(path))
-        raw=self.s.getxattr(path,'system.posix_acl_access')
-        return native_acl.render(raw,fields[1],native_acl.Membership().resolve)
+        return native_acl.project(self.optional_attr(path,'system.posix_acl_access'),
+                                  self.optional_attr(path,native_acl.INHERIT_KEY),
+                                  fields[1],native_acl.Membership().resolve)
 
     def native_set(self,path,value,flags=0):
         fields=struct.unpack('<8QqQqQqQqQ',self.s._mount_stat(path))
         if self.s.credentials.uid not in (0,fields[3]):raise OSError(errno.EPERM,'native ACL editing requires ownership')
-        try:old=self.s.getxattr(path,'system.posix_acl_access')
-        except OSError as e:
-            if e.errno!=errno.ENODATA:raise
-            old=None
-        if flags==1 and old is not None:raise OSError(errno.EEXIST,'native ACL exists')
-        if flags==2 and old is None:raise OSError(errno.ENODATA,'native ACL missing')
+        old=self.optional_attr(path,'system.posix_acl_access')
+        previous=self.optional_attr(path,native_acl.INHERIT_KEY)
+        exists=old is not None or previous is not None
+        if flags==1 and exists:raise OSError(errno.EEXIST,'native ACL exists')
+        if flags==2 and not exists:raise OSError(errno.ENODATA,'native ACL missing')
         membership=native_acl.Membership()
-        if old is not None:
-            try:projected=native_acl.render(old,fields[1],membership.resolve)
+        if exists:
+            try:projected=native_acl.project(old,previous,fields[1],membership.resolve)
             except OSError as e:
                 if e.errno not in (errno.EOPNOTSUPP,errno.E2BIG):raise
             else:
                 if value==projected:return
-        converted=native_acl.decode(value,fields[1],fields[3],fields[4],membership.identify)
-        if converted is None:
-            if old is not None:self.s.removexattr(path,'system.posix_acl_access')
-        else:self.s.setxattr(path,'system.posix_acl_access',converted)
+        converted,policy=native_acl.split(value,fields[1],fields[3],fields[4],membership.identify)
+        if policy is not None and self.optional_attr(path,'system.posix_acl_default') is not None:
+            raise OSError(errno.EOPNOTSUPP,'cannot combine native and POSIX default inheritance')
+        operations=[]
+        for name,before,after in [('system.posix_acl_access',old,converted),(native_acl.INHERIT_KEY,previous,policy)]:
+            if before==after:continue
+            operation=dict(kind='setxattr' if after is not None else 'removexattr',path=path,name=name,follow_symlinks=False)
+            if after is not None:operation['value_hex']=after.hex()
+            operations.append(operation)
+        if operations:self.s.applyat(operations)
 
     def attr_name(self, name):
         if not name or len(name)>255 or b'\0' in name:raise OSError(errno.EINVAL,'attribute name')
+        if name in (native_acl.INHERIT_KEY.encode(),native_acl.INHERIT_KEY[5:].encode()):raise OSError(errno.EOPNOTSUPP,'reserved native inheritance attribute')
         if name in (b'system.posix_acl_access',b'system.posix_acl_default'):return name
         if name.startswith((b'system.',b'security.',b'trusted.')) or name==b'com.apple.system.Security':
             raise OSError(errno.EOPNOTSUPP,'unsupported privilege/native ACL attribute')
@@ -72,12 +85,17 @@ class Broker:
             handle=self.handle(token) if token else None
             raw=self.s._mount_stat(path,handle)
             if sys.platform=='darwin':
+                acl=None
                 try:acl=self.s.getxattr(path,'system.posix_acl_access',handle=handle)
                 except OSError as e:
                     if e.errno!=errno.ENODATA:raise
                 else:
                     mode=struct.unpack_from('<Q',raw,8)[0]
                     native_acl.render(acl,mode,native_acl.Membership().resolve)
+                policy=self.optional_attr(path,native_acl.INHERIT_KEY,handle)
+                if policy is not None:
+                    mode=struct.unpack_from("<Q",raw,8)[0]
+                    native_acl.project(acl,policy,mode,native_acl.Membership().resolve)
             return 0,raw
         if op in (2,3,8):
             flags=arg&0xffffffff;mode=arg>>32
@@ -165,12 +183,16 @@ class Broker:
                     if sys.platform=='darwin' and name==b'com.apple.system.Security':self.native_set(path,value,arg)
                     else:self.s.setxattr(path,self.attr_name(name),value,arg)
                 elif op==28:
-                    self.s.removexattr(path,'system.posix_acl_access' if sys.platform=='darwin' and data==b'com.apple.system.Security' else self.attr_name(data))
+                    if sys.platform=='darwin' and data==b'com.apple.system.Security':
+                        if self.optional_attr(path,'system.posix_acl_access') is None and self.optional_attr(path,native_acl.INHERIT_KEY) is None:raise OSError(errno.ENODATA,'native ACL missing')
+                        self.native_set(path,native_acl.pack_native([]))
+                    else:self.s.removexattr(path,self.attr_name(data))
                 elif op==29:return 0,self.native_get(path) if sys.platform=='darwin' and data==b'com.apple.system.Security' else self.s.getxattr(path,self.attr_name(data))
                 else:
                     names=self.s.listxattrs(path)
                     if sys.platform=='darwin':
-                        if 'system.posix_acl_access' in names:names.append('com.apple.system.Security')
+                        if 'system.posix_acl_access' in names or native_acl.INHERIT_KEY in names:names.append('com.apple.system.Security')
+                        names=[name for name in names if name!=native_acl.INHERIT_KEY]
                         names=[name[5:] if name.startswith('user.') else name for name in names]
                     return 0,b''.join(os.fsencode(name)+b'\0' for name in names)
             except OSError as e:

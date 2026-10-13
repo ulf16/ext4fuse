@@ -247,7 +247,7 @@ errcode_t mutation_apply_as(ext2_filsys fs, const struct mutation *op,
       size_t acl_length = 0;
       e = 0;
       if (credentials)
-        e = policy_creation(fs, dir, credentials, op->mode, &resolved.mode,
+        e = policy_creation(fs, dir, credentials, op->mode, 0, &resolved.mode,
                             &resolved.uid, &resolved.gid, &acl, &acl_length);
       if (!e)
         e = create_file(fs, dir, leaf, &resolved, &ino, acl, acl_length);
@@ -369,8 +369,8 @@ errcode_t mutation_open_at(ext2_filsys fs, const struct mutation *op,
     struct mutation create = {.kind = MUT_CREATE, .mode = op->mode};
     unsigned char *acl = NULL;
     size_t bytes = 0;
-    e = policy_creation(fs, r.parent, c, create.mode, &create.mode, &create.uid,
-                        &create.gid, &acl, &bytes);
+    e = policy_creation(fs, r.parent, c, create.mode, 0, &create.mode,
+                        &create.uid, &create.gid, &acl, &bytes);
     if (!e)
       e = create_file(fs, r.parent, r.leaf, &create, &r.inode, acl, bytes);
     free(acl);

@@ -4,6 +4,7 @@
 #include <ext2fs/ext2fs.h>
 #include <stddef.h>
 #include <stdint.h>
+#define NATIVE_INHERIT_KEY "user.ext4fuse.native_inherit"
 #define POLICY_GROUPS 64
 #define POLICY_ACL_LIMIT 4096
 struct credentials {
@@ -20,6 +21,10 @@ int policy_group(const struct credentials *c, uint32_t gid);
 int policy_acl(const unsigned char *acl, size_t length, unsigned mode,
                uint32_t uid, uint32_t gid, const struct credentials *c,
                unsigned want);
+int policy_native_valid(const unsigned char *data, size_t n);
+int policy_native_create(const unsigned char *data, size_t n, unsigned baseline,
+                         uint32_t uid, int directory, unsigned *mode,
+                         unsigned char **acl, size_t *length);
 int policy_inherit(unsigned char *acl, size_t length, unsigned requested,
                    unsigned *mode);
 errcode_t policy_inode(ext2_filsys fs, ext2_ino_t ino,
@@ -29,7 +34,7 @@ errcode_t policy_path(ext2_filsys fs, const char *path,
                       ext2_ino_t *ino);
 errcode_t policy_creation(ext2_filsys fs, ext2_ino_t parent,
                           const struct credentials *c, unsigned requested,
-                          unsigned *mode, uint32_t *uid, uint32_t *gid,
-                          unsigned char **acl, size_t *length);
+                          int directory, unsigned *mode, uint32_t *uid,
+                          uint32_t *gid, unsigned char **acl, size_t *length);
 errcode_t policy_writable(ext2_filsys fs, ext2_ino_t ino);
 #endif

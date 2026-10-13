@@ -118,8 +118,8 @@ errcode_t policy_path(ext2_filsys fs, const char *path,
 }
 errcode_t policy_creation(ext2_filsys fs, ext2_ino_t parent,
                           const struct credentials *c, unsigned requested,
-                          unsigned *mode, uint32_t *uid, uint32_t *gid,
-                          unsigned char **acl, size_t *length) {
+                          int directory, unsigned *mode, uint32_t *uid,
+                          uint32_t *gid, unsigned char **acl, size_t *length) {
   *acl = NULL;
   *length = 0;
   errcode_t e = policy_inode(fs, parent, c, 3);
@@ -133,6 +133,25 @@ errcode_t policy_creation(ext2_filsys fs, ext2_ino_t parent,
     return ENOTDIR;
   *uid = c->uid;
   *gid = in.i_mode & LINUX_S_ISGID ? inode_gid(in) : c->gid;
+  unsigned char *native = NULL;
+  size_t native_length = 0;
+  e = xattr(fs, parent, NATIVE_INHERIT_KEY, &native, &native_length);
+  if (!e) {
+    unsigned char *def = NULL;
+    size_t def_length = 0;
+    e = xattr(fs, parent, "system.posix_acl_default", &def, &def_length);
+    free(def);
+    if (!e)
+      e = EOPNOTSUPP; /* never combine two inheritance authorities */
+    else if (e == EXT2_ET_EA_KEY_NOT_FOUND)
+      e = policy_native_create(native, native_length, requested & ~c->umask,
+                               *uid, directory, mode, acl, length);
+    free(native);
+    return e;
+  }
+  free(native);
+  if (e != EXT2_ET_EA_KEY_NOT_FOUND)
+    return e;
   e = xattr(fs, parent, "system.posix_acl_default", acl, length);
   if (e == EXT2_ET_EA_KEY_NOT_FOUND) {
     *mode = requested & ~c->umask;
