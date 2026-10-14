@@ -1278,5 +1278,6 @@ boundary, exercises torn sectors, and checks identity/log/clean-byte rejection
 without enabling regular files in production admission. `test-device-native.py`
 uses only a freshly generated disposable hdiutil or loop device, interrupts a real
 publication after the guard is durable, recovers idempotently, checks resulting
-file bytes and runs e2fsck. Linux CI runs the real loop test with sudo; macOS tests
+file bytes and runs e2fsck. Linux CI runs whole-loop and partitioned-loop tests with sudo, including
+mounted-sibling rejection and preventing sibling mounts during a held claim; macOS tests
 use owned disk images. No physical user disk is touched by these tests.
