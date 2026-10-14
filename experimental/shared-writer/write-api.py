@@ -195,9 +195,12 @@ def apply(root, producer, operations, credentials=None):
         return apply_encoded_locked(root, producer, request)
 
 
-def apply_encoded_locked(root, producer, request):
+def apply_encoded_locked(root, producer, request, cache=None):
     """Internal entry point; caller owns chain-lock for the entire operation."""
-    state = chain.recover_locked(root)
+    state = chain.recover_locked(root, cache)
+    if cache is None and state['version'] == 2:
+        import merkle
+        state, cache = merkle.activate(root, state)
     proposed = root / f"g-{state['head'] + 1:08d}"
     if state['head'] >= 99_999_998 or proposed.exists() or proposed.is_symlink():
         raise ValueError('invalid next generation')
@@ -212,8 +215,8 @@ def apply_encoded_locked(root, producer, request):
     executable = str(Path(producer).absolute())
     adapter.write_text('#!/usr/bin/env python3\nimport os,sys\nos.environ["EXT4_MUTATION_REQUEST"] = ' + repr(str(request_path)) + '\nos.execv(' + repr(executable) + ', [' + repr(executable) + '] + sys.argv[1:])\n')
     adapter.chmod(0o700)
-    inplace.capture_overlay(root / 'image.img', proposed, adapter, expected_base=state['sha256'])
-    return chain.recover_locked(root)
+    inplace.capture_overlay(root / 'image.img', proposed, adapter, expected_base=state['sha256'], integrity=cache)
+    return chain.recover_locked(root, cache)
 
 
 if __name__ == '__main__':

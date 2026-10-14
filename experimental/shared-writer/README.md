@@ -1332,14 +1332,44 @@ Format overflow returns EFBIG atomically. Bounded transaction payloads and dirty
 page budgets remain independent of logical file size. Sparse files can exceed
 the physical image capacity; allocated writes still require filesystem space.
 
-The transaction transport and persisted hashes/formats are unchanged. A recovered
-chain's verified hash is carried into capture. Capture computes observed original
-and prospective image hashes together and retains its final full source recheck.
-Replay computes actual, original and result hashes in one pass, validating all
-clean bytes and logged pages even after torn writes. Post-write full hashing,
-flush ordering and final chain verification remain mandatory. Redundant scans at
-the same verification stages have been removed; no timestamp-only trust or
-skipped clean-byte verification is introduced.
+Legacy standalone block-log/in-place transactions retain whole-image SHA256.
+Managed sessions now migrate validated version-1 chain state to version 2 with
+`algorithm: sha256-merkle-1m-v1`; version-3 page transactions use that same
+algorithm. The `sha256`, `base_sha256` and `image_sha256` fields in these new
+formats hold domain-separated Merkle roots, **not whole-file SHA256 digests**.
+Older writer implementations cannot open a migrated chain. Migration occurs only
+after recovering pending legacy work and checking the legacy whole-image hash.
+
+The in-memory tree authenticates 1 MiB chunks, including the partial final chunk;
+leaf hashes bind their index and length, node hashes bind child ordering, and the
+root binds image size and chunk size. Empty padding leaves are distinct from data
+leaves. The tree uses a packed bytearray with a 256 MiB allocation budget: about
+64–128 bytes per MiB of image capacity, supporting images up to 4 TiB. Larger
+managed images fail closed before allocation; this is separate from sparse file
+mapping limits. Only roots and complete page undo/redo logs are persisted. No
+on-disk tree or hash-index update needs a separate crash recovery protocol.
+
+A live session holds chain-lock and caches the tree from a full scan. Capture and
+replay authenticate every touched chunk (including its clean bytes), update only
+changed branches, sync the image, and read back touched chunks before sealing
+completion and publishing the new root. Every transaction checks image identity,
+size, ownership, links, mode, mtime and ctime against the trusted fingerprint.
+Ordinary outside writes, including writes followed by restoring mtime, invalidate
+the cache and are rejected before intent publication. This remains a private,
+cooperating-process design; timestamps are a cache-validity guard, not a
+cryptographic guarantee against concurrent hostile modification.
+
+Opening a session, cold recovery and checkpoints fully scan the image. Cold
+recovery substitutes logged preimages while hashing **all** chunks, verifies both
+base and prospective roots, then replays a sealed transaction. This detects clean
+corruption outside the transaction even after a torn page write. Latent media
+corruption in an untouched chunk with no metadata change can remain undetected
+during warm transactions until a full scan; ordinary reads are not Merkle-verified.
+This explicitly changes verification cadence rather than claiming untouched bytes
+can be authenticated without reading them. The default mounted checkpoint every
+64 transactions still performs a full scan, so its amortized scan cost remains
+proportional to image size. Offline physical-device publication keeps its existing
+whole-device SHA256, guard, flush and recovery protocol.
 
 `Session.checkpoint()` retires completed history under the existing session lock
 without closing the resident reader, open files, directory handles or cwd.
@@ -1350,15 +1380,20 @@ retired. A checkpoint failure fails the session closed; recover in a fresh sessi
 Each acknowledged mutation still commits durably, including before retirement;
 this is not deferred writeback or group commit.
 
-A local five-transaction comparison against eaa099c on Intel Sequoia reduced
-Python image-verification reads from approximately 12 image passes per transaction
-to 6. A 32 MiB image took 5.26 versus 4.35 seconds; a 512 MiB container with the
-same 32 MiB filesystem took 69.70 versus 47.82 seconds. These are single local
-runs, not broad throughput claims, and exclude producer/native-reader metadata
-reads from the byte counter. The deterministic reduction is about 50% of Python
-image bytes read. CI gates read amplification rather than timing. Full-image
-verification remains O(image size); dirty-page-only authenticated verification
-and producer reuse are future performance work.
+The previous stage reduced Python verification reads from about 12 to 6 image
+passes per transaction. The Merkle path removes those full scans from steady
+small transactions: a local five-write run read 31,625,216 bytes total on both
+32 MiB and 512 MiB containers holding the same filesystem. Byte counts exclude
+native producer/reader metadata reads, startup, and checkpoints. Timing is a
+single-run observation, not a general throughput promise. CI gates changed-region
+read volume and equal bytes on differently sized containers rather than timing.
+
+`test-merkle.py` covers legacy migration, incremental/rebuilt root equivalence,
+non-power-of-two and partial chunks, outside edits with restored mtime, bounded
+allocation, log/marker/schema/identity corruption, every durability boundary,
+torn pages, checkpoint fallback, and cold detection of simulated silent corruption
+in an untouched chunk. `test-hash-scaling.py` checks 32/512 MiB scaling. Existing
+legacy full-hash fault matrices remain separate regression gates.
 
 `test-large-writes.py` checks sparse multi-gigabyte writes, the 4 GiB boundary,
 append, shrink/regrow zeroing, exact mapping bounds, rejected writes and half-page

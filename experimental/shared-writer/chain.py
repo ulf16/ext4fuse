@@ -12,6 +12,7 @@ from pathlib import Path
 import stat
 import uuid
 import inplace
+import merkle
 from durable import regular, digest, directory, boundary
 
 
@@ -42,7 +43,10 @@ def read_state(root, name='chain-state'):
         if value['sha256'] != expected:
             raise ValueError('checkpoint checksum mismatch')
         value = value['state']
-    if set(value) != {'version', 'head', 'pending', 'sha256', 'device', 'inode', 'size'} or type(value['version']) is not int or value['version'] != 1:
+    fields = {'version', 'head', 'pending', 'sha256', 'device', 'inode', 'size'}
+    if (not isinstance(value, dict) or type(value.get('version')) is not int or
+        value['version'] not in (1, 2) or set(value) != fields | ({'algorithm'} if value['version'] == 2 else set()) or
+        (value['version'] == 2 and value['algorithm'] != merkle.ALGORITHM)):
         raise ValueError('invalid chain state')
     if type(value['head']) is not int or not 0 <= value['head'] < 99_999_999:
         raise ValueError('invalid generation')
@@ -61,11 +65,12 @@ def check_image(root, state, check_hash=True):
         info = os.fstat(image.fileno())
         if info.st_uid != os.getuid() or info.st_nlink != 1 or (info.st_dev, info.st_ino, info.st_size) != (state['device'], state['inode'], state['size']):
             raise ValueError('chain image identity changed')
-        if check_hash and digest(image) != state['sha256']:
+        actual = (merkle.scan(image, state).root() if state['version'] == 2 else digest(image)) if check_hash else None
+        if check_hash and actual != state['sha256']:
             raise ValueError('chain image edited outside a transaction')
 
 
-def recover_locked(root):
+def recover_locked(root, cache=None):
     if not (root / 'chain-state').exists() and (root / 'checkpoint').exists():
         saved = read_state(root, 'checkpoint')
         if saved['pending'] is not None:
@@ -82,6 +87,10 @@ def recover_locked(root):
                          device=info.st_dev, inode=info.st_ino, size=info.st_size)
         inplace.seal(root, 'chain-state', state)
     state = read_state(root)
+    if state['version'] == 2:
+        result = merkle.recover(root, state, cache)
+        if result is not None:
+            return result
     check_image(root, state, check_hash=state['pending'] is None)
     pending = state['pending'] is not None
     if pending:
@@ -146,6 +155,7 @@ def recover(root):
 def append(root, producer):
     with locked(root) as root:
         state = recover_locked(root)
+        cache = merkle.activate(root, state)[1] if state['version'] == 2 else None
         if state['head'] >= 99_999_998:
             raise ValueError('generation limit')
         proposed = root / f"g-{state['head'] + 1:08d}"
@@ -157,9 +167,9 @@ def append(root, producer):
         generation = root / f"g-{state['pending']:08d}"
         generation.mkdir(mode=0o700)
         directory(root)
-        inplace.capture_overlay(root / 'image.img', generation, producer, expected_base=state['sha256'])
+        inplace.capture_overlay(root / 'image.img', generation, producer, expected_base=state['sha256'], integrity=cache)
         boundary('chain-prepared')
-        return recover_locked(root)
+        return recover_locked(root, cache)
 
 
 GEN_FILES = {'operations', 'operations.result', 'request-producer', 'transaction', 'transaction.pending', 'pages', 'started',

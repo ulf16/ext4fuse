@@ -12,6 +12,7 @@ import threading
 import time
 from durable import regular
 import chain
+import merkle
 from credentials import Credentials
 
 spec = importlib.util.spec_from_file_location('write_api', Path(__file__).with_name('write-api.py'))
@@ -48,6 +49,7 @@ class Session:
         self.producer = Path(producer).absolute()
         try:
             self.state = chain.recover_locked(self.root)
+            self.state, self._integrity = merkle.activate(self.root, self.state)
             self._checkpoint_head = self.state['head']
             self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -489,13 +491,14 @@ class Session:
                 self._failed = True
                 raise
             try:
-                self.state = write_api.apply_encoded_locked(self.root, self.producer, request)
+                self.state = write_api.apply_encoded_locked(self.root, self.producer, request, self._integrity)
             except BaseException:
                 # A failed producer may leave an unsealed intent; a transport
                 # error after sealing may require completing a committed batch.
                 # Resume only once recovery and reader refresh both succeed.
                 try:
                     self.state = chain.recover_locked(self.root)
+                    self.state, self._integrity = merkle.activate(self.root, self.state)
                     self._rpc(4)
                 except BaseException:
                     self._failed = True

@@ -59,7 +59,11 @@ def prepare(source, session, producer):
     return capture_overlay(image, session, producer)
 
 
-def capture_overlay(image, session, producer, expected_base=None):
+def capture_overlay(image, session, producer, expected_base=None, integrity=None):
+    if integrity is not None:
+        import merkle
+        merkle.capture(image, session, producer, integrity, expected_base)
+        return image
     with regular(image) as current:
         before = expected_base if expected_base is not None else digest(current)
     capture = session / 'capture'

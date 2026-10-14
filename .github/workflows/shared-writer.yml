@@ -393,8 +393,10 @@ jobs:
         run: python3 experimental/shared-writer/test-session-checkpoints.py --work "$RUNNER_TEMP/large-writer"
       - name: Verify real mounted large files and bounded history
         run: python3 experimental/shared-writer/test-mounted-large.py --work "$RUNNER_TEMP/large-writer"
-      - name: Gate full-image read amplification
-        run: python3 experimental/shared-writer/test-transaction-performance.py --work "$RUNNER_TEMP/large-writer" --source "$RUNNER_TEMP/large-writer/fixtures/1024-classic-csum0.img" --root "$RUNNER_TEMP/large-performance" --output "$RUNNER_TEMP/large-writer/transaction-performance.json" --max-passes 6.05
+      - name: Verify authenticated chunks, cold recovery and crash boundaries
+        run: python3 experimental/shared-writer/test-merkle.py --work "$RUNNER_TEMP/large-writer"
+      - name: Gate verification bytes independently of image capacity
+        run: python3 experimental/shared-writer/test-hash-scaling.py --work "$RUNNER_TEMP/large-writer" --source "$RUNNER_TEMP/large-writer/fixtures/1024-classic-csum0.img"
       - name: Save large-file and performance results
         if: always()
         uses: actions/upload-artifact@v4
@@ -404,4 +406,5 @@ jobs:
             ${{ runner.temp }}/large-writer/large-write-results.json
             ${{ runner.temp }}/large-writer/session-checkpoint-results.json
             ${{ runner.temp }}/large-writer/mounted-large-results.json
-            ${{ runner.temp }}/large-writer/transaction-performance.json
+            ${{ runner.temp }}/large-writer/merkle-results.json
+            ${{ runner.temp }}/large-writer/hash-scaling-results.json

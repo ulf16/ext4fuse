@@ -99,7 +99,12 @@ def prepare(root,target,state,current):
     if uuid!=state['uuid']:refuse('candidate changes filesystem UUID')
     if fd_hash(target.fd,target.size)!=state['base_sha256']:refuse('device changed since snapshot')
     with regular(root/'base.img') as base,regular(root/'chain/image.img') as new:
-        if digest(base)!=state['base_sha256'] or digest(new)!=current['sha256']:refuse('managed inputs changed')
+        import merkle
+        before=merkle.fingerprint(os.fstat(new.fileno()))
+        if current['version']==2 and merkle.scan(new,current).root()!=current['sha256']:refuse('managed Merkle candidate changed')
+        new_hash=digest(new)
+        if (merkle.fingerprint(os.fstat(new.fileno()))!=before or digest(base)!=state['base_sha256'] or
+            (current['version']==1 and new_hash!=current['sha256'])):refuse('managed inputs changed')
         base.seek(0);new.seek(0)
         # Include page zero even for a no-op transaction: it contains the
         # temporarily disabled magic and is restored only after data flush.
@@ -118,7 +123,7 @@ def prepare(root,target,state,current):
                     log.write(RECORD.pack(index,old,after))
             log.flush();sync(log.fileno())
         with regular(root/'device-pages') as log:log_hash=digest(log)
-        inplace.seal(root,'device-transaction',dict(version=1,count=count,size=target.size,base_sha256=state['base_sha256'],new_sha256=current['sha256'],log_sha256=log_hash))
+        inplace.seal(root,'device-transaction',dict(version=1,count=count,size=target.size,base_sha256=state['base_sha256'],new_sha256=new_hash,log_sha256=log_hash))
         boundary('device:prepared')
 
 
@@ -198,7 +203,9 @@ def commit(root,device):
         current=chain.recover_locked(root/'chain')
         with Device(device,root) as target:
             state=load(root,'device-state')
-            if (root/'device-transaction').exists() and current['sha256']!=load(root,'device-transaction')['new_sha256']:refuse('managed image changed after device transaction was sealed')
+            if (root/'device-transaction').exists():
+                with regular(root/'chain/image.img') as candidate:
+                    if digest(candidate)!=load(root,'device-transaction')['new_sha256']:refuse('managed image changed after device transaction was sealed')
             prepare(root,target,state,current);replay(root,target,state)
     return root
 
