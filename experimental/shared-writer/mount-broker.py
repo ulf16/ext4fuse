@@ -462,35 +462,43 @@ def serve(broker,frontend):
         if not error:frontend.stdin.write(result)
         frontend.stdin.flush()
 
+def validate_mount(root,work,mount):
+    mount=mount.absolute()
+    if not mount.is_dir() or mount.is_symlink() or os.path.ismount(mount) or any(mount.iterdir()):
+        raise ValueError('mountpoint must be an empty unmounted directory')
+    if os.stat(mount).st_uid!=os.getuid():raise ValueError('mountpoint must be owned by launching user')
+    if mount==root.absolute() or root.absolute().is_relative_to(mount) or mount.is_relative_to(root.absolute()):raise ValueError('mountpoint must be outside managed chain')
+    mount=mount.resolve();root=root.resolve()
+    if mount==root or root.is_relative_to(mount) or mount.is_relative_to(root):raise ValueError('mountpoint must be outside managed chain')
+    work=work.resolve()
+    if work.is_relative_to(mount):raise ValueError('build directory must be outside mountpoint')
+    return root,work,mount
+
+
+def run_mount(s,work,mount):
+    broker=LowBroker(s)
+    frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount)],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+    try:
+        serve(broker,frontend)
+        result=frontend.wait(timeout=10)
+        if result:raise OSError(errno.EIO,f'FUSE frontend exited {result}')
+    finally:
+        if frontend.poll() is None:
+            frontend.terminate()
+            try:frontend.wait(timeout=10)
+            except subprocess.TimeoutExpired:frontend.kill();frontend.wait(timeout=5)
+        frontend.stdin.close();frontend.stdout.close()
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--mountpoint',type=Path,required=True)
     parser.add_argument('--checkpoint-every',type=int,default=64,help='retire completed generations after this many commits; zero disables')
-    args=parser.parse_args();mount=args.mountpoint.absolute()
-    if not mount.is_dir() or mount.is_symlink() or os.path.ismount(mount) or any(mount.iterdir()):
-        raise ValueError('mountpoint must be an empty unmounted directory')
-    if os.stat(mount).st_uid!=os.getuid():raise ValueError('mountpoint must be owned by launching user')
-    if mount==args.root.absolute() or args.root.absolute().is_relative_to(mount) or mount.is_relative_to(args.root.absolute()):raise ValueError('mountpoint must be outside managed chain')
-    mount=mount.resolve();root=args.root.resolve()
-    if mount==root or root.is_relative_to(mount) or mount.is_relative_to(root):raise ValueError('mountpoint must be outside managed chain')
-    work=args.work.resolve()
-    if work.is_relative_to(mount):raise ValueError('build directory must be outside mountpoint')
+    args=parser.parse_args()
+    root,work,mount=validate_mount(args.root,args.work,args.mountpoint)
     mask=os.umask(0);os.umask(mask)
-    frontend=None
-    with session.Session(args.root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every) as s:
-        broker=LowBroker(s)
-        frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount)],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
-        try:
-            serve(broker,frontend)
-            result=frontend.wait(timeout=10)
-            if result:raise OSError(errno.EIO,f'FUSE frontend exited {result}')
-        finally:
-            if frontend.poll() is None:
-                frontend.terminate()
-                try:frontend.wait(timeout=10)
-                except subprocess.TimeoutExpired:frontend.kill();frontend.wait(timeout=5)
-            frontend.stdin.close();frontend.stdout.close()
+    with session.Session(root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every) as s:
+        run_mount(s,work,mount)
     print('Experimental mount stopped; managed image and recovery logs retained.',file=sys.stderr)
 if __name__=='__main__':main()

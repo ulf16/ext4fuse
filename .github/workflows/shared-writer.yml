@@ -435,3 +435,29 @@ jobs:
             ${{ runner.temp }}/lowlevel-writer/lowlevel-broker-results.json
             ${{ runner.temp }}/lowlevel-writer/mounted-lifetime-results.json
             ${{ runner.temp }}/lowlevel-writer/mounted-lifetime-*/*.log
+
+  continuous-device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install device and mounted test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Require disposable loop devices and native FUSE
+        run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
+      - name: Build continuous-device runtime with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/live-device" --sanitize
+      - name: Prepare independently checked filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/live-device"
+      - name: Verify continuous publication, torn sectors and fail-closed recovery
+        run: python3 experimental/shared-writer/test-live-device.py --work "$RUNNER_TEMP/live-device"
+      - name: Verify actual mounted loop-device writes, crash recovery and clean close
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-live-device-native.py --work "$RUNNER_TEMP/live-device"
+      - name: Save continuous-device validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: continuous-device-validation
+          path: |
+            ${{ runner.temp }}/live-device/live-device-results.json
+            ${{ runner.temp }}/live-device/live-device-native-results.json

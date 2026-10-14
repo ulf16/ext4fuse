@@ -30,11 +30,12 @@ class Session:
     serialized inside this object; other cooperating processes are excluded.
     Any unresolvable recovery/reader error leaves the session failed closed.
     """
-    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0):
+    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0, commit_sink=None):
         if credentials is not None and not isinstance(credentials, Credentials):
             raise ValueError('expected trusted Credentials')
         if type(checkpoint_every) is not int or not 0 <= checkpoint_every <= 1_000_000:
             raise ValueError('invalid checkpoint interval')
+        self._commit_sink = commit_sink
         self._checkpoint_every = checkpoint_every
         self._credentials = credentials
         self._mutex = threading.RLock()
@@ -50,6 +51,8 @@ class Session:
         try:
             self.state = chain.recover_locked(self.root)
             self.state, self._integrity = merkle.activate(self.root, self.state)
+            if self._commit_sink is not None:
+                self._commit_sink.recover(self.state)
             self._checkpoint_head = self.state['head']
             self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -538,14 +541,28 @@ class Session:
                 self._failed = True
                 raise
             try:
-                self.state = write_api.apply_encoded_locked(self.root, self.producer, request, self._integrity)
+                previous = self.state
+                committed = write_api.apply_encoded_locked(self.root, self.producer, request, self._integrity)
+                if self._commit_sink is not None:
+                    try:
+                        self._commit_sink.publish(previous, committed)
+                    except BaseException:
+                        # The image may be ahead of the device. Never serve or
+                        # acknowledge it after ambiguous physical publication.
+                        self._failed = True
+                        raise
+                self.state = committed
             except BaseException:
+                if self._failed:
+                    raise
                 # A failed producer may leave an unsealed intent; a transport
                 # error after sealing may require completing a committed batch.
                 # Resume only once recovery and reader refresh both succeed.
                 try:
                     self.state = chain.recover_locked(self.root)
                     self.state, self._integrity = merkle.activate(self.root, self.state)
+                    if self._commit_sink is not None:
+                        self._commit_sink.recover(self.state)
                     self._rpc(4)
                 except BaseException:
                     self._failed = True
@@ -571,6 +588,8 @@ class Session:
                 state = chain.read_state(self.root)
                 if state != self.state or state['pending'] is not None:
                     raise ValueError('session generation changed before checkpoint')
+                if self._commit_sink is not None:
+                    self._commit_sink.checkpoint(self.state)
                 self.state = chain.checkpoint_locked(self.root)
                 self._checkpoint_head = self.state['head']
             except BaseException:
@@ -613,6 +632,8 @@ class Session:
         with self._mutex:
             if self._closed:
                 return
+            if self._failed and self._commit_sink is not None:
+                self._commit_sink.abort()
             self._cwd=None
             tokens=[handle._token for handle in self._files]
             for handle in self._files:

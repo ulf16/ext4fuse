@@ -1,9 +1,11 @@
 # Shared reader / libext2fs writer experiment
 
 This experimental backend retains the native reader and uses libext2fs for
-filesystem mutations. It includes a private FUSE 3 frontend for managed image copies and guarded
-offline physical-device publication. General-purpose live writable device mounts
-and production Homebrew packaging remain outside this prototype.
+filesystem mutations. It includes a private FUSE 3 frontend for managed image copies,
+guarded offline device publication, and continuous device write-through via a
+private disk-backed shadow. Production Homebrew packaging and general-purpose
+write support remain outside this prototype. See the final continuous-device
+section for its commands, storage requirements and recovery limits.
 
 The source image is opened read-only and must be a regular file. A custom
 libext2fs I/O manager stages writes in bounded 4 KiB copy-on-write pages. A test-only
@@ -91,8 +93,9 @@ performance have not been benchmarked for this backend.
 - Resource/error bounds, fault injection at every durability boundary and independent
   native Linux recovery tests before any in-place write support is considered.
 
-No production in-place commits, physical-device writes or release change is
-introduced. The experimental mounted frontend below applies only to managed copies.
+These requirements describe the original experiment. Later sections document
+incremental image transactions, low-level mounts and guarded device publication.
+No production write-support release or installed-reader change is introduced.
 
 ## Durable full-image redo experiment
 
@@ -1443,3 +1446,64 @@ termination followed by orphan recovery and remount. It verifies source hashes,
 independent e2fsck results and preservation of a legitimate `.fuse_hidden…` file.
 Existing mounted namespace, large-file, indexed and metadata/ACL suites now use
 this same low-level frontend. The installed stable read-only reader is unchanged.
+
+
+## Continuous device writing (experimental)
+
+`live-device.py` keeps the existing native reader/mutator on a private, full-size
+**disk-backed shadow** and publishes each committed mutation to the explicitly
+selected device before acknowledging it. It holds device admission and the
+external journal lock for the entire mount. This is continuous write-through,
+not a final offline publish and not a RAM filesystem. It requires enough local
+storage on another drive for the shadow plus outstanding undo/redo history.
+
+```
+python3 experimental/shared-writer/live-device.py init DEVICE JOURNAL
+python3 experimental/shared-writer/live-device.py mount DEVICE JOURNAL \
+  --work RUNTIME --mountpoint EMPTY_DIRECTORY --checkpoint-every 64
+# After an interrupted mount or an ambiguous device I/O failure:
+python3 experimental/shared-writer/live-device.py recover DEVICE JOURNAL --work RUNTIME
+```
+
+Select an unmounted ext4 GPT partition with a stable hardware identity. Disposable
+hdiutil/loop devices are supported for testing; ordinary files are never admitted
+as production device targets. The same whole-drive/sibling, off-device journal,
+geometry, exclusive descriptor and macOS Disk Arbitration checks used by the
+offline publisher apply. The FUSE mount remains private to its launching owner,
+with nodev/nosuid and no writeback caching. Unmount normally to finish publication.
+
+The target's primary ext4 magic stays disabled throughout the active mount.
+Durable guard phases cover activation and restoration, and per-generation redo
+markers cover interrupted sector writes. Each mutation flushes the target and
+verifies its changed chunks before publishing the durable device head or resuming
+reads. Device failure fails the session closed: no successful acknowledgement,
+continued reads, replacement-device selection or automatic clean publication.
+A fresh recovery verifies all device chunks, completes sealed generations and
+mirrors orphan reaping before serving the filesystem. Clean shutdown releases
+all inode pins, verifies the entire shadow/device, requires read-only e2fsck, then
+restores and flushes the primary magic. A checkpoint fully verifies the device
+before retiring any corresponding shadow redo history.
+
+**Keep the journal and shadow together until clean shutdown/recovery succeeds.**
+This is an external recovery protocol, not native JBD2 journal integration;
+Linux cannot automatically replay it. Do not force a backup-superblock mount of
+an active or interrupted target. A guarded primary superblock discourages normal
+mounting but cannot prevent privileged raw writes or forced backup mounting.
+Hardware power-loss behavior and dishonest device flushes are not certified.
+
+Warm publication authenticates the touched 1 MiB chunks using the tree built
+under the exclusive device claim. Startup, cold recovery, checkpoints and close
+scan the entire device. Latent damage in untouched chunks can remain undetected
+until those scans; ordinary reads still use the shadow and are not separately
+Merkle-verified. Full-device copy/startup/close costs and the full shadow storage
+requirement remain. This stage does not introduce a direct-device native reader
+or remove those costs.
+
+`test-live-device.py` uses real C mutation logs on explicitly simulated sector
+targets: 512/4096-byte sectors, guard/head/journal/retirement/close interruptions,
+torn writes, open-unlink lifetime, checkpoint retirement, bounded warm read volume,
+I/O fail-closed behavior and malformed/changed device rejection.
+`test-live-device-native.py` checks actual disposable macOS hdiutil/Linux loop
+writes through both Session and a real low-level FUSE mount, abrupt mount-group
+loss, guarded recovery, orphan reaping, clean remount and independent e2fsck.
+No test enumerates or selects a user's physical disk.
