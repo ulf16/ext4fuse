@@ -87,7 +87,7 @@ print('acquired',flush=True);os.close(fd)
   if sys.platform=='linux':allocate(fd,65536,4096,0);check(os.fstat(fd).st_size==69632);check(os.pread(fd,4096,65536)==bytes(4096))
   before=os.fstat(fd).st_blocks
   def disk_blocks():return int(re.search(rb'Blockcount: (\d+)',run(['debugfs','-R','stat /hard',root/'image.img'])).group(1))
-  allocated_before=disk_blocks()
+  allocated_before=disk_blocks();check(allocated_before>oldblocks)
   if sys.platform=='linux':
    allocate(fd,4096,16384,3);check(os.fstat(fd).st_blocks<before,(before,os.fstat(fd).st_blocks));check(os.pread(fd,16384,4096)==bytes(16384));check(os.pread(fd,1,0)==b'Z');check(os.pread(fd,1,20480)==b'A')
   else:

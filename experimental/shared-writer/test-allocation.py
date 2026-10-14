@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Real allocation/punch mutations, byte edges, inode lifetime and recovery."""
-import argparse,errno,hashlib,json,os,subprocess,tempfile
+import argparse,errno,hashlib,json,os,re,subprocess,tempfile
 from pathlib import Path
 from unittest.mock import patch
 import chain,inplace,session
@@ -25,6 +25,8 @@ with tempfile.TemporaryDirectory(prefix='allocation-',dir=a.work) as tmp:
    h=s.openat(None,'/allocated','rw',create=True);data=bytes(range(256))*(block*8//256);h.write(data)
    if 'extents' in source.name:
     h.allocate(block*16+17,block*4,1);check(h.size()==len(data));check(h.read()==data)
+    allocation=subprocess.check_output(['debugfs','-R','stat /allocated',str(root/'image.img')],stderr=subprocess.DEVNULL)
+    check(int(re.search(rb'Blockcount: (\d+)',allocation).group(1))>len(data)//512)
     subprocess.run(['e2fsck','-fn',str(root/'image.img')],check=True,capture_output=True)
     h.allocate(0,block*2,4);h.allocate(0,block*2,4);check(h.size()==len(data))
     subprocess.run(['e2fsck','-fn',str(root/'image.img')],check=True,capture_output=True)
