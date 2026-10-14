@@ -31,10 +31,15 @@ with tempfile.TemporaryDirectory(prefix='lowlevel-broker-',dir=a.work) as tmp:
   original=sha(source);root=tmp/str(index);chain.clone(source,root)
   with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),checkpoint_every=3) as s:
    s.chmod('/',0o777);s.chown('/',os.getuid(),os.getgid())
+   s.chmod('/',0)
    b=m.LowBroker(s)
    def call(op,ino=1,path=b'',data=b'',fh=0,arg=0,uid=None):
     return b.dispatch(op,path,data,os.getuid() if uid is None else uid,os.getgid(),0o022,os.getgroups(),ino,fh,arg)
-   check(call(100,ino=0)==(0,b''));denied(lambda:call(100,ino=0),errno.EPERM)
+   check(call(100,ino=0)==(0,b''))
+   check(struct.unpack_from('<Q',call(103)[1],8)[0]&0o777==0)
+   denied(lambda:call(101,path=b'.'),errno.EACCES)
+   s.chmod('/',0o777)
+   denied(lambda:call(100,ino=0),errno.EPERM)
    denied(lambda:call(101,path=b'.',uid=os.getuid()+1),errno.EACCES)
    node,entry=call(105,path=b'file',arg=(0o666<<32)|os.O_RDWR|os.O_CREAT|os.O_EXCL)
    fh=struct.unpack_from('<Q',entry)[0]
@@ -108,6 +113,7 @@ with tempfile.TemporaryDirectory(prefix='lowlevel-broker-',dir=a.work) as tmp:
     for start in range(0,140,64):s.applyat([dict(kind='create',path=f'/pool-{i}',data_hex='') for i in range(start,min(start+64,140))])
     pool=[call(101,path=f'pool-{i}'.encode())[0] for i in range(140)]
     check(len(pool)==len(set(pool))==140)
+    readfh,_=call(104,pool[0],arg=os.O_RDONLY);call(109,pool[0],fh=readfh)
     for ino in pool:call(102,ino,arg=1)
     check(len(b.nodes)==1)
   run=subprocess.run(['e2fsck','-fn',str(root/'image.img')],capture_output=True);check(run.returncode==0,run.stdout+run.stderr)

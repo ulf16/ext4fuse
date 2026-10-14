@@ -26,7 +26,7 @@ root_tmp=Path(tempfile.mkdtemp(prefix='mounted-lifetime-',dir=a.work));succeeded
 try:
  for index,source in enumerate((sources[0],sources[-1])):
   original=sha(source);seed=root_tmp/f'seed-{index}.img';shutil.copyfile(source,seed)
-  script=root_tmp/'seed.commands';script.write_text(f'set_inode_field / uid {os.getuid()}\nset_inode_field / gid {os.getgid()}\nset_inode_field / mode 040777\n');run(['debugfs','-w','-f',script,seed])
+  script=root_tmp/'seed.commands';script.write_text(f'set_inode_field / uid {os.getuid()}\nset_inode_field / gid {os.getgid()}\nset_inode_field / mode 040000\n');run(['debugfs','-w','-f',script,seed])
   root=root_tmp/f'chain-{index}';chain.clone(seed,root);mount=root_tmp/f'mount-{index}';mount.mkdir()
   def start(label):
    log=(root_tmp/f'{index}-{label}.log').open('wb')
@@ -38,6 +38,8 @@ try:
    log.close();raise AssertionError('low-level mount failed: '+(root_tmp/f'{index}-{label}.log').read_text())
   proc,log=start('live');active=True;fd=None;child=None
   try:
+   check(stat.S_IMODE(os.stat(mount).st_mode)==0)
+   os.chmod(mount,0o777)
    path=mount/'unlinked';fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)
    os.write(fd,b'alive');ino=os.fstat(fd).st_ino;os.unlink(path)
    check(not path.exists());check(os.fstat(fd).st_nlink==0 and os.fstat(fd).st_ino==ino)

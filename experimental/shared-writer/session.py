@@ -371,13 +371,15 @@ class Session:
         with self._mutex:
             self._ready();self._rpc(42)
 
-    def _mount_lookup(self, parent, name):
+    def _mount_lookup(self, parent, name, *, implicit_root=False):
         raw=os.fsencode(name)
         if not raw or len(raw)>255 or b'/' in raw or b'\0' in raw:
             raise OSError(errno.EINVAL,'invalid lookup component')
         with self._mutex:
             token=self._file(parent) if parent is not None else struct.pack('<Q',0)
-            _,reply=self._rpc(38,token+raw)
+            if implicit_root and (parent is not None or raw!=b'.'):
+                raise ValueError('implicit root pin requires the virtual root')
+            _,reply=self._rpc(38,token+raw,int(implicit_root))
             number,ino,generation,access,flags=struct.unpack('<QIIII',reply)
             if not number or not ino or ((flags,access) not in ((2,8),(4,0))):
                 self._failed=True;raise OSError(errno.EIO,'invalid lookup pin')

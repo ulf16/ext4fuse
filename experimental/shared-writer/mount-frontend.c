@@ -211,6 +211,7 @@ static void entry_reply(fuse_req_t req, unsigned op, fuse_ino_t ino,
   uint64_t number;
   int e = rpc(req, op, name, payload, length, ino, offset, arg, &number, &raw,
               &bytes);
+  int broker_error = e;
   struct fuse_entry_param entry;
   uint64_t fh = 0;
   if (!e && fi) {
@@ -225,7 +226,9 @@ static void entry_reply(fuse_req_t req, unsigned op, fuse_ino_t ino,
     e = entry_data(number, raw, bytes, &entry);
   free(raw);
   if (e) {
-    if (e == -EIO)
+    /* A valid broker EIO may follow successful durable recovery. Only
+     * malformed success replies require disconnecting this transport. */
+    if (!broker_error)
       stop_session();
     error(req, e);
     return;

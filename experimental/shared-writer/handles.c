@@ -483,8 +483,16 @@ int handles_dispatch(const char *image, const struct credentials *c,
       const char *name = (const char *)path + 8;
       if (!*name || strlen(name) > 255 || strchr(name, '/'))
         e = EINVAL;
-      struct path_result r;
-      if (!e)
+      struct path_result r = {0};
+      if (!e && offset) {
+        /* The kernel's implicit root reference requires identity, not search
+         * permission. It must still permit owner getattr/chmod on a mode-000
+         * root. Ordinary lookup always rechecks directory search permission. */
+        if (offset != 1 || !root_request || strcmp(name, "."))
+          e = EINVAL;
+        else
+          r.inode = EXT2_ROOT_INO;
+      } else if (!e)
         e = path_at(fs, h->grant.inode, name, c, 0, &r);
       if (!e)
         e = node_allocate(fs, r.inode, size, data, count);

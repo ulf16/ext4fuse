@@ -977,7 +977,9 @@ remains the ext4 inode; kernel node IDs are separate, generation-bound identitie
 The kernel resolves symlinks; the broker resolves namespace operations directly
 from pinned parent inodes, without reconstructing an absolute path after rename.
 
-Lookup pins confer no file-data access. Open/opendir performs fresh mode/ACL and
+The implicit root pin requires identity rather than search permission, allowing
+owner getattr/chmod even when the root mode is 000. Ordinary lookup still checks
+directory search permission. Lookup pins confer no file-data access. Open/opendir performs fresh mode/ACL and
 immutable/append checks before allocating an independent open-time grant. A node
 stays pinned while either its lookup count or open count is nonzero; release does
 not consume lookups and forget does not revoke a still-open handle. Lookup pins

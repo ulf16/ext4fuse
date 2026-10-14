@@ -661,8 +661,12 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
   } else {
     e = resolve(fs, op, 0, op->path, c, &from, &name,
                 op->kind == MUT_LINK ? 1 : 3);
-    if (!e)
-      e = ext2fs_lookup(fs, from, name, strlen(name), NULL, &ino);
+    /* A missing parent is an error, never permission to create the leaf. */
+    if (e) {
+      free(name);
+      return e;
+    }
+    e = ext2fs_lookup(fs, from, name, strlen(name), NULL, &ino);
   }
   if (e && e != EXT2_ET_FILE_NOT_FOUND) {
     free(name);

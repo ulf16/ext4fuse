@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
     int shape =
         op == 42   ? (pathlen || offset || length)
         : op == 37 ? (pathlen || offset || length)
-        : op == 38 ? (pathlen < 9 || offset || length)
+        : op == 38 ? (pathlen < 9 || offset > 1 || length)
         : op == 39 ? (pathlen != 8 || !offset || offset > 255 || length)
         : op == 40 ? (pathlen != 8 || offset || length)
         : op == 41 ? (pathlen != 8 || offset > 7 || length)

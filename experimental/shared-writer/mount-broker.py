@@ -241,7 +241,7 @@ class LowBroker(Broker):
         self.s._mount_node_capacity()
 
     def remember(self,parent,name,*,root=False):
-        handle,ino,generation=self.s._mount_lookup(parent,name)
+        handle,ino,generation=self.s._mount_lookup(parent,name,implicit_root=root)
         number=self.native_nodes.get(handle._token)
         if number is None:
             if root:number=1
