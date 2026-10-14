@@ -942,10 +942,9 @@ security/trusted attributes remain unsupported. Native macOS access ACL editing
 is supported for the representable subset described below.
 Unsupported operations return an error rather than pretending success.
 Creation accepts ordinary permission bits (mkdir also permits sticky);
-setgid inheritance is still derived by the backend. The backend's 64 MiB mutation
-size, 128 handle/pin, 4 MiB stream and 32 MiB reader stream limits still apply.
-Larger existing regular files can be read, but writable sizing beyond that limit
-returns EFBIG. The mounted helper uses FUSE 3 only; the stable reader's FUSE 2 ABI
+setgid inheritance is still derived by the backend. File sizing follows the inode's extent/indirect mapping capacity and signed
+64-bit offsets. The 128 handle/pin, 4 MiB transaction payload and 32 MiB reader
+stream bounds still apply; large files are written in bounded chunks. The mounted helper uses FUSE 3 only; the stable reader's FUSE 2 ABI
 is unaffected.
 
 The mount is owner-only and policy is enforced in the broker, including numeric
@@ -1320,3 +1319,51 @@ boundaries and verifies recovery after actual half-page interruption across
 opens, link, cross-parent file/directory moves and open-unlink cleanup on two
 representative profiles. Every accepted output passes independent read-only
 e2fsck and source hashes remain unchanged. CI runs these suites with sanitizers.
+
+
+## Large writable files and transaction costs
+
+The arbitrary 64 MiB file-size ceiling has been removed from path, handle and
+mounted APIs. Offsets use signed 64-bit bounds. Before any allocation, the producer
+checks the entire write/truncate against the actual inode layout: classic direct,
+single/double/triple-indirect capacity at the filesystem block size, or the
+32-bit extent logical-block range with its reserved final block excluded.
+Format overflow returns EFBIG atomically. Bounded transaction payloads and dirty
+page budgets remain independent of logical file size. Sparse files can exceed
+the physical image capacity; allocated writes still require filesystem space.
+
+The transaction transport and persisted hashes/formats are unchanged. A recovered
+chain's verified hash is carried into capture. Capture computes observed original
+and prospective image hashes together and retains its final full source recheck.
+Replay computes actual, original and result hashes in one pass, validating all
+clean bytes and logged pages even after torn writes. Post-write full hashing,
+flush ordering and final chain verification remain mandatory. Redundant scans at
+the same verification stages have been removed; no timestamp-only trust or
+skipped clean-byte verification is introduced.
+
+`Session.checkpoint()` retires completed history under the existing session lock
+without closing the resident reader, open files, directory handles or cwd.
+`Session(..., checkpoint_every=N)` enables automatic retirement; zero disables it.
+The mounted broker defaults to `--checkpoint-every 64`. Publication/retirement uses
+the existing checksummed checkpoint protocol, and pending generations cannot be
+retired. A checkpoint failure fails the session closed; recover in a fresh session.
+Each acknowledged mutation still commits durably, including before retirement;
+this is not deferred writeback or group commit.
+
+A local five-transaction comparison against eaa099c on Intel Sequoia reduced
+Python image-verification reads from approximately 12 image passes per transaction
+to 6. A 32 MiB image took 5.26 versus 4.35 seconds; a 512 MiB container with the
+same 32 MiB filesystem took 69.70 versus 47.82 seconds. These are single local
+runs, not broad throughput claims, and exclude producer/native-reader metadata
+reads from the byte counter. The deterministic reduction is about 50% of Python
+image bytes read. CI gates read amplification rather than timing. Full-image
+verification remains O(image size); dirty-page-only authenticated verification
+and producer reuse are future performance work.
+
+`test-large-writes.py` checks sparse multi-gigabyte writes, the 4 GiB boundary,
+append, shrink/regrow zeroing, exact mapping bounds, rejected writes and half-page
+recovery across all 12 filesystem profiles. `test-session-checkpoints.py` tests
+live unlinked files, directory/cwd lifetime, restart, fsck and refusal of changed
+untouched bytes. `test-mounted-large.py` exercises actual FUSE large-file I/O,
+open-unlink lifetime and automatic history bounds. Existing capture/replay and
+checkpoint fault matrices remain the recovery regression gates.

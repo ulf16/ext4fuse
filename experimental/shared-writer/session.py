@@ -29,9 +29,12 @@ class Session:
     serialized inside this object; other cooperating processes are excluded.
     Any unresolvable recovery/reader error leaves the session failed closed.
     """
-    def __init__(self, root, producer, reader, credentials=None):
+    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0):
         if credentials is not None and not isinstance(credentials, Credentials):
             raise ValueError('expected trusted Credentials')
+        if type(checkpoint_every) is not int or not 0 <= checkpoint_every <= 1_000_000:
+            raise ValueError('invalid checkpoint interval')
+        self._checkpoint_every = checkpoint_every
         self._credentials = credentials
         self._mutex = threading.RLock()
         self._closed = False
@@ -45,6 +48,7 @@ class Session:
         self.producer = Path(producer).absolute()
         try:
             self.state = chain.recover_locked(self.root)
+            self._checkpoint_head = self.state['head']
             self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                              stderr=subprocess.DEVNULL, bufsize=0)
@@ -496,6 +500,23 @@ class Session:
                 raise
             try:
                 self._rpc(4)
+            except BaseException:
+                self._failed = True
+                raise
+            if self._checkpoint_every and self.state['head'] - self._checkpoint_head >= self._checkpoint_every:
+                self.checkpoint()
+            return dict(self.state)
+
+    def checkpoint(self):
+        # Retire completed history without closing resident reader or handles.
+        with self._mutex:
+            self._ready()
+            try:
+                state = chain.read_state(self.root)
+                if state != self.state or state['pending'] is not None:
+                    raise ValueError('session generation changed before checkpoint')
+                self.state = chain.checkpoint_locked(self.root)
+                self._checkpoint_head = self.state['head']
             except BaseException:
                 self._failed = True
                 raise

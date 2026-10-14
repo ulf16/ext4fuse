@@ -373,3 +373,35 @@ jobs:
             ${{ runner.temp }}/indexed-writer/indexed-mutation-results.json
             ${{ runner.temp }}/indexed-writer/indexed-collision-results.json
             ${{ runner.temp }}/indexed-writer/mounted-indexed-results.json
+
+  large-files-performance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install large-file and mounted test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build large-file writer with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/large-writer" --sanitize
+      - name: Prepare filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/large-writer"
+      - name: Verify sparse sizes, mapping bounds and interrupted writes
+        run: python3 experimental/shared-writer/test-large-writes.py --work "$RUNNER_TEMP/large-writer"
+      - name: Verify live checkpoint retirement and clean-byte corruption detection
+        run: python3 experimental/shared-writer/test-session-checkpoints.py --work "$RUNNER_TEMP/large-writer"
+      - name: Verify real mounted large files and bounded history
+        run: python3 experimental/shared-writer/test-mounted-large.py --work "$RUNNER_TEMP/large-writer"
+      - name: Gate full-image read amplification
+        run: python3 experimental/shared-writer/test-transaction-performance.py --work "$RUNNER_TEMP/large-writer" --source "$RUNNER_TEMP/large-writer/fixtures/1024-classic-csum0.img" --root "$RUNNER_TEMP/large-performance" --output "$RUNNER_TEMP/large-writer/transaction-performance.json" --max-passes 6.05
+      - name: Save large-file and performance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: large-file-performance-validation
+          path: |
+            ${{ runner.temp }}/large-writer/large-write-results.json
+            ${{ runner.temp }}/large-writer/session-checkpoint-results.json
+            ${{ runner.temp }}/large-writer/mounted-large-results.json
+            ${{ runner.temp }}/large-writer/transaction-performance.json

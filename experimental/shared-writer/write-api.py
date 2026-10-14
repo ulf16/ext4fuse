@@ -115,10 +115,10 @@ def encode(operations, credentials=None, *, _at=False):
             if not isinstance(text,str) or len(text)>8*1024*1024:raise ValueError('data limit')
             data=bytes.fromhex(text);offset=op.get('offset',0)
             if kind=='create' and offset:raise ValueError('create offset must be zero')
-        for name,value,maximum in (('offset',offset,64*1024*1024),('mode',mode,0o7777 if kind=='chmod' else 0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
+        for name,value,maximum in (('offset',offset,(2**63-1)),('mode',mode,0o7777 if kind=='chmod' else 0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
             if type(value) is not int or not 0<=value<=maximum:raise ValueError('invalid '+name)
         total += len(data)
-        if total > 4 * 1024 * 1024 or offset + len(data) > 64 * 1024 * 1024:
+        if total > 4 * 1024 * 1024 or offset + len(data) > (2**63-1):
             raise ValueError('transaction bounds')
         result += HEADER.pack(10 if kind=='open' else KINDS[kind], len(path), mode, uid, gid, int(op.get('follow_symlinks',metadata)), offset, len(data)) + path + data
     return result
@@ -128,14 +128,14 @@ def encode_grant(credentials, grant, kind, offset=0, data=b''):
     """Internal trusted broker format; never accept inode grants from JSON."""
     if not isinstance(credentials, Credentials) or not isinstance(grant, bytes) or len(grant) != 16:
         raise ValueError('invalid broker grant')
-    if kind not in ('write', 'truncate') or type(offset) is not int or not 0 <= offset <= 64*1024*1024:
+    if kind not in ('write', 'truncate') or type(offset) is not int or not 0 <= offset <= (2**63-1):
         raise ValueError('invalid handle operation')
     if not isinstance(data, bytes) or len(data)>4*1024*1024 or (kind=='truncate' and data):
         raise ValueError('invalid handle payload')
     inode, generation, access, flags = struct.unpack('<IIII',grant)
     if not inode or not 1<=access<=3 or flags>1 or not access&2:
         raise ValueError('invalid write grant')
-    if (kind=='truncate' or not flags) and offset+len(data)>64*1024*1024:
+    if (kind=='truncate' or not flags) and offset+len(data)>(2**63-1):
         raise ValueError('transaction bounds')
     context=credentials.encode()
     return (b'E4REQ003'+struct.pack('<II',1,len(context))+context+
@@ -212,7 +212,7 @@ def apply_encoded_locked(root, producer, request):
     executable = str(Path(producer).absolute())
     adapter.write_text('#!/usr/bin/env python3\nimport os,sys\nos.environ["EXT4_MUTATION_REQUEST"] = ' + repr(str(request_path)) + '\nos.execv(' + repr(executable) + ', [' + repr(executable) + '] + sys.argv[1:])\n')
     adapter.chmod(0o700)
-    inplace.capture_overlay(root / 'image.img', proposed, adapter)
+    inplace.capture_overlay(root / 'image.img', proposed, adapter, expected_base=state['sha256'])
     return chain.recover_locked(root)
 
 

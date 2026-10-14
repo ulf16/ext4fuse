@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#define MAX_FILE (64ULL * 1024 * 1024)
+#define MAX_FILE INT64_MAX
 #define MAX_DATA (4U * 1024 * 1024)
 #define UNSUPPORTED                                                            \
   (EXT2_COMPR_FL | EXT4_ENCRYPT_FL | EXT4_VERITY_FL | EXT4_INLINE_DATA_FL |    \
@@ -308,6 +308,15 @@ static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
       op->length > MAX_FILE - op->offset || (op->length && !op->data) ||
       (op->kind == MUT_TRUNCATE && op->length))
     return EINVAL;
+  /* Preflight the complete write before libext2fs can allocate blocks. */
+  uint64_t pointers = fs->blocksize / sizeof(uint32_t);
+  uint64_t blocks = in.i_flags & EXT4_EXTENTS_FL
+                        ? UINT32_MAX
+                        : 12 + pointers + pointers * pointers +
+                              pointers * pointers * pointers;
+  uint64_t end = op->offset + op->length;
+  if ((op->kind == MUT_TRUNCATE ? op->offset : end) > blocks * fs->blocksize)
+    return EFBIG;
   if ((in.i_flags & EXT2_APPEND_FL) &&
       (op->kind == MUT_TRUNCATE || (grant && !(grant->flags & GRANT_APPEND)) ||
        op->offset != size))

@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix='handles-',dir=args.work) as directory:
             rw.truncate(4097);model.extend(b'\0'*(4097-len(model)));verify(s,r,model)
             before=sha(image);check(rw.write(b'',4097)==0);check(sha(image)==before)
             atomic(s,lambda:rw.write(b'x',-1),ValueError)
-            atomic(s,lambda:rw.truncate(64*1024*1024+1),ValueError)
+            atomic(s,lambda:rw.truncate(2**63),ValueError)
             denied(lambda:rw.read(-1,1),ValueError)
             denied(lambda:rw.read(0,session.LIMIT+1),ValueError)
             # Revoke path DAC through a test-only, staged metadata transaction.

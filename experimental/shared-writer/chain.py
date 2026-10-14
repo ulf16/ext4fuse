@@ -83,7 +83,8 @@ def recover_locked(root):
         inplace.seal(root, 'chain-state', state)
     state = read_state(root)
     check_image(root, state, check_hash=state['pending'] is None)
-    if state['pending'] is not None:
+    pending = state['pending'] is not None
+    if pending:
         generation = root / f"g-{state['pending']:08d}"
         if generation.exists() or generation.is_symlink():
             info = os.lstat(generation)
@@ -108,7 +109,8 @@ def recover_locked(root):
         boundary('head-ready')
         inplace.seal(root, 'chain-state', state)
         boundary('head-published')
-    check_image(root, state)
+    if pending:
+        check_image(root, state)
     return state
 
 
@@ -155,7 +157,7 @@ def append(root, producer):
         generation = root / f"g-{state['pending']:08d}"
         generation.mkdir(mode=0o700)
         directory(root)
-        inplace.capture_overlay(root / 'image.img', generation, producer)
+        inplace.capture_overlay(root / 'image.img', generation, producer, expected_base=state['sha256'])
         boundary('chain-prepared')
         return recover_locked(root)
 
@@ -198,47 +200,52 @@ def remove_tree(path):
 
 def checkpoint(root):
     with locked(root) as root:
-        # Do not implicitly commit a pending transaction as part of cleanup.
-        state = read_state(root)
-        if state['pending'] is not None:
-            raise ValueError('recover pending generation before checkpointing')
-        check_image(root, state)
-        if (root / 'checkpoint').exists() or (root / 'checkpoint').is_symlink():
-            previous = read_state(root, 'checkpoint')
-            if previous['pending'] is not None or previous['head'] > state['head']:
-                raise ValueError('invalid checkpoint ancestry')
-            check_image(root, previous, check_hash=False)
-        candidates = []
-        root_files = []
-        device = os.lstat(root).st_dev
-        for entry in sorted(root.iterdir()):
-            generation = re.fullmatch(r'g-(\d{8})', entry.name)
-            aborted = re.fullmatch(r'aborted-[0-9a-f]{32}', entry.name)
-            if generation and int(generation.group(1)) > state['head']:
-                raise ValueError('untracked successor generation')
-            if generation or aborted:
-                inspect_tree(entry, device)
-                candidates.append(entry)
-            elif entry.name == 'capture':
-                inspect_tree(entry, device, True)
-                candidates.append(entry)
-            elif entry.name in GEN_FILES:
-                info = os.lstat(entry)
-                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or info.st_dev != device:
-                    raise ValueError('unsafe initial transaction file')
-                root_files.append(entry)
-        boundary('checkpoint-validated')
-        encoded = json.dumps(state, sort_keys=True, separators=(',', ':')).encode()
-        inplace.seal(root, 'checkpoint', {'state': state, 'sha256': hashlib.sha256(encoded).hexdigest()})
-        boundary('checkpoint-published')
-        for entry in candidates:
-            remove_tree(entry)
-        for entry in root_files:
-            entry.unlink()
-            directory(root)
-            boundary('retire-entry')
-        boundary('retirement-complete')
-        return state
+        return checkpoint_locked(root)
+
+
+def checkpoint_locked(root):
+    # Caller owns chain-lock; preserve durable validation/retirement protocol.
+    # Do not implicitly commit a pending transaction as part of cleanup.
+    state = read_state(root)
+    if state['pending'] is not None:
+        raise ValueError('recover pending generation before checkpointing')
+    check_image(root, state)
+    if (root / 'checkpoint').exists() or (root / 'checkpoint').is_symlink():
+        previous = read_state(root, 'checkpoint')
+        if previous['pending'] is not None or previous['head'] > state['head']:
+            raise ValueError('invalid checkpoint ancestry')
+        check_image(root, previous, check_hash=False)
+    candidates = []
+    root_files = []
+    device = os.lstat(root).st_dev
+    for entry in sorted(root.iterdir()):
+        generation = re.fullmatch(r'g-(\d{8})', entry.name)
+        aborted = re.fullmatch(r'aborted-[0-9a-f]{32}', entry.name)
+        if generation and int(generation.group(1)) > state['head']:
+            raise ValueError('untracked successor generation')
+        if generation or aborted:
+            inspect_tree(entry, device)
+            candidates.append(entry)
+        elif entry.name == 'capture':
+            inspect_tree(entry, device, True)
+            candidates.append(entry)
+        elif entry.name in GEN_FILES:
+            info = os.lstat(entry)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != os.getuid() or info.st_dev != device:
+                raise ValueError('unsafe initial transaction file')
+            root_files.append(entry)
+    boundary('checkpoint-validated')
+    encoded = json.dumps(state, sort_keys=True, separators=(',', ':')).encode()
+    inplace.seal(root, 'checkpoint', {'state': state, 'sha256': hashlib.sha256(encoded).hexdigest()})
+    boundary('checkpoint-published')
+    for entry in candidates:
+        remove_tree(entry)
+    for entry in root_files:
+        entry.unlink()
+        directory(root)
+        boundary('retire-entry')
+    boundary('retirement-complete')
+    return state
 
 
 if __name__ == '__main__':

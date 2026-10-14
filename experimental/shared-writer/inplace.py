@@ -59,15 +59,15 @@ def prepare(source, session, producer):
     return capture_overlay(image, session, producer)
 
 
-def capture_overlay(image, session, producer):
+def capture_overlay(image, session, producer, expected_base=None):
     with regular(image) as current:
-        before = digest(current)
+        before = expected_base if expected_base is not None else digest(current)
     capture = session / 'capture'
-    block.prepare_overlay(image, session / 'unused-export', capture, producer)
+    block.prepare_overlay(image, session / 'unused-export', capture, producer, expected_base=before)
     with regular(capture / 'manifest') as manifest:
         metadata = json.load(manifest)
     with regular(image) as base, regular(capture / 'blocks') as log:
-        block.validate(metadata, capture, base, log)
+        block.validate(metadata, capture, base, log, check_base=False)
         log.seek(0)
         with (session / 'pages').open('xb') as pages:
             for _ in range(metadata['count']):
@@ -77,7 +77,7 @@ def capture_overlay(image, session, producer):
             pages.flush()
             sync(pages.fileno())
         info = os.fstat(base.fileno())
-        if digest(base) != before:
+        if metadata['base_sha256'] != before:
             raise ValueError('disposable base changed')
     boundary('undo-log')
     with regular(session / 'pages') as pages:
@@ -110,7 +110,7 @@ def verify(metadata, image, log):
         raise ValueError('log integrity mismatch')
     # Substitute saved preimages/new pages when hashing. This binds every clean
     # byte even when logged pages have partially reached storage.
-    original, result = hashlib.sha256(), hashlib.sha256()
+    original, result, actual = hashlib.sha256(), hashlib.sha256(), hashlib.sha256()
     cursor, previous = 0, -1
     log.seek(0)
     for _ in range(count):
@@ -124,8 +124,12 @@ def verify(metadata, image, log):
             if not data:
                 raise ValueError('short image')
             original.update(data)
-            result.update(data)
+            result.update(data); actual.update(data)
             cursor += len(data)
+        image.seek(index * 4096)
+        current = image.read(4096)
+        if len(current) != 4096: raise ValueError('short logged image page')
+        actual.update(current)
         original.update(old)
         result.update(new)
         cursor += 4096
@@ -136,10 +140,11 @@ def verify(metadata, image, log):
         if not data:
             raise ValueError('short image')
         original.update(data)
-        result.update(data)
+        result.update(data); actual.update(data)
         cursor += len(data)
     if original.hexdigest() != metadata['base_sha256'] or result.hexdigest() != metadata['image_sha256']:
         raise ValueError('clean image bytes or logged page contents changed')
+    return actual.hexdigest()
 
 
 def recover(session):
@@ -165,7 +170,7 @@ def recover_image(session, image_path):
         with os.fdopen(fd, 'r+b', buffering=0) as image, regular(session / 'pages') as log:
             fcntl.flock(image, fcntl.LOCK_EX | fcntl.LOCK_NB)
             fcntl.flock(log, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            verify(metadata, image, log)
+            actual = verify(metadata, image, log)
             boundary('validated')
             marker = {'log_sha256': metadata['log_sha256'], 'inode': metadata['inode']}
             for name in ('started', 'complete'):
@@ -176,12 +181,12 @@ def recover_image(session, image_path):
             if (session / 'complete').exists():
                 if not (session / 'started').exists():
                     raise ValueError('completion without start marker')
-                if digest(image) != metadata['image_sha256']:
+                if actual != metadata['image_sha256']:
                     raise ValueError('completed image changed')
                 directory(session)
                 return image_path
             if not (session / 'started').exists():
-                if digest(image) != metadata['base_sha256']:
+                if actual != metadata['base_sha256']:
                     raise ValueError('image changed before commit started')
                 seal(session, 'started', marker)
             boundary('started')

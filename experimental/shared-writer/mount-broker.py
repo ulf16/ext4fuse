@@ -122,10 +122,10 @@ class Broker:
             return h._token,b''
         if op==4:return 0,self.handle(token).read(offset,arg)
         if op==5:
-            if offset+len(data)>64*1024*1024:raise OSError(errno.EFBIG,'experimental file size limit')
+            if offset+len(data)>(2**63-1):raise OSError(errno.EFBIG,'signed file offset overflow')
             return self.handle(token).write(data,offset),b''
         if op==6:
-            if offset>64*1024*1024:raise OSError(errno.EFBIG,'experimental file size limit')
+            if offset>(2**63-1):raise OSError(errno.EFBIG,'signed file offset overflow')
             if token:self.handle(token).truncate(offset)
             else:
                 with self.s.openat(None,path,'w') as h:h.truncate(offset)
@@ -238,6 +238,7 @@ def main():
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--mountpoint',type=Path,required=True)
+    parser.add_argument('--checkpoint-every',type=int,default=64,help='retire completed generations after this many commits; zero disables')
     args=parser.parse_args();mount=args.mountpoint.absolute()
     if not mount.is_dir() or mount.is_symlink() or os.path.ismount(mount) or any(mount.iterdir()):
         raise ValueError('mountpoint must be an empty unmounted directory')
@@ -249,7 +250,7 @@ def main():
     if work.is_relative_to(mount):raise ValueError('build directory must be outside mountpoint')
     mask=os.umask(0);os.umask(mask)
     frontend=None
-    with session.Session(args.root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask)) as s:
+    with session.Session(args.root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every) as s:
         broker=Broker(s)
         frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount)],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
         try:

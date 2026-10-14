@@ -87,7 +87,7 @@ def read_exact(stream, length):
     return bytes(chunks)
 
 
-def prepare_overlay(source, target, journal, producer):
+def prepare_overlay(source, target, journal, producer, expected_base=None):
     source, target, journal = [canonical(p) for p in (source, target, journal)]
     if target.exists() or target.is_symlink():
         raise FileExistsError(target)
@@ -101,7 +101,9 @@ def prepare_overlay(source, target, journal, producer):
         size = os.fstat(base.fileno()).st_size
         if size <= 0 or size % PAGE:
             raise ValueError('invalid source size')
-        original = digest(base)
+        if expected_base is not None and (not isinstance(expected_base,str) or len(expected_base)!=64 or any(c not in '0123456789abcdef' for c in expected_base)):
+            raise ValueError('invalid expected source hash')
+        original = expected_base if expected_base is not None else digest(base)
         process = subprocess.Popen([str(Path(producer).absolute()), str(source), '--stream'],
                                    stdout=subprocess.PIPE)
         try:
@@ -112,7 +114,7 @@ def prepare_overlay(source, target, journal, producer):
                 raise OSError(stream_size, os.strerror(stream_size))
             if magic != b'E4OVL001' or stream_size != size or staged > min(MAX_RECORDS, size // PAGE):
                 raise ValueError('invalid overlay stream header')
-            result = hashlib.sha256()
+            result = hashlib.sha256(); observed = hashlib.sha256()
             cursor, previous, count = 0, -1, 0
 
             def hash_clean(end):
@@ -122,7 +124,7 @@ def prepare_overlay(source, target, journal, producer):
                     chunk = base.read(min(1024 * 1024, end - cursor))
                     if not chunk:
                         raise ValueError('short source image')
-                    result.update(chunk)
+                    result.update(chunk); observed.update(chunk)
                     cursor += len(chunk)
 
             with (journal / 'blocks').open('xb') as log:
@@ -134,7 +136,7 @@ def prepare_overlay(source, target, journal, producer):
                     if base.read(PAGE) != old:
                         raise ValueError('overlay stream preimage mismatch')
                     hash_clean(index * PAGE)
-                    result.update(new)
+                    result.update(new); observed.update(old)
                     cursor += PAGE
                     if old != new:
                         log.write(RECORD.pack(index, sha(old), sha(new), new))
@@ -149,7 +151,7 @@ def prepare_overlay(source, target, journal, producer):
                 log.flush()
                 sync(log.fileno())
             boundary('snapshot')
-            if digest(base) != original:
+            if observed.hexdigest() != original or digest(base) != original:
                 raise ValueError('source changed during overlay capture')
             with regular(journal / 'blocks') as log:
                 metadata = dict(version=1, source=str(source), target=str(target), size=size,
@@ -170,7 +172,7 @@ def prepare_overlay(source, target, journal, producer):
             process.wait()
 
 
-def validate(metadata, journal, base, log):
+def validate(metadata, journal, base, log, check_base=True):
     if set(metadata) != FIELDS or type(metadata['version']) is not int or metadata['version'] != 1:
         raise ValueError('unsupported manifest')
     size, count = metadata['size'], metadata['count']
@@ -187,7 +189,7 @@ def validate(metadata, journal, base, log):
         raise ValueError('invalid transaction paths')
     if (os.fstat(base.fileno()).st_size != size or
         os.fstat(log.fileno()).st_size != count * RECORD.size or
-        digest(base) != metadata['base_sha256'] or digest(log) != metadata['log_sha256']):
+        (check_base and digest(base) != metadata['base_sha256']) or digest(log) != metadata['log_sha256']):
         raise ValueError('transaction integrity or source mismatch')
     log.seek(0)
     previous = -1

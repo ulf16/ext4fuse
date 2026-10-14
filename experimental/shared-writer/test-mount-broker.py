@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='mount-broker-',dir=a.work) as tmp:
             check(call(5,data=b'abc',token=token)==(3,b''));check(call(4,token=token,arg=8)==(0,b'abc'))
             check(call(19,token=token)==(0,b''));check(call(19,token=token)==(0,b''));check(token in b.handles)
             denied(lambda:call(5,data=b'x',token=token,uid=os.getuid()+1),errno.EACCES);check(call(4,token=token,arg=8)[1]==b'abc')
-            denied(lambda:call(5,data=b'x',token=token,offset=64*1024*1024),errno.EFBIG)
+            denied(lambda:call(5,data=b'x',token=token,offset=2**63-1),errno.EFBIG)
             call(6,token=token,offset=2);check(call(4,token=token,arg=8)[1]==b'ab')
             hidden=b'/.fuse_hidden0000000100000001';call(14,b'/file',hidden);check(hidden in b.hidden)
             denied(lambda:call(23,b'/existing-file'),errno.EACCES)
