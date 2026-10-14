@@ -26,6 +26,10 @@ with tempfile.TemporaryDirectory(prefix='session-checkpoint-',dir=a.work) as tmp
    s.apply([dict(kind='unlink',path='/moved/a'),dict(kind='rmdir',path='/moved')]);s.checkpoint();check(d.listdir()==[])
    d.close();s.chdir('/');s.checkpoint();check(not list(root.glob('g-*')))
   with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:check(s.size('/existing-file')>0)
+  with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),checkpoint_every=1) as s:
+   for i in range(3):
+    h=s.openat(None,f'/every-open-{i}','rw',create=True)
+    check(not list(root.glob('g-*')));h.write(b'activated');check(h.read()==b'activated');h.close()
   r=subprocess.run(['e2fsck','-fn',str(root/'image.img')],capture_output=True);check(r.returncode==0)
   # Performance optimization must still detect changes to untouched bytes.
   with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:

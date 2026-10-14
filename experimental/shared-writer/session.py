@@ -238,7 +238,7 @@ class Session:
                 _,pins=self._rpc(12)
                 op=dict(kind='open',path=path,flags=flags,mode=mode)
                 request=write_api.encode_at([op],self.credentials,pins,[(base,root)])
-                self._apply_request(request)
+                self._apply_request(request, defer_checkpoint=True)
                 report=self.root/f"g-{self.state['head']:08d}"/'operations.result'
                 try:
                     with regular(report) as result:
@@ -253,7 +253,9 @@ class Session:
                 if ((ino,generation)!=(expected['inode'],expected['generation']) or
                         granted!=(4 if is_dir else rights) or grant_flags!=(2 if is_dir else int(append))):
                     self._failed=True;raise OSError(errno.EIO,'committed open grant does not match request and image')
-                return self._opened(self._rpc(24,reserved+grant))
+                handle = self._opened(self._rpc(24,reserved+grant))
+                self._maybe_checkpoint()
+                return handle
             finally:
                 # Successful activation is now owned by the returned handle.
                 if not any(struct.pack('<Q',h._token)==reserved for h in self._files):
@@ -478,7 +480,7 @@ class Session:
             self._ready()
             return self._rpc(13,self._absolute(path))[1]
 
-    def _apply_request(self, request):
+    def _apply_request(self, request, *, defer_checkpoint=False):
         with self._mutex:
             self._ready()
             try:
@@ -503,9 +505,13 @@ class Session:
             except BaseException:
                 self._failed = True
                 raise
-            if self._checkpoint_every and self.state['head'] - self._checkpoint_head >= self._checkpoint_every:
-                self.checkpoint()
+            if not defer_checkpoint:
+                self._maybe_checkpoint()
             return dict(self.state)
+
+    def _maybe_checkpoint(self):
+        if self._checkpoint_every and self.state['head'] - self._checkpoint_head >= self._checkpoint_every:
+            self.checkpoint()
 
     def checkpoint(self):
         # Retire completed history without closing resident reader or handles.
