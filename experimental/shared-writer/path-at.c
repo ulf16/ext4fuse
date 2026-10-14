@@ -31,6 +31,8 @@ static errcode_t allocated(ext2_filsys fs, ext2_ino_t ino,
   e = ext2fs_read_inode(fs, ino, in);
   if (!e && (in->i_flags & (GRANT_UNSUPPORTED | EXT4_CASEFOLD_FL)))
     e = EOPNOTSUPP;
+  if (!e && (in->i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR)
+    e = namespace_index_check(fs, ino);
   if (!e && in->i_links_count && in->i_dtime)
     e = EIO;
   if (!e && !in->i_links_count) {

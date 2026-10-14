@@ -93,7 +93,8 @@ int checksum_directory(const void *block, uint32_t seed, int indexed, uint32_t l
         }
         if (!metadata) return 0;
         size_t tail=offset+limit*8, used=offset+count*8;
-        if (checksum_u32(p+tail)) return -EIO;
+        /* Linux includes the reserved tail word in the checksum without
+         * requiring zero; libext2fs tree growth can retain leaf-tail bytes. */
         uint32_t zero=0;
         uint32_t crc=checksum_crc32c(seed,p,used);
         crc=checksum_crc32c(crc,p+tail,4);

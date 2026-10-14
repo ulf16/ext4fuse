@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "mutation.h"
+#include "namespace.h"
 #include "path-at.h"
 #include <errno.h>
 #include <stdlib.h>
@@ -43,6 +44,9 @@ errcode_t mutation_parent(ext2_filsys fs, const char *path, ext2_ino_t *dir,
       e = EOPNOTSUPP;
       break;
     }
+    e = namespace_index_check(fs, *dir);
+    if (e)
+      break;
     if (credentials) {
       e = policy_inode(fs, *dir, credentials, 1);
       if (e)
@@ -146,8 +150,11 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
     return e;
   if (parent_inode.i_flags & EXT2_IMMUTABLE_FL)
     return EPERM;
-  if (parent_inode.i_flags & (EXT2_INDEX_FL | EXT4_CASEFOLD_FL))
+  if (parent_inode.i_flags & (EXT4_CASEFOLD_FL))
     return EOPNOTSUPP;
+  e = namespace_index_check(fs, dir);
+  if (e)
+    return e;
   e = ext2fs_new_inode(fs, dir, LINUX_S_IFREG | op->mode, NULL, ino);
   if (e)
     return e;
@@ -197,10 +204,14 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
   }
   e = ext2fs_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
   if (e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM) {
+    if (parent_inode.i_flags & EXT2_INDEX_FL)
+      return e;
     e = ext2fs_expand_dir(fs, dir);
     if (!e)
       e = ext2fs_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
   }
+  if (!e)
+    e = namespace_index_check(fs, dir);
   if (!e)
     e = touch(fs, dir, 0);
   return e;
@@ -364,7 +375,7 @@ errcode_t mutation_open_at(ext2_filsys fs, const struct mutation *op,
       return e;
     if (!parent.i_links_count)
       return ENOENT;
-    if (parent.i_flags & (GRANT_UNSUPPORTED | EXT2_INDEX_FL | EXT4_CASEFOLD_FL))
+    if (parent.i_flags & (GRANT_UNSUPPORTED | EXT4_CASEFOLD_FL))
       return EOPNOTSUPP;
     struct mutation create = {.kind = MUT_CREATE, .mode = op->mode};
     unsigned char *acl = NULL;

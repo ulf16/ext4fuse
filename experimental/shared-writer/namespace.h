@@ -9,6 +9,7 @@ struct inode_pin {
 /* Legacy orphan chain only; all entries must be allocated, zero-link regular
  * files or empty directories. The trusted session supplies a snapshot of its
  * live inode pins. */
+errcode_t namespace_index_check(ext2_filsys fs, ext2_ino_t ino);
 errcode_t namespace_directory_parent(ext2_filsys fs, ext2_ino_t ino,
                                      ext2_ino_t *parent);
 errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count);

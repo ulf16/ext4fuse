@@ -58,6 +58,11 @@ with tempfile.TemporaryDirectory(prefix='ext4fuse-indexed-') as tmp:
    def repair(data,start):
     off=32 if start==root else 8;limit,count=struct.unpack_from('<HH',data,start+off);tail=start+off+limit*8
     h=crc(crc(seed,data[start:start+off+count*8]),data[tail:tail+4]);struct.pack_into('<I',data,tail+4,crc(h,bytes(4)))
+   # A nonzero reserved dx-tail word is valid when its checksum matches.
+   data=bytearray(baseline);limit=struct.unpack_from('<H',data,root+32)[0]
+   struct.pack_into('<I',data,root+32+limit*8,0xde00000c);repair(data,root);image.write_bytes(data)
+   batch(image,'/many',[names[0]],[(0,reference[names[0]])])
+   image.write_bytes(baseline)
    # Every root child pointing to root is a cycle regardless of the chosen hash.
    data=bytearray(baseline);count=struct.unpack_from('<H',data,root+34)[0]
    for i in range(count):struct.pack_into('<I',data,root+32+i*8+4,0)

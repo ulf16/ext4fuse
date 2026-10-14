@@ -346,3 +346,30 @@ jobs:
             ${{ runner.temp }}/device-writer/device-replay-results.json
             ${{ runner.temp }}/device-writer/device-native-results.json
             ${{ runner.temp }}/device-writer/device-native-partition-results.json
+
+  indexed-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install indexed-directory test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build indexed writer and fixtures with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/indexed-writer" --sanitize
+      - name: Verify tree growth, namespace, inode lifetime and malformed-index rejection
+        run: python3 experimental/shared-writer/test-indexed-mutations.py --work "$RUNNER_TEMP/indexed-writer"
+      - name: Verify real hash collisions and interrupted indexed transactions
+        run: python3 experimental/shared-writer/test-indexed-collisions.py --work "$RUNNER_TEMP/indexed-writer"
+      - name: Verify actual mounted indexed mutations and file handles
+        run: python3 experimental/shared-writer/test-mounted-indexed.py --work "$RUNNER_TEMP/indexed-writer"
+      - name: Save indexed validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: indexed-mutation-validation
+          path: |
+            ${{ runner.temp }}/indexed-writer/indexed-mutation-results.json
+            ${{ runner.temp }}/indexed-writer/indexed-collision-results.json
+            ${{ runner.temp }}/indexed-writer/mounted-indexed-results.json

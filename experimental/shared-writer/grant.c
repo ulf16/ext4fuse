@@ -41,9 +41,10 @@ static errcode_t identity(ext2_filsys fs, const struct inode_grant *g,
     return ESTALE;
   if (g->flags == GRANT_DIRECTORY && in->i_links_count == 1)
     return EIO;
-  if (g->flags == GRANT_DIRECTORY &&
-      (in->i_flags & (EXT2_INDEX_FL | EXT4_CASEFOLD_FL)))
+  if (g->flags == GRANT_DIRECTORY && (in->i_flags & (EXT4_CASEFOLD_FL)))
     return EOPNOTSUPP;
+  if (g->flags == GRANT_DIRECTORY && (e = namespace_index_check(fs, g->inode)))
+    return e;
   return in->i_flags & GRANT_UNSUPPORTED ? EOPNOTSUPP : 0;
 }
 static errcode_t member(const struct inode_grant *g,

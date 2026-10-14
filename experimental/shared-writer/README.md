@@ -1,10 +1,9 @@
 # Shared reader / libext2fs writer experiment
 
 This experimental backend retains the native reader and uses libext2fs for
-filesystem mutations. It now includes an initial private FUSE 3 frontend for
-managed regular-file image copies. Production read-only reader and Homebrew
-behavior are unchanged. Physical-device and general-purpose writable mounts
-remain outside this prototype.
+filesystem mutations. It includes a private FUSE 3 frontend for managed image copies and guarded
+offline physical-device publication. General-purpose live writable device mounts
+and production Homebrew packaging remain outside this prototype.
 
 The source image is opened read-only and must be a regular file. A custom
 libext2fs I/O manager stages writes in bounded 4 KiB copy-on-write pages. A test-only
@@ -560,7 +559,7 @@ block removal/rename; immutable parents block changes and append-only parents
 allow addition but forbid removal or replacement. Indexed/casefold directories,
 quota/bigalloc/EA-inode filesystems, unsupported regular-file layouts and active
 orphan-file recovery (`orphan_present`) are rejected rather than modified.
-Indexed/casefold directory mutation, rename-exchange/noreplace flags and linking
+Casefold directory mutation, rename-exchange/noreplace flags and linking
 an unlinked inode through a handle remain unimplemented. Directory creation,
 removal, moves and symlink mutation are described below.
 
@@ -670,7 +669,7 @@ limits, directory/symlink accounting, failed batches/producers, and a real torn
 cross-parent rename. debugfs independently inspects topology/metadata, the native
 reader compares file/link bytes, and e2fsck checks each successful configuration.
 Physical-device writes, FUSE write callbacks and installed reader packaging are
-unchanged. Indexed/casefold directory mutation remains rejected.
+unchanged. Casefold directory mutation remains rejected.
 
 ## Directory handles and session cwd lifetime
 
@@ -828,7 +827,7 @@ cover permission revocation, renamed/removed dirfds, symlink budgets, raw names,
 quotas, failed producers, actual torn-page recovery and checkpoint retirement.
 
 Production/device writes, complete kernel dentry integration, special-file opens, O_PATH/O_TMPFILE, renameat2 extensions, openat2 containment policies and
-indexed/casefold directory references/mutation remain outside this image-only
+casefold directory references/mutation remain outside this image-only
 prototype. Host descriptor inheritance/nonblocking/direct-I/O flags do not apply
 to its session objects.
 
@@ -1281,3 +1280,43 @@ publication after the guard is durable, recovers idempotently, checks resulting
 file bytes and runs e2fsck. Linux CI runs whole-loop and partitioned-loop tests with sudo, including
 mounted-sibling rejection and preventing sibling mounts during a held claim; macOS tests
 use owned disk images. No physical user disk is touched by these tests.
+
+
+## Indexed-directory mutation
+
+Existing non-casefold HTree directories now support create, mkdir, symlink,
+hard-link, rename/replacement, unlink and rmdir through the same staged transaction
+engine, including relative directory handles and retained open inodes. Their index
+flags and hash policy are retained. libext2fs performs hash-routed insertion,
+leaf splitting, internal-node splitting and root growth; indexed errors never
+fall back to linear `expand_dir`. Deletion preserves the index rather than
+repacking/shrinking it. New directories still start in the ordinary linear format;
+automatic conversion of growing linear directories is not part of this change.
+
+A bounded validator runs before indexed traversal/mutation and after insertion or
+removal. It checks root/internal layouts, count/limit fields, checksums, hash ranges
+and collision continuations, allocated mappings/inodes, full logical-block
+coverage, duplicate logical/physical references and duplicate names. Corrupt
+indexes fail without publication; mutations and their validation share one
+rollback/recovery boundary. Validation is a full-tree scan, so write throughput
+on large directories is not yet optimized. Limits are 16,384 logical blocks
+(16–64 MiB at supported block sizes) and 65,536 live names. Root depths zero and
+one and legacy/half-MD4/TEA policies with signed/unsigned hashing are supported.
+`large_dir`/depth-two and casefold feature profiles remain rejected.
+
+Tree growth also exposed a native reader compatibility error: libext2fs can retain
+nonzero reserved dx-tail bytes while computing a valid checksum. Linux includes
+those bytes in its checksum without requiring zero. The reader now follows that
+rule, retaining checksum, structural and reference validation. The stable reader's
+indexed tests include a repaired-checksum reserved-tail regression.
+
+`test-indexed-mutations.py` exercises growth and namespace/handle/empty-directory
+lifetime across all 12 block-size/checksum/mapping profiles and all six hash
+variants. Valid-checksum cycles, duplicate child references and incorrect hash
+ranges are rejected with unchanged images and transaction heads.
+`test-indexed-collisions.py` uses real same-hash names across leaf/internal-node
+boundaries and verifies recovery after actual half-page interruption across
+12 configurations. `test-mounted-indexed.py` checks real FUSE create, relative
+opens, link, cross-parent file/directory moves and open-unlink cleanup on two
+representative profiles. Every accepted output passes independent read-only
+e2fsck and source hashes remain unchanged. CI runs these suites with sanitizers.

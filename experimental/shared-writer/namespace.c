@@ -204,9 +204,10 @@ static errcode_t resolve(ext2_filsys fs, const struct mutation *op, int target,
     e = ENOTDIR;
   if (!e && !in.i_links_count)
     e = ENOENT;
-  if (!e &&
-      (in.i_flags & (GRANT_UNSUPPORTED | EXT4_CASEFOLD_FL | EXT2_INDEX_FL)))
+  if (!e && (in.i_flags & (GRANT_UNSUPPORTED | EXT4_CASEFOLD_FL)))
     e = EOPNOTSUPP;
+  if (!e)
+    e = namespace_index_check(fs, *dir);
   if (!e && (in.i_flags & EXT2_IMMUTABLE_FL))
     e = EPERM;
   return e;
@@ -222,8 +223,7 @@ static errcode_t entry_inode(ext2_filsys fs, ext2_ino_t ino,
   unsigned type = in->i_mode & LINUX_S_IFMT;
   if (type != LINUX_S_IFREG && type != LINUX_S_IFDIR && type != LINUX_S_IFLNK)
     return EOPNOTSUPP;
-  if (type == LINUX_S_IFDIR &&
-      (in->i_flags & (EXT2_INDEX_FL | EXT4_CASEFOLD_FL)))
+  if (type == LINUX_S_IFDIR && (in->i_flags & (EXT4_CASEFOLD_FL)))
     return EOPNOTSUPP;
   if (type == LINUX_S_IFLNK &&
       (!EXT2_I_SIZE(in) || EXT2_I_SIZE(in) >= fs->blocksize))
@@ -252,11 +252,20 @@ static errcode_t link_name(ext2_filsys fs, ext2_ino_t dir, const char *leaf,
                            ext2_ino_t ino, unsigned type) {
   errcode_t e = ext2fs_link(fs, dir, leaf, ino, type);
   if (e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM) {
+    struct ext2_inode in;
+    errcode_t read = ext2fs_read_inode(fs, dir, &in);
+    if (read || (in.i_flags & EXT2_INDEX_FL))
+      return read ? read : e;
     e = ext2fs_expand_dir(fs, dir);
     if (!e)
       e = ext2fs_link(fs, dir, leaf, ino, type);
   }
-  return e;
+  return e ? e : namespace_index_check(fs, dir);
+}
+static errcode_t unlink_name(ext2_filsys fs, ext2_ino_t dir, const char *name,
+                             ext2_ino_t ino) {
+  errcode_t e = ext2fs_unlink(fs, dir, name, ino, 0);
+  return e ? e : namespace_index_check(fs, dir);
 }
 static errcode_t drop(ext2_filsys fs, ext2_ino_t dir, const char *leaf,
                       ext2_ino_t ino, const struct inode_pin *pins,
@@ -264,7 +273,7 @@ static errcode_t drop(ext2_filsys fs, ext2_ino_t dir, const char *leaf,
   struct ext2_inode in;
   errcode_t e = ext2fs_read_inode(fs, ino, &in);
   if (!e)
-    e = ext2fs_unlink(fs, dir, leaf, ino, 0);
+    e = unlink_name(fs, dir, leaf, ino);
   if (e)
     return e;
   in.i_links_count--;
@@ -346,6 +355,9 @@ static errcode_t directory_check(ext2_filsys fs, ext2_ino_t ino,
     return e;
   if (in.i_links_count && in.i_links_count < 2)
     return EIO;
+  e = namespace_index_check(fs, ino);
+  if (e)
+    return e;
   struct dots dots = {.self = ino, .parent = parent, .new_parent = new_parent};
   e = ext2fs_dir_iterate(fs, ino, 0, NULL, directory_entries, &dots);
   if (e)
@@ -373,8 +385,11 @@ errcode_t namespace_directory_parent(ext2_filsys fs, ext2_ino_t ino,
   if (e)
     return e;
   if ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR ||
-      (in.i_flags & (GRANT_UNSUPPORTED | EXT2_INDEX_FL | EXT4_CASEFOLD_FL)))
+      (in.i_flags & (GRANT_UNSUPPORTED | EXT4_CASEFOLD_FL)))
     return EOPNOTSUPP;
+  e = namespace_index_check(fs, ino);
+  if (e)
+    return e;
   e = ext2fs_lookup(fs, ino, "..", 2, NULL, parent);
   if (!e && (!*parent || *parent > fs->super->s_inodes_count ||
              !ext2fs_test_inode_bitmap2(fs->inode_map, *parent)))
@@ -430,7 +445,7 @@ static errcode_t drop_directory(ext2_filsys fs, ext2_ino_t dir,
   errcode_t e = directory_check(fs, ino, dir, 1, 0);
   if (e)
     return e;
-  e = ext2fs_unlink(fs, dir, name, ino, 0);
+  e = unlink_name(fs, dir, name, ino);
   struct ext2_inode in;
   if (!e)
     e = ext2fs_read_inode(fs, ino, &in);
@@ -729,7 +744,7 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     if (!e)
       e = link_name(fs, to, newname, ino, filetype);
     if (!e && op->kind == MUT_RENAME)
-      e = ext2fs_unlink(fs, from, name, ino, 0);
+      e = unlink_name(fs, from, name, ino);
     if (!e && op->kind == MUT_RENAME && type == LINUX_S_IFDIR && from != to) {
       e = directory_check(fs, ino, from, 0, to);
       if (!e)
