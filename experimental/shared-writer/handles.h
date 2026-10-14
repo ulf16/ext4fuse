@@ -10,6 +10,10 @@
  * open, 25=statat,26=readlinkat,27=directory
  * page,28=tell/seek,29=rewind,30=handle full stat, 31=path full stat,32=mounted
  * geometry/admission,34=access,35=bounded xattr query,36=metadata grant.
+ * 37=enable bounded mounted lookup-pin pool,38=lookup/pin child,
+ * 39=open pinned node with fresh authorization,40=pinned readlink,41=node access,
+ * 42=preflight free lookup slot and pin budget before namespace creation.
+ * Lookup pins are separate from open slots and confer no file-data rights.
  * Command 33 updates trusted mount credentials in reader-server. Token zero is
  * the immutable virtual root for 15/17/19/20/21/22/25/26/30/31/32/34/35/36; no
  * root slot or non-root pin is implied.

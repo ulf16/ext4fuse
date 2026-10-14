@@ -106,7 +106,8 @@ int main(int argc, char **argv) {
         g->generation = little(bases + j * 16 + 4, 4);
         g->access = little(bases + j * 16 + 8, 4);
         g->flags = little(bases + j * 16 + 12, 4);
-        if (grant_valid(g) || g->flags != GRANT_DIRECTORY)
+        if (grant_valid(g) ||
+            (g->flags != GRANT_DIRECTORY && (j || g->flags != GRANT_NODE)))
           e = EINVAL;
       }
       ops[i].at = 1;
@@ -125,6 +126,10 @@ int main(int argc, char **argv) {
       break;
     }
     ops[i].kind = little(header, 4);
+    if (at && ops[i].base.flags == GRANT_NODE && ops[i].kind != MUT_LINK) {
+      e = EINVAL;
+      break;
+    }
     if (ops[i].kind == MUT_OPEN && (!at || count != 1)) {
       e = EINVAL;
       break;

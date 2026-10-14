@@ -904,7 +904,7 @@ not an installed frontend. Owned source images remain byte-identical and resulti
 filesystems are checked independently with e2fsck.
 
 
-## Initial experimental FUSE 3 mount
+## Experimental low-level FUSE 3 mount
 
 `mount-broker.py` now connects a separate native FUSE 3 callback executable to the
 managed-image session. The frontend never opens an image or device itself. The
@@ -943,7 +943,7 @@ is supported for the representable subset described below.
 Unsupported operations return an error rather than pretending success.
 Creation accepts ordinary permission bits (mkdir also permits sticky);
 setgid inheritance is still derived by the backend. File sizing follows the inode's extent/indirect mapping capacity and signed
-64-bit offsets. The 128 handle/pin, 4 MiB transaction payload and 32 MiB reader
+64-bit offsets. The 128 open-handle, 4,096 mounted lookup/pin, 4 MiB transaction payload and 32 MiB reader
 stream bounds still apply; large files are written in bounded chunks. The mounted helper uses FUSE 3 only; the stable reader's FUSE 2 ABI
 is unaffected.
 
@@ -969,30 +969,54 @@ Mounted stat reports actual write bits, Linux uid/gid, inode/link counts, logica
 size, allocated 512-byte sectors and validated timestamps. Space/inode counts are
 reported from current libext2fs metadata without the read-only flag.
 
-High-level macFUSE does not always provide an open fh on getattr after immediate
-unlink, so this frontend deliberately uses libfuse's standard deferred-removal
-policy. It temporarily renames open unlinked files to `.fuse_hidden...`, and
-libfuse adjusts the visible link count. Read/write/fstat/truncate/fsync remain
-usable until final close; libfuse then unlinks the temporary name. Live generated
-names are tracked by exact inode/generation for lifecycle-only cleanup if libfuse
-supplies a kernel/teardown context with no caller. This is volatile tracking, not
-a destructive prefix scan. **Abrupt frontend/broker termination can leave such
-names in the managed image**; recovery preserves them for inspection. Automatic
-hidden-name recovery and complete kernel lookup/forget/cwd handling require a
-low-level inode frontend. In particular, offline retained-cwd guarantees are not
-certified for a kernel cwd after its directory is removed. Directory snapshot
-cookies work through the mounted filler; subsequent calls resume from the last
-entry the kernel accepted.
+The mounted helper now uses `fuse_lowlevel_ops` and opaque inode node IDs.
+Lookup, create, mkdir, symlink and link replies add kernel lookup references;
+forget and batch-forget consume their exact counts. Node IDs never repeat within
+a mount, and hard links share one node. The visible stat/readdir inode number
+remains the ext4 inode; kernel node IDs are separate, generation-bound identities.
+The kernel resolves symlinks; the broker resolves namespace operations directly
+from pinned parent inodes, without reconstructing an absolute path after rename.
+
+Lookup pins confer no file-data access. Open/opendir performs fresh mode/ACL and
+immutable/append checks before allocating an independent open-time grant. A node
+stays pinned while either its lookup count or open count is nonzero; release does
+not consume lookups and forget does not revoke a still-open handle. Lookup pins
+use a separate 4,096-slot pool; the existing 128 open slots remain separate.
+Distinct inode/ancestor pins and durable orphan entries are bounded at 4,096;
+ancestry traversal remains bounded to 128 steps. Namespace operations returning
+new entries preflight both node slots and pin capacity before mutation. Exceeding
+a bound returns an error rather than reusing a live identity.
+
+Unlink, rmdir and rename-over remove names immediately. Referenced zero-link files,
+symlinks and empty directories enter the durable legacy orphan chain. Removed cwd
+and directory lookup references preserve their allocated `..` ancestry. Inode
+getattr/setattr, readlink and xattrs work after name removal; data operations use
+independent file grants, and creating an entry in a removed directory fails ENOENT.
+There is no high-level `.fuse_hidden` rename policy. Interrupted entry/create replies
+balance unaccepted lookup/open references. Unmount implicitly drops all references,
+even if the kernel does not send every forget; session teardown then reaps orphans.
+An abrupt process loss discards volatile references, and the next session reaps
+validated durable orphans before serving requests. No recovery scans or deletes
+names merely because they start with `.fuse_hidden`. Existing leftovers from an
+older frontend are retained for explicit owner inspection.
+
+Setattr and native ACL editing use atomic inode-grant batches, including combined
+truncate/ownership/mode/timestamp changes. Namespace, data and metadata transactions
+still commit durably before acknowledgement. Regular-file direct I/O and zero entry/
+attribute timeouts remain; there is no writeback cache, NFS export or multi-user mount.
+A disconnected macFUSE mount may require explicit `umount -f MOUNTPOINT` before
+reusing its mountpoint. This does not replace managed-image transaction recovery.
 
 Mount admission requires a clean Linux-format filesystem and no journal replay.
 It rejects bigalloc, quota, ea_inode, active modern orphan records, inline data,
 encryption, verity, casefold, readonly and largedir feature profiles. An inactive
 orphan-file feature is accepted because the existing legacy-orphan backend has
-been independently fsck/recovery-tested on those same profiles. Indexed/casefold
-directory operations still fail EOPNOTSUPP at use. This is managed-image redo
+been independently fsck/recovery-tested on those same profiles. Casefold
+directory operations still fail EOPNOTSUPP at use; supported non-casefold HTree
+mutations are described below. This is managed-image redo
 recovery, not native ext4/JBD2 journaling or physical-power-loss certification.
-The Python orchestration still hashes images and retains transaction history;
-mounted latency and long-running storage consumption are experimental.
+The Python orchestration uses authenticated chunk updates and periodic full-scan
+checkpoints as described below; mounted latency and resource limits remain experimental.
 
 `test-mount-broker.py` checks pristine clone preservation, full inode/geometry
 metadata, per-request umask/context, foreign-caller rejection, grant lifetime,
@@ -1402,3 +1426,18 @@ live unlinked files, directory/cwd lifetime, restart, fsck and refusal of change
 untouched bytes. `test-mounted-large.py` exercises actual FUSE large-file I/O,
 open-unlink lifetime and automatic history bounds. Existing capture/replay and
 checkpoint fault matrices remain the recovery regression gates.
+
+## Low-level mounted lifetime validation
+
+`test-lowlevel-broker.py` checks lookup/open count independence, immediate unlink,
+rename/hard-link identity, metadata-only pin authority, forgotten-ID refusal,
+combined-setattr rollback, symlink orphans, retained removed ancestry, resource
+preflight, and more than 128 simultaneous lookups across all 12 profiles.
+`test-mounted-lifetime.py` exercises actual macFUSE/Linux FUSE mounts on classic
+1 KiB and checksum-enabled extent 4 KiB profiles: open-unlink data/stat/metadata,
+rename-over victims, dup lifetime, cwd removal without an open handle, traversal
+through removed ancestors, removed directory fds, and abrupt isolated mount-group
+termination followed by orphan recovery and remount. It verifies source hashes,
+independent e2fsck results and preservation of a legitimate `.fuse_hidden…` file.
+Existing mounted namespace, large-file, indexed and metadata/ACL suites now use
+this same low-level frontend. The installed stable read-only reader is unchanged.

@@ -111,18 +111,18 @@ class Session:
             self._send(REQUEST.pack(b'E4RD0001', op, len(path), offset, length) + path, deadline)
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
-                    or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10, 28, 29) and count)
+                    or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10, 28, 29, 37, 41, 42) and count)
                     or (op == 13 and (count != size or count > 4095))
-                    or (op == 12 and (count % 8 or count > 128*8))
-                    or (not error and ((op in (7,14,18,19,22,24) and count != 24) or (op in (11,15,21,25) and count != 16)))
+                    or (op == 12 and (count % 8 or count > 4096*8))
+                    or (not error and ((op in (7,14,18,19,22,24,38,39) and count != 24) or (op in (11,15,21,25) and count != 16)))
                     or (not error and op==23 and count!=8)
                     or (not error and op==27 and (count<8 or count>length or size>=2**63-1))
                     or (not error and op==28 and size>=2**63-1)
                     or (not error and op==29 and size)
-                    or (op==26 and (count!=size or count>4095))
+                    or (op in (26,40) and (count!=size or count>4095))
                     or (not error and op in (30,31) and count!=128)
                     or (not error and op==32 and count!=80)
-                    or (op in (33,34) and (count or size))
+                    or (op in (33,34,37,41,42) and (count or size))
                     or (not error and op==35 and (count!=size or count>65536))
                     or (not error and op==36 and (count!=16 or size))
                     or (op in (17,20) and (count != size or count > 4096))):
@@ -362,6 +362,51 @@ class Session:
         if raw and (not raw.endswith(b'\0') or any(not name or len(name)>255 for name in raw[:-1].split(b'\0'))):
             self._failed=True;raise OSError(errno.EIO,'invalid attribute list')
         return [os.fsdecode(name) for name in raw[:-1].split(b'\0')] if raw else []
+
+    def _mount_nodes(self):
+        with self._mutex:
+            self._ready();self._rpc(37)
+
+    def _mount_node_capacity(self):
+        with self._mutex:
+            self._ready();self._rpc(42)
+
+    def _mount_lookup(self, parent, name):
+        raw=os.fsencode(name)
+        if not raw or len(raw)>255 or b'/' in raw or b'\0' in raw:
+            raise OSError(errno.EINVAL,'invalid lookup component')
+        with self._mutex:
+            token=self._file(parent) if parent is not None else struct.pack('<Q',0)
+            _,reply=self._rpc(38,token+raw)
+            number,ino,generation,access,flags=struct.unpack('<QIIII',reply)
+            if not number or not ino or ((flags,access) not in ((2,8),(4,0))):
+                self._failed=True;raise OSError(errno.EIO,'invalid lookup pin')
+            for existing in self._files:
+                if existing._token==number:
+                    if getattr(existing,'_lookup_grant',None)!=(ino,generation,access,flags):
+                        self._failed=True;raise OSError(errno.EIO,'lookup identity alias')
+                    return existing,ino,generation
+            h=(DirectoryHandle if flags==2 else FileHandle)(self,number,self._file_key)
+            h._lookup_grant=(ino,generation,access,flags)
+            self._files.add(h)
+            return h,ino,generation
+
+    def _mount_open_node(self, node, rights, append=False, directory=False):
+        with self._mutex:
+            reply=self._rpc(39,self._file(node),rights|4*append|128*directory)
+            token,ino,generation,access,flags=struct.unpack('<QIIII',reply[1])
+            expected=getattr(node,'_lookup_grant',None)
+            is_dir=isinstance(node,DirectoryHandle)
+            if (expected is None or (ino,generation)!=expected[:2] or
+                access!=(4 if is_dir else rights) or flags!=(2 if is_dir else int(append))):
+                self._failed=True;raise OSError(errno.EIO,'inode open grant mismatch')
+            return self._opened(reply)
+
+    def _mount_metadata_batch(self, operations, handles):
+        with self._mutex:
+            grants=[self._rpc(36,self._file(h))[1] for h in handles]
+            _,pins=self._rpc(12)
+            return self._apply_request(write_api.encode_metadata_batch(operations,self.credentials,grants,pins))
 
     def _mount_context(self, credentials):
         """Private authenticated mount broker entry; not JSON caller input."""
@@ -605,7 +650,7 @@ class FileHandle:
     Construct via Session.open. Last-link removal retains a durable orphan
     until the final handle closes; restart reclaims abandoned session orphans.
     """
-    __slots__ = ('_owner','_token','_closed')
+    __slots__ = ('_owner','_token','_closed','_lookup_grant')
 
     def __init__(self, owner, token, key):
         if key is not owner._file_key:
@@ -613,6 +658,7 @@ class FileHandle:
         self._owner=owner
         self._token=token
         self._closed=False
+        self._lookup_grant=None
 
     @property
     def closed(self):

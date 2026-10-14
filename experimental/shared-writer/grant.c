@@ -5,6 +5,8 @@
 int grant_valid(const struct inode_grant *g) {
   if (!g || !g->inode)
     return EINVAL;
+  if (g->flags == GRANT_NODE)
+    return g->access ? EINVAL : 0;
   if (g->flags == GRANT_DIRECTORY)
     return g->access == GRANT_DIR_READ || g->access == GRANT_DIR_SEARCH ||
                    g->access == (GRANT_DIR_READ | GRANT_DIR_SEARCH)
@@ -22,7 +24,8 @@ static errcode_t identity(ext2_filsys fs, const struct inode_grant *g,
   if (grant_valid(g))
     return EINVAL;
   if ((g->inode < EXT2_FIRST_INODE(fs->super) &&
-       !(g->inode == EXT2_ROOT_INO && g->flags == GRANT_DIRECTORY)) ||
+       !(g->inode == EXT2_ROOT_INO &&
+         (g->flags == GRANT_DIRECTORY || g->flags == GRANT_NODE))) ||
       g->inode > fs->super->s_inodes_count)
     return ESTALE;
   errcode_t e = fs->inode_map ? 0 : ext2fs_read_inode_bitmap(fs);
@@ -33,9 +36,12 @@ static errcode_t identity(ext2_filsys fs, const struct inode_grant *g,
   e = ext2fs_read_inode(fs, g->inode, in);
   if (e)
     return e;
+  unsigned type = in->i_mode & LINUX_S_IFMT;
   if (in->i_generation != g->generation ||
-      (in->i_mode & LINUX_S_IFMT) !=
-          (g->flags == GRANT_DIRECTORY ? LINUX_S_IFDIR : LINUX_S_IFREG))
+      (g->flags == GRANT_NODE
+           ? (type != LINUX_S_IFREG && type != LINUX_S_IFLNK)
+           : type !=
+                 (g->flags == GRANT_DIRECTORY ? LINUX_S_IFDIR : LINUX_S_IFREG)))
     return ESTALE;
   if (in->i_links_count && in->i_dtime)
     return ESTALE;

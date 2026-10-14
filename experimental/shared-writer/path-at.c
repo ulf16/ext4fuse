@@ -38,7 +38,9 @@ static errcode_t allocated(ext2_filsys fs, ext2_ino_t ino,
   if (!e && !in->i_links_count) {
     struct inode_grant g = {ino, in->i_generation, GRANT_DIR_SEARCH,
                             GRANT_DIRECTORY};
-    if ((in->i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
+    if ((in->i_mode & LINUX_S_IFMT) == LINUX_S_IFLNK)
+      g = (struct inode_grant){ino, in->i_generation, 0, GRANT_NODE};
+    else if ((in->i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
       return EIO;
     e = grant_inode(fs, &g, in);
   }

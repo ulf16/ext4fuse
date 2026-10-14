@@ -36,8 +36,12 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
       return e;
     if (in.i_links_count ||
         ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFREG &&
-         (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR) ||
+         (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR &&
+         (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFLNK) ||
         (in.i_flags & GRANT_UNSUPPORTED))
+      return EIO;
+    if ((in.i_mode & LINUX_S_IFMT) == LINUX_S_IFLNK &&
+        (!EXT2_I_SIZE(&in) || EXT2_I_SIZE(&in) >= fs->blocksize))
       return EIO;
     list[(*count)++] = ino;
     ino = in.i_dtime;
@@ -162,8 +166,8 @@ errcode_t namespace_reap(ext2_filsys fs, const struct inode_pin *pins,
       return e;
     int directory = (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR;
     struct inode_grant g = {pins[i].inode, pins[i].generation,
-                            directory ? GRANT_DIR_SEARCH : GRANT_READ,
-                            directory ? GRANT_DIRECTORY : 0};
+                            directory ? GRANT_DIR_SEARCH : 0,
+                            directory ? GRANT_DIRECTORY : GRANT_NODE};
     if ((e = grant_inode_known(fs, &g, &in, list, n)))
       return e;
     for (unsigned j = 0; j < i; j++)
@@ -646,13 +650,24 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
   ext2_ino_t from = 0, to = 0, ino = 0, victim = 0;
   char *name = NULL, *newname = NULL, *target = NULL;
   struct ext2_inode in, old;
-  e = resolve(fs, op, 0, op->path, c, &from, &name,
-              op->kind == MUT_LINK ? 1 : 3);
-  if (e) {
+  int node_link =
+      op->at && op->kind == MUT_LINK && op->base.flags == GRANT_NODE;
+  if (node_link) {
+    e = grant_inode(fs, &op->base, &in);
+    ino = op->base.inode;
+    /* This interface does not resurrect an already-unlinked inode. */
+    if (!e && !in.i_links_count)
+      e = ENOENT;
+  } else {
+    e = resolve(fs, op, 0, op->path, c, &from, &name,
+                op->kind == MUT_LINK ? 1 : 3);
+    if (!e)
+      e = ext2fs_lookup(fs, from, name, strlen(name), NULL, &ino);
+  }
+  if (e && e != EXT2_ET_FILE_NOT_FOUND) {
     free(name);
     return e;
   }
-  e = ext2fs_lookup(fs, from, name, strlen(name), NULL, &ino);
   if (creating) {
     if (!e)
       e = EEXIST;
@@ -661,7 +676,8 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     free(name);
     return e;
   }
-  if (!e && op->at && op->kind == MUT_LINK && (op->at_flags & 1)) {
+  if (!e && !node_link && op->at && op->kind == MUT_LINK &&
+      (op->at_flags & 1)) {
     ext2_ino_t start;
     struct path_result r;
     e = path_base(fs, &op->base, op->path, &start);

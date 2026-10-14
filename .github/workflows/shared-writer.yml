@@ -408,3 +408,30 @@ jobs:
             ${{ runner.temp }}/large-writer/mounted-large-results.json
             ${{ runner.temp }}/large-writer/merkle-results.json
             ${{ runner.temp }}/large-writer/hash-scaling-results.json
+
+  lowlevel-lifetimes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install low-level mount and filesystem dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build low-level reader and frontend with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/lowlevel-writer" --sanitize
+      - name: Prepare and independently validate filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/lowlevel-writer"
+      - name: Verify lookup pins, inode authority, reference counts and resource bounds
+        run: python3 experimental/shared-writer/test-lowlevel-broker.py --work "$RUNNER_TEMP/lowlevel-writer"
+      - name: Verify kernel cwd, immediate unlink, abrupt loss and remount
+        run: python3 experimental/shared-writer/test-mounted-lifetime.py --work "$RUNNER_TEMP/lowlevel-writer"
+      - name: Save low-level validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lowlevel-lifetime-validation
+          path: |
+            ${{ runner.temp }}/lowlevel-writer/lowlevel-broker-results.json
+            ${{ runner.temp }}/lowlevel-writer/mounted-lifetime-results.json
+            ${{ runner.temp }}/lowlevel-writer/mounted-lifetime-*/*.log

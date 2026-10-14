@@ -144,7 +144,7 @@ def encode_grant(credentials, grant, kind, offset=0, data=b''):
 
 def encode_broker(operations, credentials, pins):
     """Private V4 envelope: live inode identities, never accepted from JSON."""
-    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>128*8:
+    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>4096*8:
         raise ValueError('invalid pin snapshot')
     if operations:
         request=encode(operations,credentials)
@@ -174,7 +174,7 @@ def encode_at(operations, credentials, pins, bases):
             raise ValueError('invalid directory capability')
         fields=HEADER.unpack_from(body,offset);length=HEADER.size+fields[1]+fields[-1]
         records+=pair[0]+pair[1]+body[offset:offset+length];offset+=length
-    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>1024:
+    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>4096*8:
         raise ValueError('invalid pins')
     return b'E4REQ005'+request[8:16+n]+struct.pack('<I',len(pins)//8)+pins+records
 
@@ -182,7 +182,7 @@ def encode_at(operations, credentials, pins, bases):
 def encode_metadata_grant(operation, credentials, grant, pins):
     """Private V6: live handle metadata, with current authorization and pins."""
     if not isinstance(grant,bytes) or len(grant)!=16:raise ValueError('invalid metadata grant')
-    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>1024:raise ValueError('invalid pins')
+    if not isinstance(pins,bytes) or len(pins)%8 or len(pins)>4096*8:raise ValueError('invalid pins')
     op=dict(operation,path='/');request=encode([op],credentials,_at=True)
     n=struct.unpack_from('<I',request,12)[0];body=request[16+n:];fields=list(HEADER.unpack_from(body));pathbytes=fields[1]
     fields[1]=16;fields[5]=0
@@ -217,6 +217,28 @@ def apply_encoded_locked(root, producer, request, cache=None):
     adapter.chmod(0o700)
     inplace.capture_overlay(root / 'image.img', proposed, adapter, expected_base=state['sha256'], integrity=cache)
     return chain.recover_locked(root, cache)
+
+
+def encode_metadata_batch(operations, credentials, grants, pins):
+    """Private V6 atomic setattr/ACL batch, with one trusted grant per operation."""
+    if not isinstance(credentials, Credentials) or not isinstance(pins, bytes) or len(pins)%8 or len(pins)>4096*8:
+        raise ValueError('invalid metadata context')
+    if not 1 <= len(operations) <= 64 or len(grants) != len(operations):
+        raise ValueError('invalid metadata batch')
+    records = bytearray()
+    for op, grant in zip(operations, grants):
+        if not isinstance(grant, bytes) or len(grant)!=16:
+            raise ValueError('invalid metadata grant')
+        if op['kind'] == 'truncate':
+            if set(op) != {'kind','size'} or type(op['size']) is not int or not 0 <= op['size'] <= 2**63-1:
+                raise ValueError('invalid inode truncate')
+            records += HEADER.pack(2,16,0,0,0,0,op['size'],0)+grant
+        else:
+            frame = encode_metadata_grant(op,credentials,grant,pins)
+            n = struct.unpack_from('<I',frame,12)[0]
+            records += frame[20+n+len(pins):]
+    context=credentials.encode()
+    return b'E4REQ006'+struct.pack('<II',len(operations),len(context))+context+struct.pack('<I',len(pins)//8)+pins+records
 
 
 if __name__ == '__main__':

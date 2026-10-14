@@ -6,6 +6,8 @@
 #define GRANT_WRITE 2
 #define GRANT_APPEND 1
 #define GRANT_DIRECTORY 2
+/* Identity pin only: no open-time read/write rights are conferred. */
+#define GRANT_NODE 4
 #define GRANT_DIR_READ 4
 #define GRANT_DIR_SEARCH 8
 #define GRANT_UNSUPPORTED                                                      \
