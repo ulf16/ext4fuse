@@ -48,7 +48,9 @@ with tempfile.TemporaryDirectory(prefix='mounted-indexed-',dir=a.work) as tmp:
     dirfd=os.open(many,os.O_RDONLY|os.O_DIRECTORY)
     try:
      fd=os.open('relative',os.O_CREAT|os.O_RDWR,0o600,dir_fd=dirfd);os.write(fd,b'indexed dirfd');os.close(fd)
-     check((many/'relative').read_bytes()==b'indexed dirfd');os.unlink('relative',dir_fd=dirfd)
+     check((many/'relative').read_bytes()==b'indexed dirfd')
+     os.rename(many,other/'relocated');check((other/'relocated'/'relative').read_bytes()==b'indexed dirfd')
+     os.unlink('relative',dir_fd=dirfd);os.rename(other/'relocated',many)
     finally:os.close(dirfd)
     check(len(os.listdir(many))==200);check(not any(n.startswith('.fuse_hidden') for n in os.listdir(other)))
     unmount(mount);check(proc.wait(timeout=30)==0)

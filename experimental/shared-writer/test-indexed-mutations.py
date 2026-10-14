@@ -63,6 +63,11 @@ with tempfile.TemporaryDirectory(prefix='indexed-mutations-',dir=a.work) as tmp:
    except OSError:check(True)
    else:raise AssertionError('failed indexed batch committed')
    check(sha(s.root/'image.img')==digest and s.state['head']==head)
+   # Moving an indexed directory rewrites its indexed root '..' checksum.
+   s.chdir('/many');s.rename('/many','/other/relocated')
+   check(s.getcwd()=='/other/relocated' and directory.path()=='/other/relocated')
+   check(s.readat(directory,'relative')==b'relative indexed')
+   s.rename('/other/relocated','/many');check(s.getcwd()=='/many');s.chdir('/')
    directory.close();clean(s.root/'image.img');indexed(s.root/'image.img','/many');indexed(s.root/'image.img','/other')
    # Native reader enumeration/lookup agrees with libext2fs/debugfs after growth.
    check(int(re.search(r'Inode:\s*(\d+)',debug(s.root/'image.img','stat /many/relative')).group(1))==s.statat(None,'/many/relative')['inode'])
