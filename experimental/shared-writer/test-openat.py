@@ -260,8 +260,8 @@ with tempfile.TemporaryDirectory(prefix='openat-',dir=args.work) as temp:
                 # A malformed result may never transfer an unchecked grant. The
                 # already committed image is valid; the session fails closed.
                 original_apply=s._apply_request
-                def corrupt_result(request):
-                    state=original_apply(request)
+                def corrupt_result(request, **kwargs):
+                    state=original_apply(request, **kwargs)
                     report=s.root/f"g-{state['head']:08d}"/'operations.result'
                     raw=bytearray(report.read_bytes());raw[8:12]=bytes(4);report.write_bytes(raw)
                     return state
