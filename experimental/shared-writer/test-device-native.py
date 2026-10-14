@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Actual disposable hdiutil/loop devices; never enumerates/selects physical disks."""
-import argparse,hashlib,importlib.util,json,os,plistlib,shutil,subprocess,sys,tempfile
+import argparse,errno,hashlib,importlib.util,json,os,plistlib,shutil,subprocess,sys,tempfile,time
 from pathlib import Path
 from unittest.mock import patch
 import session
@@ -12,6 +12,16 @@ def run(args):return subprocess.check_output(list(map(str,args)),stderr=subproce
 def check(value):
  global checks
  assert value;checks+=1
+def recover_device(root,device):
+ # udev/blkid may briefly hold a shared flock after a loop-device change.
+ # Production admission keeps refusing it; the disposable test retries only
+ # before recovery has acquired its lock or made any writes.
+ deadline=time.monotonic()+15
+ while True:
+  try:return d.recover(root,device)
+  except OSError as e:
+   if sys.platform!='linux' or e.errno not in (errno.EAGAIN,errno.EBUSY) or time.monotonic()>=deadline:raise
+   time.sleep(.2)
 def sha(path):
  with path.open('rb') as f:return hashlib.file_digest(f,'sha256').hexdigest()
 with tempfile.TemporaryDirectory(prefix='device-native-',dir=a.work) as tmp:
@@ -49,7 +59,7 @@ with tempfile.TemporaryDirectory(prefix='device-native-',dir=a.work) as tmp:
    else:raise AssertionError('device guard interruption not reached')
   check(bool(hit))
   with image.open('rb') as f:f.seek(d.MAGIC);check(f.read(2)==b'\0\0')
-  d.recover(root,device);d.recover(root,device);check(sha(image)==sha(chain/'image.img'))
+  recover_device(root,device);recover_device(root,device);check(sha(image)==sha(chain/'image.img'))
   run(['e2fsck','-fn',image]);contents=run(['debugfs','-R','cat /device-test',image]);check(contents==b'actual device publication')
   try:
    d.commit(root,'/dev/not-a-real-device')
