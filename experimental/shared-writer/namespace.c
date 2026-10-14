@@ -498,8 +498,17 @@ static errcode_t copy_default_acl(ext2_filsys fs, ext2_ino_t parent,
   }
   if (e == EXT2_ET_EA_KEY_NOT_FOUND)
     e = 0;
-  else if (!e)
-    e = set_acl(fs, ino, key, value, length);
+  else if (!e) {
+    unsigned char *child = NULL;
+    size_t bytes = 0;
+    if (!strcmp(key, NATIVE_INHERIT_KEY)) {
+      e = policy_native_child(value, length, &child, &bytes);
+      if (!e && child)
+        e = set_acl(fs, ino, key, child, bytes);
+      free(child);
+    } else
+      e = set_acl(fs, ino, key, value, length);
+  }
   free(value);
   return e;
 }

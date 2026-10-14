@@ -14,6 +14,7 @@ PREFIX=bytes.fromhex('abcdefabcdefabcdefabcdef')
 OWNER=PREFIX+struct.pack('>I',10)
 GROUP=PREFIX+struct.pack('>I',16)
 EVERYBODY=PREFIX+struct.pack('>I',12)
+RESERVED={OWNER,GROUP,EVERYBODY,PREFIX+struct.pack('>I',2**32-2)}
 MAX_ACE=128
 MAX_USERS=32
 MAX_GROUPS=8
@@ -54,7 +55,7 @@ def render(raw,mode,resolve):
     for tag,perm,ident in entries:
         if tag==16:continue
         uuid=OWNER if tag==1 else GROUP if tag==4 else EVERYBODY if tag==32 else resolve(tag==8,ident)
-        if len(uuid)!=16 or (tag in (2,8) and uuid.startswith(PREFIX)):fail(detail='reserved numeric UUID')
+        if len(uuid)!=16 or (tag in (2,8) and uuid in RESERVED):fail(detail='reserved numeric UUID')
         if tag in (2,4,8):perm&=mask
         principals.append((tag,uuid,access(perm)))
     def add(uuid,kind,bits):
@@ -92,7 +93,7 @@ def decode(blob,mode,owner,gid,identify):
         if uuid==OWNER:principal=('uid',owner)
         elif uuid==GROUP:principal=('gid',gid)
         elif uuid==EVERYBODY:principal=('all',0)
-        elif uuid.startswith(PREFIX):fail(detail='unsupported reserved UUID')
+        elif uuid in RESERVED:fail(detail='unsupported reserved UUID')
         else:
             if uuid not in uids:uids[uuid]=identify(uuid)
             isgroup,ident=uids[uuid]
@@ -182,25 +183,47 @@ def unpack_native(value):
     decode(value[:36]+struct.pack('>II',0,flags),0,0,0,lambda _:None)
     return [(value[i:i+16],*struct.unpack_from('>II',value,i+16)) for i in range(44,len(value),24)]
 
+FILE=1<<5
+DIR=1<<6
+LIMIT=1<<7
+POLICY_V2=b'NACL0002'
+
+def encode_policy(entries):
+    entries=[tuple(e)+(BOTH,) if len(e)==4 else tuple(e) for e in entries]
+    value=POLICY_V2+struct.pack('<I',len(entries))+b''.join(struct.pack('<IIIII',*e) for e in entries)
+    policy_entries(value)
+    return value
+
 def policy_entries(value):
-    if len(value)<12 or value[:8]!=POLICY_MAGIC:fail(errno.EIO,'invalid native inheritance policy')
+    if len(value)<12 or value[:8] not in (POLICY_MAGIC,POLICY_V2):fail(errno.EIO,'invalid native inheritance policy')
+    stride=16 if value[:8]==POLICY_MAGIC else 20
     count=struct.unpack_from('<I',value,8)[0]
-    if not 1<=count<=32 or len(value)!=12+16*count:fail(errno.EIO)
-    entries=[struct.unpack_from('<IIII',value,i) for i in range(12,len(value),16)]
-    users=set()
-    for tag,ident,kind,bits in entries:
-        if tag not in (1,2,4,32) or kind not in (1,2) or bits&~(DATA|64):fail(errno.EIO)
-        if (tag!=2 and ident!=2**32-1) or (tag==2 and ident==2**32-1):fail(errno.EIO)
+    if not 1<=count<=32 or len(value)!=12+stride*count:fail(errno.EIO)
+    entries=[struct.unpack_from('<IIII' if stride==16 else '<IIIII',value,i) for i in range(12,len(value),stride)]
+    if stride==16:entries=[(*e,BOTH) for e in entries]
+    users=set();groups=set()
+    for tag,ident,kind,bits,controls in entries:
+        if tag not in (1,2,4,8,32) or kind not in (1,2) or bits&~(DATA|64):fail(errno.EIO)
+        if (tag not in (2,8) and ident!=2**32-1) or (tag in (2,8) and ident==2**32-1):fail(errno.EIO)
+        if controls&~(BOTH|LIMIT) or not controls&BOTH:fail(errno.EIO)
         if tag==2:users.add(ident)
-    if len(users)>8:fail(errno.E2BIG)
+        if tag==8:groups.add(ident)
+    if len(users)>8 or len(groups)>7:fail(errno.E2BIG)
     return entries
+
+def child_policy(value):
+    entries=[e for e in policy_entries(value) if e[4]&DIR and not e[4]&LIMIT]
+    return encode_policy(entries) if entries else None
 
 def policy_native(value,resolve,inherit=False,isdir=True):
     aces=[]
-    for tag,ident,kind,bits in policy_entries(value):
-        uuid=OWNER if tag==1 else GROUP if tag==4 else EVERYBODY if tag==32 else resolve(False,ident)
+    for tag,ident,kind,bits,controls in policy_entries(value):
+        if not inherit and not controls&(DIR if isdir else FILE):continue
+        uuid=OWNER if tag==1 else GROUP if tag==4 else EVERYBODY if tag==32 else resolve(tag==8,ident)
+        if len(uuid)!=16 or tag in (2,8) and uuid in RESERVED:fail(detail='reserved numeric UUID')
         if not isdir:bits&=~64
-        aces.append((uuid,kind|(BOTH|ONLY if inherit else 0),bits))
+        if not inherit and not bits:continue
+        aces.append((uuid,kind|(controls|ONLY if inherit else 0),bits))
     return aces
 
 def split(value,mode,owner,gid,identify):
@@ -209,8 +232,11 @@ def split(value,mode,owner,gid,identify):
     for uuid,flags,bits in unpack_native(value):
         kind=flags&15
         controls=flags&~(15|INHERITED)
-        if kind not in (1,2) or controls not in (0,BOTH,BOTH|ONLY):fail(detail='selective/limited inheritance is unsupported')
+        if kind not in (1,2) or controls&~(BOTH|ONLY|LIMIT) or controls and not controls&BOTH:fail(detail='unsupported native inheritance flags')
         if controls and not isdir:fail(detail='inheritance requires a directory')
+        # XNU retains directory-only delete-child rights in inherited file
+        # ACEs. They have no file data effect; match producer inheritance.
+        if not isdir and flags&INHERITED:bits&=~64
         if not controls&ONLY:active.append((uuid,kind,bits))
         if controls&BOTH:
             if uuid==EVERYBODY and kind==1 and bits==META:continue
@@ -219,28 +245,23 @@ def split(value,mode,owner,gid,identify):
             elif uuid==GROUP:tag,ident=4,2**32-1
             elif uuid==EVERYBODY:tag,ident=32,2**32-1
             else:
-                if uuid.startswith(PREFIX):fail()
+                if uuid in RESERVED:fail()
                 group,ident=identify(uuid)
-                if type(group) is not bool or type(ident) is not int or not 0<=ident<2**32-1:fail(detail="unresolved native UUID")
-                if group:fail(detail='named-group inheritance is not yet supported')
-                tag=2
-            template.append((tag,ident,kind,bits))
+                if type(group) is not bool or type(ident) is not int or not 0<=ident<2**32-1:fail(detail='unresolved native UUID')
+                tag=8 if group else 2
+            template.append((tag,ident,kind,bits,controls&~ONLY))
     access=decode(pack_native(active),mode,owner,gid,identify)
     policy=None
     if template:
-        if len(template)>32:fail(errno.E2BIG,"inheritance ACE bound")
-        policy=POLICY_MAGIC+struct.pack('<I',len(template))+b''.join(struct.pack('<IIII',*e) for e in template)
-        policy_entries(policy)
-        # Validate the template against an empty BSD fallback. The producer
-        # proves the complete combined policy for the actual creation mode,
-        # umask and child ownership before allocating an inode. Some unusual
-        # creation modes cannot represent native group-dependent decisions.
-        generic=next(i for i in range(2**32-2,2**32-12,-1) if all(t!=2 or ident!=i for t,ident,_,_ in template))
+        if len(template)>32:fail(errno.E2BIG,'inheritance ACE bound')
+        policy=encode_policy(template)
+        ids={ident for t,ident,_,_,_ in template if t in (2,8)}
+        generic=next(i for i in range(2**32-2,2**32-18,-1) if i not in ids)
         numeric=lambda group,ident:bytes([2 if group else 1])+bytes(11)+struct.pack('>I',ident)
         inverse=lambda uuid:(uuid[0]==2,struct.unpack_from('>I',uuid,12)[0])
         for directory in (False,True):
             native=pack_native(policy_native(policy,numeric,isdir=directory))
-            decode(native,0o040000 if directory else 0o100000,generic,200,inverse)
+            decode(native,0o040000 if directory else 0o100000,generic,generic,inverse)
     return access,policy
 
 def project(access,policy,mode,resolve):

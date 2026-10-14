@@ -319,3 +319,27 @@ jobs:
           path: |
             ${{ runner.temp }}/policy-writer/policy-results.json
             ${{ runner.temp }}/policy-writer/handles-results.json
+
+  device-publication:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install device and filesystem test dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Build isolated device publication test runtime
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/device-writer" --sanitize
+      - name: Verify guarded replay, torn sectors and rejection paths
+        run: python3 experimental/shared-writer/test-device-writer.py --work "$RUNNER_TEMP/device-writer"
+      - name: Verify actual disposable loop-device publication and recovery
+        run: |
+          sudo modprobe loop
+          sudo env PATH="$PATH" python3 experimental/shared-writer/test-device-native.py --work "$RUNNER_TEMP/device-writer"
+      - name: Save device validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-publication-validation
+          path: |
+            ${{ runner.temp }}/device-writer/device-replay-results.json
+            ${{ runner.temp }}/device-writer/device-native-results.json

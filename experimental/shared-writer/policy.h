@@ -22,10 +22,12 @@ int policy_group(const struct credentials *c, uint32_t gid);
 int policy_acl(const unsigned char *acl, size_t length, unsigned mode,
                uint32_t uid, uint32_t gid, const struct credentials *c,
                unsigned want);
+int policy_native_child(const unsigned char *data, size_t n,
+                        unsigned char **out, size_t *length);
 int policy_native_valid(const unsigned char *data, size_t n);
 int policy_native_create(const unsigned char *data, size_t n, unsigned baseline,
-                         uint32_t uid, int directory, unsigned *mode,
-                         unsigned char **acl, size_t *length);
+                         uint32_t uid, uint32_t gid, int directory,
+                         unsigned *mode, unsigned char **acl, size_t *length);
 int policy_inherit(unsigned char *acl, size_t length, unsigned requested,
                    unsigned *mode);
 errcode_t policy_inode(ext2_filsys fs, ext2_ino_t ino,

@@ -1148,16 +1148,18 @@ are rerun with native kernel permission checks.
 
 ## Native macOS ACL inheritance
 
-The experimental writer accepts uniform `file_inherit,directory_inherit` rules,
-with optional `only_inherit`, through native ACL APIs and explicit-position chmod:
+The experimental writer accepts file-only, directory-only or combined inheritance,
+with optional `only_inherit` and `limit_inherit`, through native ACL APIs and explicit-position chmod:
 
 ```sh
 chmod +a# 0 'user:daemon allow read,file_inherit,directory_inherit,only_inherit' MOUNTPOINT/directory
 ```
 
 `only_inherit` leaves the directory's access rights alone. Without it, the rule
-also changes the directory's access ACL. Child directories retain the template
-for further propagation. Existing descendants are unchanged by parent edits or
+also changes the directory's access ACL. Child directories retain only directory-inheriting rules that do not carry
+`limit_inherit`. File-only entries are not passed through a newly created
+directory, matching XNU inheritance. Limited entries apply to the immediate
+child but disappear from its propagation template. Existing descendants are unchanged by parent edits or
 `chmod -N`; native removal clears that inode's access ACL and native template.
 Symlinks do not inherit access ACLs. Native ACE provenance and ordering are
 normalized on reads: access is projected from POSIX permissions, and the numeric
@@ -1166,7 +1168,9 @@ accepted but is not stored as historical provenance.
 
 macOS grants can exceed creation mode bits, so substituting a POSIX default ACL
 would lose permissions. The writer instead persists a versioned numeric ordered
-policy in the reserved `trusted.ext4fuse.native_inherit` attribute. Linux restricts the trusted
+policy in the reserved `trusted.ext4fuse.native_inherit` attribute. New templates use
+`NACL0002`, including per-entry propagation controls; existing `NACL0001`
+templates remain readable with their original combined inheritance semantics. Linux restricts the trusted
 namespace to CAP_SYS_ADMIN, so a non-owner with directory write permission cannot
 forge the policy through ordinary Linux xattr calls. The mounted xattr
 API hides it and rejects direct edits. The transaction backend requires inode
@@ -1179,8 +1183,7 @@ then materializes a standard ext4 POSIX access ACL. A named read grant therefore
 survives a requested file mode of 0200 with umask 0077. Child UID aliases and
 owning-group membership are evaluated using the actual new inode identity.
 
-The producer checks all relevant owner/named-user/other identities, both owning-
-group membership states, and every combined read/write/append/execute request
+The producer checks all relevant owner/named-user/other identities, all combinations of owning-group and referenced named-group membership, and every combined read/write/append/execute request
 (including directory delete-child). If that child policy cannot be represented
 by POSIX class selection, creation fails before allocating an inode. For example,
 a named read allow combined with unequal group/other write fallback can depend
@@ -1188,9 +1191,12 @@ on group membership, which a POSIX named-user entry cannot express. Accepted
 parent templates consequently do not guarantee that every possible child
 creation mode will succeed. Write and append must agree; directory deletion must
 match write plus search. There are at most 32 inheritable ACEs and eight distinct
-numeric named users. Owner, owning-group and everybody roles are supported;
-named-group templates, file-only/directory-only propagation, `limit_inherit`,
-independent metadata/security grants and generic rights remain unsupported.
+numeric named users and seven distinct numeric named groups (eight group classes
+including the owning group). Owner, owning-group and everybody roles are
+supported. Independent metadata/security grants and generic rights remain
+unsupported. Exact reserved GUID collisions are rejected; ordinary numeric group
+GUIDs sharing the well-known prefix are resolved through Membership and are not
+treated as special principals.
 
 The numeric policy is an experimental ext4fuse extension, not an ext4 kernel
 inheritance feature. Linux and other writers understand the already-created
@@ -1213,3 +1219,64 @@ creation, and cannot be set by the writer. It is not automatically promoted into
 trusted policy. An owner can remove it through the offline Session API, then
 reapply the desired native ACL through the mounted editor. No released reader or
 installed Homebrew formula has used this experimental inheritance format.
+
+
+## Offline physical-device publication
+
+`device-writer.py` adds an explicit snapshot/edit/publish path for an unmounted
+ext4 device. The ordinary FUSE writer still opens only its managed image. The
+physical device is never passed to the mutation producer or mounted for writing.
+Use the returned `SESSION/chain` with the existing image writer, then explicitly
+publish that frozen generation:
+
+```sh
+python3 experimental/shared-writer/device-writer.py snapshot DEVICE SESSION
+# Edit SESSION/chain with the existing Session API or private mounted writer.
+python3 experimental/shared-writer/device-writer.py commit SESSION DEVICE
+# After interruption, use the SAME retained recovery directory:
+python3 experimental/shared-writer/device-writer.py recover SESSION DEVICE
+```
+
+Device access may require administrator privileges. No device is discovered or
+selected for writing implicitly, and no mounted filesystem is forcibly unmounted.
+Initial physical admission requires a partition with a stable partition UUID and
+hardware serial/WWID, supported 512/1024/2048/4096-byte sectors, page-aligned
+capacity, an entirely offline drive and an external local journal filesystem.
+macOS additionally rejects drives containing APFS/HFS volumes and takes Disk
+Arbitration claims on the whole disk and target slice; existing raw-device users
+are rejected. Linux rejects holders/layered devices and holds an exclusive whole-drive block
+claim throughout publication, plus whole-drive mount checks. Owned disk-image and loop devices are
+accepted specifically for disposable native tests. Geometry and identity are
+rechecked against the open descriptor. Ambiguous identities, aliases, system or
+mounted drives, changed source contents and unsupported geometry fail closed.
+
+The snapshot and staged candidate must pass read-only e2fsck, retain the same
+filesystem UUID and match the admitted capacity. Candidate publication holds the
+managed chain lock, preventing a mounted writer or another session from changing
+the captured generation. The external journal contains old/new changed pages,
+full pre/post hashes, a log hash and device identity. It is synced and sealed
+before target writes. Publication temporarily clears the primary ext4 magic in
+an aligned sector, flushes and verifies it, then writes and flushes all new pages
+while retaining that guard. A full-device hash is checked before restoring the
+magic. The final sector differs from its already-durable predecessor only in the
+two magic bytes, so a torn final write leaves either an unrecognizable device or
+the fully updated filesystem. Completion is recorded only after device flush and
+readback verification. Recovery accepts torn logged pages but rejects changed
+unlogged bytes, wrong devices, changed capacity and corrupted logs/markers.
+
+Keep the recovery directory after interruption: it is the authority needed to
+restore the temporarily unrecognizable device. Each directory describes one
+publication; further edits require a new snapshot/session. This is external redo
+publication, not JBD2 journal integration or continuous direct-device FUSE writes.
+OS claims coordinate mounts and cooperating users; simultaneous privileged raw
+access or devices that falsely acknowledge cache flushes are unsupported. The
+protocol does not automatically rewrite backup superblocks to make a partial
+filesystem usable, and no repairing fsck should run before recovery finishes.
+
+`test-device-writer.py` injects interruption at every replay sector and publication
+boundary, exercises torn sectors, and checks identity/log/clean-byte rejection
+without enabling regular files in production admission. `test-device-native.py`
+uses only a freshly generated disposable hdiutil or loop device, interrupts a real
+publication after the guard is durable, recovers idempotently, checks resulting
+file bytes and runs e2fsck. Linux CI runs the real loop test with sudo; macOS tests
+use owned disk images. No physical user disk is touched by these tests.

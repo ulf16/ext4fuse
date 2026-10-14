@@ -128,19 +128,46 @@ try:
     check((2,4,1) in native_acl.posix(raw_attr(grandchild,b'system.posix_acl_access')))
     link=directory/'link';link.symlink_to('child');check(link.read_bytes()==b'native inheritance')
    finally:os.umask(oldmask)
-   # Unsupported selective/limited propagation must leave the policy intact.
-   oldhash=sha(root/'image.img');oldnative=get_native(directory)
-   for controls in ('file_inherit','directory_inherit','file_inherit,directory_inherit,limit_inherit'):
-    r=subprocess.run(['/bin/chmod','+a#','0','user:daemon allow read,'+controls,str(directory)],capture_output=True)
-    check(r.returncode!=0);check(get_native(directory)==oldnative)
-   check(sha(root/'image.img')==oldhash)
+   # Clearing the parent leaves already-created descendants unchanged.
    run(['/bin/chmod','-N',directory]);check(stat.S_IMODE(directory.stat().st_mode)==0o700)
    plain=directory/'plain';plain.write_bytes(b'no inheritance')
    try:raw_attr(plain,b'system.posix_acl_access')
    except OSError as e:check(e.errno==errno.ENOATTR)
    else:raise AssertionError('removed native inheritance still applies')
    check((2,4,1) in native_acl.posix(raw_attr(grandchild,b'system.posix_acl_access')))
-   run(['/bin/chmod','-N',sub]);grandchild.unlink();sub.rmdir();link.unlink();child.unlink();plain.unlink();directory.rmdir()
+   run(['/bin/chmod','-N',sub]);grandchild.unlink();sub.rmdir();link.unlink();child.unlink();plain.unlink()
+   def no_access(path):
+    os.chmod(path,stat.S_IMODE(path.stat().st_mode)|0o400)
+    try:raw_attr(path,b'system.posix_acl_access')
+    except OSError as e:check(e.errno==errno.ENOATTR)
+    else:raise AssertionError('unexpected inherited access ACL')
+   for controls in ('file_inherit','directory_inherit','file_inherit,directory_inherit,limit_inherit'):
+    run(['/bin/chmod','+a#','0','user:daemon allow read,'+controls+',only_inherit',directory])
+    direct=directory/'direct';fd=os.open(direct,os.O_CREAT|os.O_WRONLY,0o200);os.write(fd,b'selective');os.close(fd)
+    inheriting_file='file_inherit' in controls
+    if inheriting_file:check((2,4,1) in native_acl.posix(raw_attr(direct,b'system.posix_acl_access')))
+    else:no_access(direct)
+    descendant=directory/'descendant';descendant.mkdir(mode=0o700)
+    inheriting_dir='directory_inherit' in controls
+    if inheriting_dir:check((2,4,1) in native_acl.posix(raw_attr(descendant,b'system.posix_acl_access')))
+    else:no_access(descendant)
+    deeper=descendant/'deeper';deeper.mkdir(mode=0o700)
+    if controls=='directory_inherit':check((2,4,1) in native_acl.posix(raw_attr(deeper,b'system.posix_acl_access')))
+    else:no_access(deeper)
+    leaf=descendant/'leaf';leaf.write_bytes(b'no file propagation');no_access(leaf)
+    run(['/bin/chmod','-N',directory]);direct.unlink();leaf.unlink();deeper.rmdir();descendant.rmdir()
+   # A closed POSIX-compatible named-group template preserves exact selection.
+   groupraw=struct.pack('<I',2)+b''.join(struct.pack('<HHI',*e) for e in [(1,7,2**32-1),(4,0,2**32-1),(8,4,0),(16,4,2**32-1),(32,0,2**32-1)])
+   template=native_acl.render(groupraw,0o040740,membership.resolve)
+   aces=[(template[i:i+16],struct.unpack_from('>I',template,i+16)[0]|native_acl.BOTH|native_acl.ONLY,struct.unpack_from('>I',template,i+20)[0]) for i in range(44,len(template),24)]
+   copyint=bind('acl_copy_int',ctypes.c_void_p,[ctypes.c_void_p])
+   blob=native_acl.pack_native(aces);buffer=ctypes.create_string_buffer(blob);acl=copyint(buffer)
+   check(bool(acl),('native group decode',ctypes.get_errno()))
+   try:check(setfile(os.fsencode(directory),ACL_TYPE,acl)==0,('named group set',ctypes.get_errno()))
+   finally:free(acl)
+   grouped=directory/'grouped';grouped.write_bytes(b'named group');stored=native_acl.posix(raw_attr(grouped,b'system.posix_acl_access'))
+   check((8,4,0) in stored if os.getgid()!=0 else any(t==4 and perm==4 for t,perm,_ in stored))
+   run(['/bin/ls','-le',grouped]);run(['/bin/chmod','-N',directory]);grouped.unlink();directory.rmdir()
    unmount(mount);check(process.wait(timeout=30)==0,logpath.read_text(errors='replace'))
   except BaseException:
    log.flush();print(logpath.read_text(errors='replace'),file=sys.stderr);raise

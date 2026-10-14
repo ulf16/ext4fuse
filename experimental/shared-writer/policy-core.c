@@ -151,156 +151,275 @@ int policy_inherit(unsigned char *acl, size_t n, unsigned requested,
   return 0;
 }
 
-/* Versioned numeric native template. Uniform file/directory inheritance only;
- * no UUID resolution in the producer and no reliance on POSIX mode clipping. */
+/* Numeric policies v1 (uniform) and v2 (per-entry propagation). */
 #define NDATA (2 | 4 | 8 | 32)
+#define NFILE 32
+#define NDIR 64
+#define NLIMIT 128
+struct native_ace {
+  unsigned tag, kind, bits, flags;
+  uint32_t id;
+};
+struct native_policy {
+  unsigned count;
+  struct native_ace ace[32];
+};
 static unsigned nrights(unsigned p, int dir) {
   return (p & 4 ? 2 : 0) | (p & 2 ? 36 : 0) | (p & 1 ? 8 : 0) |
          (dir && (p & 3) == 3 ? 64 : 0);
 }
-int policy_native_valid(const unsigned char *data, size_t n) {
-  if (!data || n < 12 || memcmp(data, "NACL0001", 8))
+static void nput(unsigned char *p, uint32_t v, unsigned n) {
+  for (unsigned i = 0; i < n; i++)
+    p[i] = v >> (8 * i);
+}
+static int native_parse(const unsigned char *data, size_t n,
+                        struct native_policy *out) {
+  if (!data || n < 12)
     return EIO;
-  unsigned count = le(data + 8, 4), users = 0;
-  uint32_t ids[8];
-  if (!count || count > 32 || n != 12 + 16 * count)
+  unsigned stride = !memcmp(data, "NACL0001", 8)   ? 16
+                    : !memcmp(data, "NACL0002", 8) ? 20
+                                                   : 0;
+  unsigned count = le(data + 8, 4), nu = 0, ng = 0;
+  uint32_t users[8], groups[7];
+  if (!stride || !count || count > 32 || n != 12 + stride * count)
     return EIO;
-  for (size_t at = 12; at < n; at += 16) {
-    unsigned tag = le(data + at, 4), kind = le(data + at + 8, 4);
-    uint32_t id = le(data + at + 4, 4), bits = le(data + at + 12, 4);
-    if ((tag != 1 && tag != 2 && tag != 4 && tag != 32) ||
-        (kind != 1 && kind != 2) || (bits & ~(NDATA | 64)) ||
-        (tag == 2 ? id == UINT32_MAX : id != UINT32_MAX))
+  out->count = count;
+  for (unsigned i = 0; i < count; i++) {
+    const unsigned char *p = data + 12 + stride * i;
+    struct native_ace *a = &out->ace[i];
+    *a = (struct native_ace){.tag = le(p, 4),
+                             .id = le(p + 4, 4),
+                             .kind = le(p + 8, 4),
+                             .bits = le(p + 12, 4),
+                             .flags =
+                                 stride == 16 ? NFILE | NDIR : le(p + 16, 4)};
+    if ((a->tag != 1 && a->tag != 2 && a->tag != 4 && a->tag != 8 &&
+         a->tag != 32) ||
+        (a->kind != 1 && a->kind != 2) || (a->bits & ~(NDATA | 64)) ||
+        ((a->tag == 2 || a->tag == 8) ? a->id == UINT32_MAX
+                                      : a->id != UINT32_MAX) ||
+        (a->flags & ~(NFILE | NDIR | NLIMIT)) || !(a->flags & (NFILE | NDIR)))
       return EIO;
-    if (tag == 2) {
-      unsigned i;
-      for (i = 0; i < users && ids[i] != id; i++)
+    if (a->tag == 2 || a->tag == 8) {
+      uint32_t *ids = a->tag == 2 ? users : groups;
+      unsigned *num = a->tag == 2 ? &nu : &ng;
+      unsigned j;
+      for (j = 0; j < *num && ids[j] != a->id; j++)
         ;
-      if (i == users) {
-        if (users == 8)
+      if (j == *num) {
+        if (*num == (a->tag == 2 ? 8 : 7))
           return E2BIG;
-        ids[users++] = id;
+        ids[(*num)++] = a->id;
       }
     }
   }
   return 0;
 }
-static int native_decision(const unsigned char *data, size_t n, unsigned mode,
-                           uint32_t owner, uint32_t uid, int group,
-                           unsigned requested, int directory) {
-  unsigned remaining = requested;
-  for (size_t at = 12; at < n; at += 16) {
-    unsigned tag = le(data + at, 4), kind = le(data + at + 8, 4);
-    uint32_t id = le(data + at + 4, 4), bits = le(data + at + 12, 4);
-    if (!directory)
-      bits &= ~64U;
-    if (!(tag == 32 || (tag == 1 && uid == owner) || (tag == 2 && uid == id) ||
-          (tag == 4 && group)))
+int policy_native_valid(const unsigned char *data, size_t n) {
+  struct native_policy p;
+  return native_parse(data, n, &p);
+}
+int policy_native_child(const unsigned char *data, size_t n,
+                        unsigned char **out, size_t *length) {
+  *out = NULL;
+  *length = 0;
+  struct native_policy p;
+  int e = native_parse(data, n, &p);
+  if (e)
+    return e;
+  unsigned count = 0;
+  for (unsigned i = 0; i < p.count; i++)
+    if ((p.ace[i].flags & NDIR) && !(p.ace[i].flags & NLIMIT))
+      count++;
+  if (!count)
+    return 0;
+  *length = 12 + 20 * count;
+  *out = calloc(*length, 1);
+  if (!*out)
+    return ENOMEM;
+  memcpy(*out, "NACL0002", 8);
+  nput(*out + 8, count, 4);
+  size_t at = 12;
+  for (unsigned i = 0; i < p.count; i++) {
+    struct native_ace *a = &p.ace[i];
+    if (!(a->flags & NDIR) || (a->flags & NLIMIT))
       continue;
-    if (kind == 2 && (bits & requested))
+    nput(*out + at, a->tag, 4);
+    nput(*out + at + 4, a->id, 4);
+    nput(*out + at + 8, a->kind, 4);
+    nput(*out + at + 12, a->bits, 4);
+    nput(*out + at + 16, a->flags, 4);
+    at += 20;
+  }
+  return 0;
+}
+static void sort_ids(uint32_t *ids, unsigned n) {
+  for (unsigned i = 0; i < n; i++)
+    for (unsigned j = i + 1; j < n; j++)
+      if (ids[j] < ids[i]) {
+        uint32_t t = ids[i];
+        ids[i] = ids[j];
+        ids[j] = t;
+      }
+}
+static unsigned group_index(const uint32_t *groups, unsigned count,
+                            uint32_t gid) {
+  for (unsigned i = 0; i < count; i++)
+    if (groups[i] == gid)
+      return i;
+  return count;
+}
+static int native_decision(const struct native_policy *p, unsigned mode,
+                           uint32_t owner, uint32_t uid, unsigned membership,
+                           const uint32_t *groups, unsigned ng,
+                           unsigned requested, int dir) {
+  unsigned remaining = requested;
+  for (unsigned i = 0; i < p->count; i++) {
+    const struct native_ace *a = &p->ace[i];
+    if (!(a->flags & (dir ? NDIR : NFILE)))
+      continue;
+    unsigned bits = a->bits & (NDATA | (dir ? 64 : 0));
+    unsigned gi = a->tag == 8 ? group_index(groups, ng, a->id) : 0;
+    if (!(a->tag == 32 || (a->tag == 1 && uid == owner) ||
+          (a->tag == 2 && uid == a->id) ||
+          ((a->tag == 4 || a->tag == 8) && gi < ng &&
+           (membership & (1U << gi)))))
+      continue;
+    if (a->kind == 2 && (bits & requested))
       return 0;
-    if (kind == 1) {
+    if (a->kind == 1) {
       remaining &= ~bits;
       if (!remaining)
         return 1;
     }
   }
-  unsigned fallback = uid == owner ? mode >> 6 : group ? mode >> 3 : mode;
-  return !(remaining & ~nrights(fallback & 7, directory));
+  unsigned fallback = uid == owner     ? mode >> 6
+                      : membership & 1 ? mode >> 3
+                                       : mode;
+  return !(remaining & ~nrights(fallback & 7, dir));
 }
-static int native_perm(const unsigned char *data, size_t n, unsigned mode,
-                       uint32_t owner, uint32_t uid, int group, int dir) {
-  int r = native_decision(data, n, mode, owner, uid, group, 2, dir);
-  int w = native_decision(data, n, mode, owner, uid, group, 4, dir);
-  int a = native_decision(data, n, mode, owner, uid, group, 32, dir);
-  int x = native_decision(data, n, mode, owner, uid, group, 8, dir);
+static int native_perm(const struct native_policy *p, unsigned mode,
+                       uint32_t owner, uint32_t uid, unsigned membership,
+                       const uint32_t *groups, unsigned ng, int dir) {
+  int r = native_decision(p, mode, owner, uid, membership, groups, ng, 2, dir);
+  int w = native_decision(p, mode, owner, uid, membership, groups, ng, 4, dir);
+  int a = native_decision(p, mode, owner, uid, membership, groups, ng, 32, dir);
+  int x = native_decision(p, mode, owner, uid, membership, groups, ng, 8, dir);
   return w != a ? -1 : (r ? 4 : 0) | (w ? 2 : 0) | (x ? 1 : 0);
 }
-static void nput(unsigned char *p, uint32_t v, unsigned bytes) {
-  for (unsigned i = 0; i < bytes; i++)
-    p[i] = v >> (8 * i);
-}
 int policy_native_create(const unsigned char *data, size_t n, unsigned baseline,
-                         uint32_t owner, int dir, unsigned *mode,
+                         uint32_t owner, uint32_t gid, int dir, unsigned *mode,
                          unsigned char **acl, size_t *length) {
-  if (baseline > 0777 || owner == UINT32_MAX || (dir != 0 && dir != 1))
+  *acl = NULL;
+  *length = 0;
+  if (baseline > 0777 || owner == UINT32_MAX || gid == UINT32_MAX ||
+      (dir != 0 && dir != 1))
     return EINVAL;
-  int error = policy_native_valid(data, n);
-  if (error)
-    return error;
-  uint32_t users[8];
-  unsigned count = 0;
-  for (size_t at = 12; at < n; at += 16) {
-    uint32_t id = le(data + at + 4, 4);
-    if (le(data + at, 4) != 2 || id == owner ||
-        !(le(data + at + 12, 4) & (NDATA | (dir ? 64 : 0))))
+  struct native_policy p;
+  int e = native_parse(data, n, &p);
+  if (e)
+    return e;
+  uint32_t users[8], groups[8] = {gid};
+  unsigned nu = 0, ng = 1, applicable = 0;
+  for (unsigned i = 0; i < p.count; i++) {
+    struct native_ace *a = &p.ace[i];
+    if (!(a->flags & (dir ? NDIR : NFILE)))
       continue;
-    unsigned i;
-    for (i = 0; i < count && users[i] != id; i++)
-      ;
-    if (i == count)
-      users[count++] = id;
+    if (!(a->bits & (NDATA | (dir ? 64 : 0))))
+      continue;
+    applicable++;
+    if (a->tag == 2 && a->id != owner) {
+      unsigned j;
+      for (j = 0; j < nu && users[j] != a->id; j++)
+        ;
+      if (j == nu)
+        users[nu++] = a->id;
+    }
+    if (a->tag == 8 && group_index(groups, ng, a->id) == ng)
+      groups[ng++] = a->id;
   }
-  for (unsigned i = 0; i < count; i++)
-    for (unsigned j = i + 1; j < count; j++)
-      if (users[j] < users[i]) {
-        uint32_t t = users[i];
-        users[i] = users[j];
-        users[j] = t;
-      }
-  uint32_t other = UINT32_MAX;
-  int perms[11];
-  perms[0] = native_perm(data, n, baseline, owner, owner, 0, dir);
-  for (unsigned i = 0; i < count; i++)
-    perms[i + 1] = native_perm(data, n, baseline, owner, users[i], 0, dir);
-  perms[count + 1] = native_perm(data, n, baseline, owner, other, 1, dir);
-  perms[count + 2] = native_perm(data, n, baseline, owner, other, 0, dir);
-  for (unsigned i = 0; i < count + 3; i++)
-    if (perms[i] < 0)
+  if (!applicable) {
+    *mode = baseline;
+    return 0;
+  }
+  sort_ids(users, nu);
+  sort_ids(groups + 1, ng - 1);
+  int up[9], gp[8], other;
+  up[0] = native_perm(&p, baseline, owner, owner, 0, groups, ng, dir);
+  for (unsigned i = 0; i < nu; i++)
+    up[i + 1] = native_perm(&p, baseline, owner, users[i], 0, groups, ng, dir);
+  for (unsigned i = 0; i < ng; i++)
+    gp[i] =
+        native_perm(&p, baseline, owner, UINT32_MAX, 1U << i, groups, ng, dir);
+  other = native_perm(&p, baseline, owner, UINT32_MAX, 0, groups, ng, dir);
+  if (other < 0)
+    return EOPNOTSUPP;
+  for (unsigned i = 0; i <= nu; i++)
+    if (up[i] < 0)
       return EOPNOTSUPP;
-  for (unsigned i = 0; i < count + 2; i++) {
-    uint32_t uid = i == 0 ? owner : i <= count ? users[i - 1] : other;
-    for (int group = 0; group < 2; group++)
+  for (unsigned i = 0; i < ng; i++)
+    if (gp[i] < 0)
+      return EOPNOTSUPP;
+  for (unsigned actor = 0; actor < nu + 2; actor++) {
+    uint32_t uid = actor == 0    ? owner
+                   : actor <= nu ? users[actor - 1]
+                                 : UINT32_MAX;
+    for (unsigned membership = 0; membership < (1U << ng); membership++)
       for (unsigned subset = 1; subset < (dir ? 32 : 16); subset++) {
         unsigned requested = (subset & 1 ? 2 : 0) | (subset & 2 ? 4 : 0) |
                              (subset & 4 ? 32 : 0) | (subset & 8 ? 8 : 0) |
                              (subset & 16 ? 64 : 0);
         unsigned want = (subset & 1 ? 4 : 0) | (subset & 6 ? 2 : 0) |
                         (subset & 8 ? 1 : 0) | (subset & 16 ? 3 : 0);
-        int perm = i <= count ? perms[i] : perms[count + (group ? 1 : 2)];
-        if (native_decision(data, n, baseline, owner, uid, group, requested,
-                            dir) != ((perm & want) == want))
+        int posix = actor <= nu   ? (up[actor] & want) == want
+                    : !membership ? (other & want) == want
+                                  : 0;
+        if (actor > nu && membership)
+          for (unsigned g = 0; g < ng; g++)
+            if ((membership & (1U << g)) && (gp[g] & want) == want)
+              posix = 1;
+        if (native_decision(&p, baseline, owner, uid, membership, groups, ng,
+                            requested, dir) != posix)
           return EOPNOTSUPP;
       }
   }
-  unsigned mask = perms[count + 1];
-  for (unsigned i = 1; i <= count; i++)
-    mask |= perms[i];
-  *mode = (perms[0] << 6) | (mask << 3) | perms[count + 2];
-  *length = 4 + 4 * (3 + (count ? 1 : 0)) + 8 * count;
+  unsigned mask = 0;
+  for (unsigned i = 0; i < ng; i++)
+    mask |= gp[i];
+  for (unsigned i = 1; i <= nu; i++)
+    mask |= up[i];
+  *mode = (up[0] << 6) | (mask << 3) | other;
+  int extended = nu || ng > 1;
+  *length = 16 + (extended ? 4 : 0) + 8 * (nu + ng - 1);
   *acl = calloc(*length, 1);
   if (!*acl)
     return ENOMEM;
   nput(*acl, 1, 4);
   size_t at = 4;
   nput(*acl + at, 1, 2);
-  nput(*acl + at + 2, perms[0], 2);
+  nput(*acl + at + 2, up[0], 2);
   at += 4;
-  for (unsigned i = 0; i < count; i++) {
+  for (unsigned i = 0; i < nu; i++) {
     nput(*acl + at, 2, 2);
-    nput(*acl + at + 2, perms[i + 1], 2);
+    nput(*acl + at + 2, up[i + 1], 2);
     nput(*acl + at + 4, users[i], 4);
     at += 8;
   }
   nput(*acl + at, 4, 2);
-  nput(*acl + at + 2, perms[count + 1], 2);
+  nput(*acl + at + 2, gp[0], 2);
   at += 4;
-  if (count) {
+  for (unsigned i = 1; i < ng; i++) {
+    nput(*acl + at, 8, 2);
+    nput(*acl + at + 2, gp[i], 2);
+    nput(*acl + at + 4, groups[i], 4);
+    at += 8;
+  }
+  if (extended) {
     nput(*acl + at, 16, 2);
     nput(*acl + at + 2, mask, 2);
     at += 4;
   }
   nput(*acl + at, 32, 2);
-  nput(*acl + at + 2, perms[count + 2], 2);
+  nput(*acl + at + 2, other, 2);
   return 0;
 }

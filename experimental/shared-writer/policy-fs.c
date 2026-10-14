@@ -148,7 +148,7 @@ errcode_t policy_creation(ext2_filsys fs, ext2_ino_t parent,
       e = EOPNOTSUPP; /* never combine two inheritance authorities */
     else if (e == EXT2_ET_EA_KEY_NOT_FOUND)
       e = policy_native_create(native, native_length, requested & ~c->umask,
-                               *uid, directory, mode, acl, length);
+                               *uid, *gid, directory, mode, acl, length);
     free(native);
     return e;
   }
