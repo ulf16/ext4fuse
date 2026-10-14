@@ -21,7 +21,8 @@ enum mutation_kind {
   MUT_CHOWN = 12,
   MUT_UTIMENS = 13,
   MUT_SETXATTR = 14,
-  MUT_REMOVEXATTR = 15
+  MUT_REMOVEXATTR = 15,
+  MUT_ALLOCATE = 16
 };
 struct mutation {
   enum mutation_kind kind;

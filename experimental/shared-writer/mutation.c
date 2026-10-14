@@ -274,12 +274,126 @@ errcode_t mutation_apply_grant(ext2_filsys fs, const struct mutation *op,
                                const struct credentials *credentials,
                                const struct inode_grant *grant) {
   if (policy_credentials(credentials) || grant_valid(grant) || !op ||
-      (op->kind != MUT_WRITE && op->kind != MUT_TRUNCATE) || op->mode ||
-      op->uid || op->gid)
+      (op->kind != MUT_WRITE && op->kind != MUT_TRUNCATE &&
+       op->kind != MUT_ALLOCATE) ||
+      op->mode || op->uid || op->gid)
     return EINVAL;
   if (!(grant->access & GRANT_WRITE))
     return EBADF;
   return apply_inode(fs, op, grant->inode, credentials, grant);
+}
+/* Byte edges are zeroed only when already mapped: punching a hole must
+ * never allocate a block or expose data from a previously unwritten extent. */
+static errcode_t zero_edge(ext2_filsys fs, ext2_ino_t ino,
+                           struct ext2_inode *in, uint64_t start,
+                           uint64_t end) {
+  if (start >= end)
+    return 0;
+  blk64_t physical = 0;
+  int flags = 0;
+  errcode_t e = ext2fs_bmap2(fs, ino, in, NULL, 0, start / fs->blocksize,
+                             &flags, &physical);
+  if (e || !physical || (flags & BMAP_RET_UNINIT))
+    return e;
+  char *data = malloc(fs->blocksize);
+  if (!data)
+    return ENOMEM;
+  e = io_channel_read_blk64(fs->io, physical, 1, data);
+  if (!e) {
+    memset(data + start % fs->blocksize, 0, end - start);
+    e = io_channel_write_blk64(fs->io, physical, 1, data);
+  }
+  free(data);
+  return e;
+}
+static uint64_t range_word(const unsigned char *p) {
+  uint64_t v = 0;
+  for (unsigned i = 0; i < 8; i++)
+    v |= (uint64_t)p[i] << (i * 8);
+  return v;
+}
+struct physical_end {
+  uint64_t last;
+};
+static int find_physical_end(ext2_filsys fs, blk64_t *block, e2_blkcnt_t index,
+                             blk64_t ref, int offset, void *private) {
+  (void)fs;
+  (void)ref;
+  (void)offset;
+  struct physical_end *end = private;
+  if (*block && index >= 0 && (uint64_t)index + 1 > end->last)
+    end->last = index + 1;
+  return 0;
+}
+static errcode_t allocate_range(ext2_filsys fs, ext2_ino_t ino,
+                                struct ext2_inode *in,
+                                const struct mutation *op) {
+  if (op->length != 16 || !op->data)
+    return EINVAL;
+  if (ext2fs_has_feature_bigalloc(fs->super) ||
+      ext2fs_has_feature_quota(fs->super) ||
+      ext2fs_has_feature_ea_inode(fs->super) ||
+      ext2fs_has_feature_orphan_present(fs->super))
+    return EOPNOTSUPP;
+  uint64_t length = range_word(op->data),
+           mode = range_word((const unsigned char *)op->data + 8);
+  if (mode != 0 && mode != 1 && mode != 3 && mode != 4)
+    return EOPNOTSUPP;
+  if (!length || op->offset > MAX_FILE || length > MAX_FILE - op->offset)
+    return EINVAL;
+  if (in->i_flags & EXT2_APPEND_FL)
+    return EPERM;
+  uint64_t pointers = fs->blocksize / 4;
+  uint64_t maxblocks = in->i_flags & EXT4_EXTENTS_FL
+                           ? UINT32_MAX
+                           : 12 + pointers + pointers * pointers +
+                                 pointers * pointers * pointers;
+  uint64_t start = op->offset;
+  if (mode == 4) {
+    if (start)
+      return EOPNOTSUPP;
+    struct physical_end allocated = {0};
+    errcode_t e = ext2fs_block_iterate3(fs, ino, BLOCK_FLAG_READ_ONLY, NULL,
+                                        find_physical_end, &allocated);
+    if (e)
+      return e;
+    start = allocated.last * fs->blocksize;
+    if (length > MAX_FILE - start)
+      return EFBIG;
+  }
+  uint64_t end = start + length, size = EXT2_I_SIZE(in), block = fs->blocksize;
+  if (end > maxblocks * block)
+    return EFBIG;
+  /* Classic indirect mappings cannot represent valid keep-size allocation
+   * beyond EOF. Reject it rather than publish an image e2fsck would repair. */
+  if (!(in->i_flags & EXT4_EXTENTS_FL) && (mode == 1 || mode == 4) &&
+      end > size)
+    return EOPNOTSUPP;
+  errcode_t e = 0;
+  if (mode == 3) {
+    uint64_t first = (op->offset + block - 1) / block, last = end / block;
+    if (op->offset % block)
+      e = zero_edge(fs, ino, in, op->offset,
+                    end < first * block ? end : first * block);
+    if (!e && end % block && end / block != op->offset / block)
+      e = zero_edge(fs, ino, in, end / block * block, end);
+    if (!e && !(op->offset % block) && end % block &&
+        end / block == op->offset / block)
+      e = zero_edge(fs, ino, in, op->offset, end);
+    if (!e && first < last)
+      e = ext2fs_punch(fs, ino, in, NULL, first, last - 1);
+  } else {
+    int flags = in->i_flags & EXT4_EXTENTS_FL ? EXT2_FALLOCATE_FORCE_UNINIT
+                                              : EXT2_FALLOCATE_ZERO_BLOCKS;
+    e = ext2fs_fallocate(fs, flags, ino, in, ~0ULL, start / block,
+                         (end + block - 1) / block - start / block);
+    if (!e && !mode && end > size) {
+      e = ext2fs_inode_size_set(fs, in, end);
+      if (!e)
+        e = ext2fs_write_inode(fs, ino, in);
+    }
+  }
+  return e;
 }
 static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
                              ext2_ino_t ino,
@@ -315,7 +429,9 @@ static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
                         : 12 + pointers + pointers * pointers +
                               pointers * pointers * pointers;
   uint64_t end = op->offset + op->length;
-  if ((op->kind == MUT_TRUNCATE ? op->offset : end) > blocks * fs->blocksize)
+  if (((op->kind == MUT_TRUNCATE || op->kind == MUT_ALLOCATE)
+           ? op->offset
+           : end) > blocks * fs->blocksize)
     return EFBIG;
   if ((in.i_flags & EXT2_APPEND_FL) &&
       (op->kind == MUT_TRUNCATE || (grant && !(grant->flags & GRANT_APPEND)) ||
@@ -327,6 +443,10 @@ static errcode_t apply_inode(ext2_filsys fs, const struct mutation *op,
       e = policy_writable(fs, ino);
     if (e)
       return e;
+  }
+  if (op->kind == MUT_ALLOCATE) {
+    e = allocate_range(fs, ino, &in, op);
+    return e ? e : touch(fs, ino, credentials && credentials->uid != 0);
   }
   if (op->kind == MUT_WRITE && !op->length)
     return 0;

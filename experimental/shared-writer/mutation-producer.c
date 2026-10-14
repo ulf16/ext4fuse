@@ -194,7 +194,11 @@ int main(int argc, char **argv) {
     e = namespace_reap(fs, pins, pin_count);
   struct inode_grant opened[64] = {0};
   for (unsigned i = 0; !e && i < count; i++)
-    e = ops[i].kind >= MUT_CHMOD
+    e = ops[i].kind == MUT_ALLOCATE
+            ? (by_inode
+                   ? mutation_apply_grant(fs, &ops[i], &credentials, &grants[i])
+                   : EINVAL)
+        : ops[i].kind >= MUT_CHMOD
             ? metadata_apply(fs, &ops[i], enforce ? &credentials : NULL,
                              by_inode ? &grants[i] : NULL)
         : ops[i].kind == MUT_OPEN && at

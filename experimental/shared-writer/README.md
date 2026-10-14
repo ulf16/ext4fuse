@@ -1507,3 +1507,78 @@ I/O fail-closed behavior and malformed/changed device rejection.
 writes through both Session and a real low-level FUSE mount, abrupt mount-group
 loss, guarded recovery, orphan reaping, clean remount and independent e2fsck.
 No test enumerates or selects a user's physical disk.
+
+
+## Local file locking and range allocation
+
+The private mount explicitly leaves POSIX record locks and `flock` in the host
+kernel by disabling remote-lock capabilities. The kernel owns conflict checks,
+F_GETLK replies, range splitting, blocking waiters, interruption and process/open
+file-description lifetime. Locks follow inode identity through hard links, rename
+and unlink; normal writes remain advisory. POSIX locks disappear on the owning
+process's close of any descriptor for that inode; flock follows duplicated open
+file descriptions. These are local host semantics, not distributed/NFS locks.
+The frontend was already relying on local FUSE locking; this stage makes that
+choice explicit and adds actual cross-process regression coverage.
+
+`FileHandle.allocate(offset,length,mode=0)` uses the same atomic mutation, redo,
+checkpoint and continuous-device publication path as writes. Modes are allocate
+and grow (0), keep logical size (1), punch while keeping size (3), and Darwin
+physical-EOF preallocation (4, zero offset only). Allocations preserve existing
+data. Extents reserve zero-reading unwritten blocks; classic indirect allocations
+zero newly allocated blocks. Partial punched block edges are zeroed only when
+mapped and initialized; full blocks are freed, and holes/unwritten blocks are
+never allocated just to zero them. Inode flags, write grants, format/overflow
+bounds and transaction resource limits still apply. Failed operations publish no
+partial allocation. Classic mappings reject keep-size allocations beyond EOF,
+which cannot pass independent e2fsck with that representation. Extent conversion,
+metadata allocation and the bounded overlay can still fail; this prototype does
+not promise unlimited reservations or remove those remaining write limits.
+
+Linux exposes allocation, KEEP_SIZE and PUNCH_HOLE|KEEP_SIZE through native
+`fallocate`; other flags (zero/collapse/insert range, etc.) fail EOPNOTSUPP.
+macOS exposes F_PREALLOCATE through macFUSE's Darwin allocation flags. Only
+noncontiguous physical-EOF allocation is supported; contiguous and absolute-volume
+requests fail. Native F_PUNCHHOLE on the tested macFUSE 5.4.0 supplies no copied
+argument buffer. The frontend refuses that request safely, without dereferencing
+the opaque kernel pointer ([upstream report](https://github.com/macfuse/macfuse/issues/1107)).
+
+For mounted macOS hole punching, explicitly enable the private control socket:
+
+```sh
+mkdir -m 700 /private/tmp/ext4-control-EXAMPLE
+python3 experimental/shared-writer/mount-broker.py --work RUNTIME --root CHAIN \
+  --mountpoint MOUNT --control-socket /private/tmp/ext4-control-EXAMPLE/control.sock
+# Path is absolute INSIDE the virtual filesystem, not the host mountpoint path.
+python3 experimental/shared-writer/mount-control.py \
+  --socket /private/tmp/ext4-control-EXAMPLE/control.sock punch /file 4096 16384
+```
+
+`live-device.py mount` accepts the same option. The socket must be outside the
+mount and managed chain, in a private owned directory. Peer UID is authenticated;
+frames, operations and integer ranges are bounded. The server resolves paths and
+obtains fresh write grants under the session mutex; callers cannot supply inode
+grants or credentials. A control acknowledgement follows the normal durable
+commit/device flush, and existing FUSE reads observe the refreshed image. Socket
+cleanup preserves unrelated replacement paths. This is an explicit portable
+command interface, not transparent native F_PUNCHHOLE support on macOS.
+
+`test-allocation.py` verifies classic/extent profiles, checksummed metadata,
+preallocation states with e2fsck before subsequent edits, overlapping byte edges,
+zero preservation, unchanged size, read-only/invalid-range refusal, open-unlink
+allocation, injected allocation rollback and interrupted punch replay.
+`test-mounted-allocation-locks.py` tests real record/flock conflicts, F_GETLK,
+shared/disjoint/split ranges, blocking waits while FUSE writes continue, killed
+waiters, any-close POSIX release, dup flock lifetime, hard-link/rename identity,
+advisory writes, native allocation, Linux punches and the private macOS command.
+Native macOS punch refusal is reported separately in its JSON results.
+
+On the tested macOS mount, native preallocation leaves cached `st_blocks`
+unchanged until kernel invalidation. The private command invalidates inode and
+file-data caches before acknowledgement, so existing descriptors see the
+new bytes. Native macOS `st_blocks` still does not match ext4 allocation counts,
+so tests require exact reclamation through independent debugfs accounting. Kernel invalidation runs on a separate
+notification thread to avoid blocking the serialized request loop. Native
+allocation reporting remains a platform integration gap;
+Linux tests require native block counts to change. Space reclamation is also
+verified independently with debugfs and e2fsck.

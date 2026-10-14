@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only
  * Experimental FUSE 3 bridge. All writes belong to the parent Python broker;
- * this process never opens an image/device. Foreground, single-threaded only.
+ * this process never opens an image/device. Foreground, serialized requests;
+ * a separate thread handles explicit kernel cache invalidation.
  */
 #include <errno.h>
 #include <fcntl.h>
@@ -13,6 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#ifdef __APPLE__
+#include <sys/vnode.h>
+#endif
+#include <sys/ioctl.h>
 #include <sys/xattr.h>
 #include <time.h>
 #include <unistd.h>
@@ -22,6 +27,33 @@ static int failed;
 static uid_t owner;
 static mode_t initial_umask;
 static struct fuse_session *session;
+static int notify_read = -1, notify_ack = -1, notify_stop;
+static pthread_t notify_thread;
+static void *notify_main(void *unused) {
+  (void)unused;
+  while (!__atomic_load_n(&notify_stop, __ATOMIC_ACQUIRE)) {
+    struct pollfd p = {notify_read, POLLIN, 0};
+    int ready = poll(&p, 1, 100);
+    if (ready < 0 && errno == EINTR)
+      continue;
+    if (ready == 0)
+      continue;
+    if (ready < 0 || !(p.revents & POLLIN))
+      break;
+    unsigned char input[8], reply[8];
+    if (read(notify_read, input, 8) != 8)
+      break;
+    uint64_t node = 0;
+    for (unsigned i = 0; i < 8; i++)
+      node |= (uint64_t)input[i] << (8 * i);
+    int e = fuse_lowlevel_notify_inval_inode(session, node, 0, 0);
+    for (unsigned i = 0; i < 8; i++)
+      reply[i] = (uint64_t)(int64_t)e >> (8 * i);
+    if (write(notify_ack, reply, 8) != 8)
+      break;
+  }
+  return NULL;
+}
 static void stop_session(void) {
   failed = 1;
   if (session)
@@ -349,6 +381,71 @@ static void write_cb(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t n,
   else
     fuse_reply_write(req, value);
 }
+static void fallocate_cb(fuse_req_t req, fuse_ino_t ino, int mode, off_t offset,
+                         off_t length, struct fuse_file_info *fi) {
+#ifdef __APPLE__
+  /* macFUSE passes Darwin VNOP_ALLOCATE flags, not Linux FALLOC_FL_*.
+   * Contiguous and absolute-volume requests cannot be promised here. */
+  if (!(mode & PREALLOCATE) || !(mode & ALLOCATEFROMPEOF) ||
+      (mode & ~(PREALLOCATE | ALLOCATEALL | ALLOCATEFROMPEOF))) {
+    error(req, -EOPNOTSUPP);
+    return;
+  }
+  mode = 4;
+#else
+  if (mode != 0 && mode != 1 && mode != 3) {
+    error(req, -EOPNOTSUPP);
+    return;
+  }
+#endif
+  if (mode != 0 && mode != 1 && mode != 3 && mode != 4) {
+    error(req, -EOPNOTSUPP);
+    return;
+  }
+  if (offset < 0 || length <= 0 ||
+      (uint64_t)length > INT64_MAX - (uint64_t)offset) {
+    error(req, -EINVAL);
+    return;
+  }
+  unsigned char data[16];
+  put(data, offset, 8);
+  put(data + 8, length, 8);
+  error(req, empty(req, 128, NULL, data, sizeof(data), ino, fi->fh, mode));
+}
+#ifdef __APPLE__
+/* macFUSE can send an opaque kernel pointer with no copied F_PUNCHHOLE data.
+ * Accept only an actual bounded input buffer; never dereference that pointer.
+ */
+static void ioctl_cb(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
+                     struct fuse_file_info *fi, unsigned flags,
+                     const void *in_buf, size_t in_size, size_t out_size) {
+  (void)arg;
+  if (cmd != F_PUNCHHOLE || flags || out_size) {
+    error(req, -ENOTTY);
+    return;
+  }
+  if (in_size != sizeof(fpunchhole_t)) {
+    error(req, -EOPNOTSUPP);
+    return;
+  }
+  fpunchhole_t punch;
+  memcpy(&punch, in_buf, sizeof(punch));
+  if (punch.fp_flags || punch.reserved || punch.fp_offset < 0 ||
+      punch.fp_length <= 0 ||
+      (uint64_t)punch.fp_length > INT64_MAX - (uint64_t)punch.fp_offset) {
+    error(req, -EINVAL);
+    return;
+  }
+  unsigned char data[16];
+  put(data, punch.fp_offset, 8);
+  put(data + 8, punch.fp_length, 8);
+  int e = empty(req, 128, NULL, data, 16, ino, fi->fh, 3);
+  if (e)
+    error(req, e);
+  else
+    fuse_reply_ioctl(req, 0, NULL, 0);
+}
+#endif
 static void release_cb(fuse_req_t req, fuse_ino_t ino,
                        struct fuse_file_info *fi) {
   error(req, empty(req, 109, NULL, NULL, 0, ino, fi->fh, 0));
@@ -670,6 +767,15 @@ static void removexattr_cb(fuse_req_t req, fuse_ino_t ino, const char *name) {
 static void init_cb(void *unused, struct fuse_conn_info *info) {
   (void)unused;
   info->want &= ~FUSE_CAP_WRITEBACK_CACHE;
+#ifdef FUSE_DARWIN_CAP_FALLOCATE
+  fuse_darwin_set_feature_flag(info, FUSE_DARWIN_CAP_FALLOCATE);
+#endif
+  /* Private local mount: let the kernel own POSIX/flock lock tables, waiters,
+   * interruption and descriptor lifetime. No remote lock authority exists. */
+  info->want &= ~FUSE_CAP_POSIX_LOCKS;
+#ifdef FUSE_CAP_FLOCK_LOCKS
+  info->want &= ~FUSE_CAP_FLOCK_LOCKS;
+#endif
 #ifdef FUSE_CAP_POSIX_ACL
   info->want &= ~FUSE_CAP_POSIX_ACL;
 #endif
@@ -707,6 +813,10 @@ static const struct fuse_lowlevel_ops operations = {
     .create = create_cb,
     .read = read_cb,
     .write = write_cb,
+    .fallocate = fallocate_cb,
+#ifdef __APPLE__
+    .ioctl = ioctl_cb,
+#endif
     .flush = flush_cb,
     .release = release_cb,
     .fsync = fsync_cb,
@@ -721,7 +831,7 @@ static const struct fuse_lowlevel_ops operations = {
     .listxattr = listxattr_cb,
     .removexattr = removexattr_cb};
 int main(int argc, char **argv) {
-  if (argc != 2 || getuid() != geteuid()) {
+  if ((argc != 2 && argc != 4) || getuid() != geteuid()) {
     fprintf(
         stderr,
         "Usage: mount-frontend MOUNTPOINT (private broker pipe required)\n");
@@ -748,7 +858,7 @@ int main(int argc, char **argv) {
   struct fuse_args args =
       FUSE_ARGS_INIT(sizeof(fixed) / sizeof(fixed[0]), fixed);
   struct fuse_cmdline_opts opts = {0};
-  int result = 2, signals = 0, mounted = 0;
+  int result = 2, signals = 0, mounted = 0, notifying = 0;
   if (fuse_parse_cmdline(&args, &opts))
     goto done;
   session = fuse_session_new(&args, &operations, sizeof(operations), NULL);
@@ -760,8 +870,19 @@ int main(int argc, char **argv) {
   if (fuse_session_mount(session, opts.mountpoint))
     goto done;
   mounted = 1;
+  if (argc == 4) {
+    notify_read = atoi(argv[2]);
+    notify_ack = atoi(argv[3]);
+    if (notify_read < 3 || notify_ack < 3 ||
+        pthread_create(&notify_thread, NULL, notify_main, NULL))
+      goto done;
+    notifying = 1;
+  }
   result = fuse_session_loop(session);
 done:
+  __atomic_store_n(&notify_stop, 1, __ATOMIC_RELEASE);
+  if (notifying)
+    pthread_join(notify_thread, NULL);
   if (mounted)
     fuse_session_unmount(session);
   if (signals)

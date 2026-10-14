@@ -461,3 +461,29 @@ jobs:
           path: |
             ${{ runner.temp }}/live-device/live-device-results.json
             ${{ runner.temp }}/live-device/live-device-native-results.json
+
+  allocation-locks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install allocation and lock test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build allocation runtime with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/allocation-writer" --sanitize
+      - name: Prepare independently checked profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/allocation-writer"
+      - name: Verify atomic allocation, byte edges, orphan lifetime and recovery
+        run: python3 experimental/shared-writer/test-allocation.py --work "$RUNNER_TEMP/allocation-writer"
+      - name: Verify actual mounted allocation syscalls and cross-process locks
+        run: python3 experimental/shared-writer/test-mounted-allocation-locks.py --work "$RUNNER_TEMP/allocation-writer"
+      - name: Save allocation and locking validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allocation-lock-validation
+          path: |
+            ${{ runner.temp }}/allocation-writer/allocation-results.json
+            ${{ runner.temp }}/allocation-writer/mounted-allocation-locks-results.json

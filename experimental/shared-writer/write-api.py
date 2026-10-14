@@ -128,10 +128,14 @@ def encode_grant(credentials, grant, kind, offset=0, data=b''):
     """Internal trusted broker format; never accept inode grants from JSON."""
     if not isinstance(credentials, Credentials) or not isinstance(grant, bytes) or len(grant) != 16:
         raise ValueError('invalid broker grant')
-    if kind not in ('write', 'truncate') or type(offset) is not int or not 0 <= offset <= (2**63-1):
+    if kind not in ('write', 'truncate', 'allocate') or type(offset) is not int or not 0 <= offset <= (2**63-1):
         raise ValueError('invalid handle operation')
     if not isinstance(data, bytes) or len(data)>4*1024*1024 or (kind=='truncate' and data):
         raise ValueError('invalid handle payload')
+    if kind=='allocate':
+        if len(data)!=16:raise ValueError('allocation payload')
+        length,mode=struct.unpack('<QQ',data)
+        if not length or length>2**63-1-offset or mode not in (0,1,3,4):raise ValueError('allocation bounds or flags')
     inode, generation, access, flags = struct.unpack('<IIII',grant)
     if not inode or not 1<=access<=3 or flags>1 or not access&2:
         raise ValueError('invalid write grant')
@@ -139,7 +143,7 @@ def encode_grant(credentials, grant, kind, offset=0, data=b''):
         raise ValueError('transaction bounds')
     context=credentials.encode()
     return (b'E4REQ003'+struct.pack('<II',1,len(context))+context+
-            HEADER.pack(KINDS[kind],16,0,0,0,0,offset,len(data))+grant+data)
+            HEADER.pack(16 if kind=='allocate' else KINDS[kind],16,0,0,0,0,offset,len(data))+grant+data)
 
 
 def encode_broker(operations, credentials, pins):

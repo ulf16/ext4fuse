@@ -44,6 +44,8 @@ with tempfile.TemporaryDirectory(prefix='continuous-native-',dir=a.work) as temp
     check(live.magic(c.target)==b'\0\0')
     h=s.openat(None,'/native','rw',create=True);h.write(b'continuous actual device')
     check(live.scan(c.target).root()==s.state['sha256']);check(c.state['head']==s.state['head'])
+    h.allocate(8192,4096,1);check(live.scan(c.target).root()==s.state['sha256'])
+    h.allocate(2,7,3);check(h.read(2,7)==bytes(7));check(live.scan(c.target).root()==s.state['sha256'])
     s.unlink('/native');h.write(b'orphan');check(live.scan(c.target).root()==s.state['sha256']);h.close()
     s.mkdir('/directory');s.symlink('directory','/link');check(live.scan(c.target).root()==s.state['sha256'])
    c.finish();check(live.magic(c.target)==b'\x53\xef')

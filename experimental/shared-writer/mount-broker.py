@@ -322,10 +322,10 @@ class LowBroker(Broker):
             return 0,b''
         if not self.initialized:raise OSError(errno.EBUSY,'mount handshake required')
         named={101,105,113,114,115,116,117,118}
-        payload={106,107,108,116,118,124,125,126}
+        payload={106,107,108,116,118,124,125,126,128}
         if (bool(path)!=(op in named) or (data and op not in payload) or
             (op==106 and len(data)!=8) or (op==108 and len(data)!=64) or
-            (op not in (103,106,107,108,109,111,112,116,121,122) and offset)):
+            (op not in (103,106,107,108,109,111,112,116,121,122,128) and offset)):
             raise OSError(errno.EINVAL,'invalid low-level operation shape')
         if op==102:
             if path or data or offset:raise OSError(errno.EINVAL,'invalid forget request')
@@ -390,6 +390,11 @@ class LowBroker(Broker):
             request=session.write_api.encode_at([dict(kind='link',path=b'node',target=path)],self.s.credentials,pins,[(base,target)])
             self.s._apply_request(request)
             return self.finish_entry(self.remember(parent,path))
+        if op==128:
+            if len(data)!=16:raise OSError(errno.EINVAL,'allocation frame')
+            start,length=struct.unpack('<QQ',data)
+            if arg not in (0,1,3,4):raise OSError(errno.EOPNOTSUPP,'allocation mode')
+            self.bound(offset,token).allocate(start,length,arg);return 0,b''
         if op==119:return 0,self.s._rpc(40,self.s._file(h))[1]
         if op==120:return 0,self.s._mount_geometry()
         if op==123:self.s._rpc(41,self.s._file(h),arg);return 0,b''
@@ -454,7 +459,8 @@ def serve(broker,frontend):
             return value
         groups=struct.unpack('<'+'I'*ngroups,read(ngroups*4));path=read(pathlen);data=read(datalen)
         error,size,result=0,0,b''
-        try:size,result=broker.dispatch(op,path,data,uid,gid,umask,groups,token,offset,arg)
+        try:
+            with broker.s._mutex:size,result=broker.dispatch(op,path,data,uid,gid,umask,groups,token,offset,arg)
         except OSError as e:error=e.errno or errno.EIO
         except (ValueError,KeyError,struct.error):error=errno.EINVAL
         if len(result)>LIMIT:raise OSError(errno.EIO,'oversized mount reply')
@@ -475,11 +481,39 @@ def validate_mount(root,work,mount):
     return root,work,mount
 
 
-def run_mount(s,work,mount):
+def run_mount(s,work,mount,control_socket=None):
+    if control_socket is not None:
+        socket_path=Path(control_socket).absolute()
+        if socket_path.resolve().is_relative_to(mount):raise ValueError('control socket must be outside mountpoint')
+    return _run_mount(s,work,mount,control_socket)
+
+def _run_mount(s,work,mount,control_socket):
+    from mount_control import control
+    import select
     broker=LowBroker(s)
-    frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount)],stdin=subprocess.PIPE,stdout=subprocess.PIPE)
+    notify_read,notify_write=os.pipe();ack_read,ack_write=os.pipe()
     try:
-        serve(broker,frontend)
+        frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount),str(notify_read),str(ack_write)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,pass_fds=(notify_read,ack_write))
+    except BaseException:
+        for fd in (notify_read,notify_write,ack_read,ack_write):os.close(fd)
+        raise
+    os.close(notify_read);os.close(ack_write)
+    def notify(inode):
+        with s._mutex:numbers=[number for number,node in broker.nodes.items() if node['inode']==inode]
+        try:
+            for number in numbers:
+                os.write(notify_write,struct.pack('<Q',number))
+                if not select.select([ack_read],[],[],10)[0]:raise OSError(errno.EIO,'kernel invalidation timed out')
+                raw=os.read(ack_read,8)
+                if len(raw)!=8:raise OSError(errno.EIO,'kernel invalidation channel closed')
+                result=struct.unpack('<q',raw)[0]
+                if result not in (0,-errno.ENOENT):raise OSError(abs(result),'kernel invalidation failed')
+        except BaseException:
+            with s._mutex:s._failed=True
+            raise
+
+    try:
+        with control(s,control_socket,notify):serve(broker,frontend)
         result=frontend.wait(timeout=10)
         if result:raise OSError(errno.EIO,f'FUSE frontend exited {result}')
     finally:
@@ -487,6 +521,7 @@ def run_mount(s,work,mount):
             frontend.terminate()
             try:frontend.wait(timeout=10)
             except subprocess.TimeoutExpired:frontend.kill();frontend.wait(timeout=5)
+        os.close(notify_write);os.close(ack_read)
         frontend.stdin.close();frontend.stdout.close()
 
 def main():
@@ -494,11 +529,12 @@ def main():
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--mountpoint',type=Path,required=True)
+    parser.add_argument('--control-socket',type=Path,help='optional socket in a private owned directory outside mountpoint')
     parser.add_argument('--checkpoint-every',type=int,default=64,help='retire completed generations after this many commits; zero disables')
     args=parser.parse_args()
     root,work,mount=validate_mount(args.root,args.work,args.mountpoint)
     mask=os.umask(0);os.umask(mask)
     with session.Session(root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every) as s:
-        run_mount(s,work,mount)
+        run_mount(s,work,mount,args.control_socket)
     print('Experimental mount stopped; managed image and recovery logs retained.',file=sys.stderr)
 if __name__=='__main__':main()

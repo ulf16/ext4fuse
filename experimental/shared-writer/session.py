@@ -714,6 +714,14 @@ class FileHandle:
             self._owner._apply_request(request)
             return len(data)
 
+    def allocate(self, offset, length, mode=0):
+        if type(length) is not int or not 0<length<=2**63-1 or type(mode) is not int or mode not in (0,1,3,4):
+            raise ValueError('allocation length or mode')
+        with self._owner._mutex:
+            _,grant=self._owner._rpc(11,self._owner._file(self))
+            request=write_api.encode_grant(self._owner.credentials,grant,'allocate',offset,struct.pack('<QQ',length,mode))
+            return self._owner._apply_request(request)
+
     def truncate(self, size):
         with self._owner._mutex:
             _, grant = self._owner._rpc(11,self._owner._file(self))
