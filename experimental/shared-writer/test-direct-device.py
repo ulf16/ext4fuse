@@ -91,6 +91,11 @@ with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
      check(rawmagic(image)==bytes(2))
      with s.open('/existing-file') as h:check(h.read()==run(['debugfs','-R','cat /existing-file',source]))
      s.mkdir('/directory');s.symlink('directory','/link')
+     # Opaque device identifiers must survive physical replay and metadata fsck.
+     s.mknod('/device-node',0o20600,major=4095,minor=1048575)
+     s.mknod('/fifo-node',0o10600)
+     s.rename('/device-node','/fifo-node',flags=2)
+     s.rename('/device-node','/fifo-moved',flags=1);s.unlink('/fifo-moved')
      h=s.openat(None,'/directory/direct','rw',create=True);h.write(b'no shadow data');check(h.read()==b'no shadow data')
      h.allocate(8192,4096,1 if 'extents' in source.name else 0);h.allocate(2,4,3);check(h.read(2,4)==bytes(4))
      s.rename('/directory/direct','/renamed');s.unlink('/renamed');h.write(b'orphan direct');check(h.read(0,6)==b'orphan');h.close()

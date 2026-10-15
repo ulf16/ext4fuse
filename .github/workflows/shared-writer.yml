@@ -548,3 +548,35 @@ jobs:
             ${{ runner.temp }}/direct-device/journal-candidate-results.json
             ${{ runner.temp }}/direct-device/journal-candidate-space-results.json
             ${{ runner.temp }}/direct-device/direct-journal-results.json
+
+  namespace-extensions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install namespace and mounted test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Require native FUSE and disposable loop devices
+        run: sudo modprobe fuse && sudo modprobe loop && test -c /dev/fuse
+      - name: Build sanitized namespace runtime
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/namespace-extensions" --sanitize
+      - name: Prepare independently checked profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/namespace-extensions"
+      - name: Verify rename flags, special inode lifecycle, authority and recovery
+        run: python3 experimental/shared-writer/test-namespace-extensions.py --work "$RUNNER_TEMP/namespace-extensions"
+      - name: Verify indexed names and special-inode metadata snapshots
+        run: python3 experimental/shared-writer/test-namespace-extension-storage.py --work "$RUNNER_TEMP/namespace-extensions"
+      - name: Verify native rename, FIFO and socket syscalls
+        run: python3 experimental/shared-writer/test-mounted-namespace-extensions.py --work "$RUNNER_TEMP/namespace-extensions"
+      - name: Verify privileged device-node creation on nodev mounts
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-mounted-namespace-extensions.py --work "$RUNNER_TEMP/namespace-extensions" --limit 2 --result-name mounted-namespace-root-results.json
+      - name: Save namespace extension validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: namespace-extension-validation
+          path: |
+            ${{ runner.temp }}/namespace-extensions/namespace-extensions-results.json
+            ${{ runner.temp }}/namespace-extensions/namespace-extension-storage-results.json
+            ${{ runner.temp }}/namespace-extensions/mounted-namespace-extensions-results.json
+            ${{ runner.temp }}/namespace-extensions/mounted-namespace-root-results.json

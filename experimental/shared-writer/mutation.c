@@ -98,7 +98,7 @@ errcode_t mutation_parent_at(ext2_filsys fs, const struct mutation *op,
     if (target)
       return op->kind == MUT_LINK ? EEXIST : EBUSY;
     if (op->kind == MUT_MKDIR || op->kind == MUT_SYMLINK ||
-        op->kind == MUT_CREATE)
+        op->kind == MUT_CREATE || op->kind == MUT_MKNOD)
       return EEXIST;
     if (op->kind == MUT_LINK)
       return EPERM;

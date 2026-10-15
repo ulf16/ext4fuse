@@ -12,7 +12,7 @@ from durable import directory
 from credentials import Credentials
 
 HEADER = struct.Struct('<IIIIIIQQ')
-KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6, 'mkdir': 7, 'rmdir': 8, 'symlink': 9, 'chmod':11, 'chown':12, 'utimens':13, 'setxattr':14, 'removexattr':15}
+KINDS = {'write': 1, 'truncate': 2, 'create': 3, 'link': 4, 'rename': 5, 'unlink': 6, 'mkdir': 7, 'rmdir': 8, 'symlink': 9, 'chmod':11, 'chown':12, 'utimens':13, 'setxattr':14, 'removexattr':15,'mknod':17}
 
 
 def encode(operations, credentials=None, *, _at=False):
@@ -28,7 +28,7 @@ def encode(operations, credentials=None, *, _at=False):
     for op in operations:
         if not isinstance(op, dict) or op.get('kind') not in (dict(KINDS,open=10) if _at else KINDS):
             raise ValueError('unknown operation')
-        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target'} | ({'flags','follow_symlinks','atime','mtime','name','value_hex'} if _at else set())
+        allowed = {'kind', 'path', 'offset', 'size', 'data_hex', 'mode', 'uid', 'gid', 'target', 'flags', 'major', 'minor'} | ({'flags','follow_symlinks','atime','mtime','name','value_hex'} if _at else set())
         if set(op) - allowed or not isinstance(op.get('path'),(str,bytes) if _at else str):
             raise ValueError('invalid operation fields')
         path = os.fsencode(op['path']) if _at else op['path'].encode('utf-8')
@@ -39,8 +39,8 @@ def encode(operations, credentials=None, *, _at=False):
             raise ValueError('invalid follow option')
         metadata=kind in ('chmod','chown','utimens','setxattr','removexattr')
         if metadata and not _at:raise ValueError('metadata requires trusted at/session context')
-        namespace=kind in ('link','rename','unlink','mkdir','rmdir','symlink')
-        creating=kind in ('create','mkdir','symlink')
+        namespace=kind in ('link','rename','unlink','mkdir','rmdir','symlink','mknod')
+        creating=kind in ('create','mkdir','symlink','mknod')
         if namespace and not _at:
             candidates=(op['path'],op['target']) if kind in ('link','rename') and 'target' in op else (op['path'],)
             for candidate in candidates:
@@ -88,7 +88,9 @@ def encode(operations, credentials=None, *, _at=False):
         elif namespace:
             allowed_fields={'kind','path'}
             if kind in ('link','rename','symlink'):allowed_fields.add('target')
-            if kind=='mkdir':allowed_fields|={'mode','uid','gid'}
+            if kind in ('mkdir','mknod'):allowed_fields|={'mode','uid','gid'}
+            if kind=='mknod':allowed_fields|={'major','minor'}
+            if kind=='rename':allowed_fields.add('flags')
             if kind=='symlink':allowed_fields|={'uid','gid'}
             if _at and kind=='link':allowed_fields.add('follow_symlinks')
             if set(op)-allowed_fields:raise ValueError('invalid namespace fields')
@@ -99,6 +101,15 @@ def encode(operations, credentials=None, *, _at=False):
                 if not data or len(data)>4096 or b'\0' in data:raise ValueError('invalid target')
             else:data=b''
             offset=0
+            if kind=='rename':
+                offset=op.get('flags',0)
+                if type(offset) is not int or offset not in (0,1,2):raise ValueError('invalid rename flags')
+            if kind=='mknod':
+                if type(mode) is not int or mode&~0o170777 or mode&0o170000 not in (0o010000,0o020000,0o060000,0o140000):raise ValueError('invalid special inode type or mode')
+                major=op.get('major',0);minor=op.get('minor',0)
+                if type(major) is not int or not 0<=major<=4095 or type(minor) is not int or not 0<=minor<=1048575:raise ValueError('invalid device number')
+                if mode&0o170000 in (0o010000,0o140000) and (major or minor):raise ValueError('non-device node has device number')
+                offset=major<<32|minor
             if not creating:mode=uid=gid=0
             if kind=='symlink':mode=0o777
         elif kind=='open' and _at:
@@ -115,7 +126,7 @@ def encode(operations, credentials=None, *, _at=False):
             if not isinstance(text,str) or len(text)>8*1024*1024:raise ValueError('data limit')
             data=bytes.fromhex(text);offset=op.get('offset',0)
             if kind=='create' and offset:raise ValueError('create offset must be zero')
-        for name,value,maximum in (('offset',offset,(2**63-1)),('mode',mode,0o7777 if kind=='chmod' else 0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
+        for name,value,maximum in (('offset',offset,(2**63-1)),('mode',mode,0o170777 if kind=='mknod' else 0o7777 if kind=='chmod' else 0o1777 if kind=='mkdir' else 0o777),('uid',uid,2**32-1),('gid',gid,2**32-1)):
             if type(value) is not int or not 0<=value<=maximum:raise ValueError('invalid '+name)
         total += len(data)
         if total > 4 * 1024 * 1024 or offset + len(data) > (2**63-1):

@@ -321,12 +321,15 @@ class Session:
         if type(remove_directory) is not bool:raise ValueError('invalid remove-directory flag')
         return self.applyat([dict(kind='rmdir' if remove_directory else 'unlink',path=path)],directory)
 
-    def renameat(self, source_directory, source, target_directory, target):
-        return self.applyat([dict(kind='rename',path=source,target=target)],source_directory,target_directory=target_directory)
+    def renameat(self, source_directory, source, target_directory, target, *, flags=0):
+        return self.applyat([dict(kind='rename',path=source,target=target,flags=flags)],source_directory,target_directory=target_directory)
 
     def linkat(self, source_directory, source, target_directory, target, *, follow_symlinks=False):
         if type(follow_symlinks) is not bool:raise ValueError('invalid follow option')
         return self.applyat([dict(kind='link',path=source,target=target,follow_symlinks=follow_symlinks)],source_directory,target_directory=target_directory)
+
+    def mknodat(self, directory, path, mode, *, major=0, minor=0):
+        return self.applyat([dict(kind='mknod',path=path,mode=mode,major=major,minor=minor)],directory)
 
     def symlinkat(self, target, directory, path):
         return self.applyat([dict(kind='symlink',path=path,target=target)],directory)
@@ -521,8 +524,8 @@ class Session:
     def link(self, source, target):
         return self.apply([dict(kind='link',path=source,target=target)])
 
-    def rename(self, source, target):
-        return self.apply([dict(kind='rename',path=source,target=target)])
+    def rename(self, source, target, *, flags=0):
+        return self.apply([dict(kind='rename',path=source,target=target,flags=flags)])
 
     def unlink(self, path):
         return self.apply([dict(kind='unlink',path=path)])
@@ -532,6 +535,9 @@ class Session:
 
     def rmdir(self, path):
         return self.apply([dict(kind='rmdir',path=path)])
+
+    def mknod(self, path, mode, *, major=0, minor=0):
+        return self.apply([dict(kind='mknod',path=path,mode=mode,major=major,minor=minor)])
 
     def symlink(self, target, path):
         return self.apply([dict(kind='symlink',path=path,target=target)])

@@ -135,8 +135,9 @@ int main(int argc, char **argv) {
       break;
     }
     ops[i].at_flags = little(header + 20, 4);
-    if (ops[i].at_flags > 1 || (ops[i].at_flags && ops[i].kind != MUT_LINK &&
-                                ops[i].kind < MUT_CHMOD)) {
+    if (ops[i].at_flags > 1 ||
+        (ops[i].at_flags && ops[i].kind != MUT_LINK &&
+         (ops[i].kind < MUT_CHMOD || ops[i].kind > MUT_REMOVEXATTR))) {
       e = EINVAL;
       break;
     }
@@ -194,7 +195,12 @@ int main(int argc, char **argv) {
     e = namespace_reap(fs, pins, pin_count);
   struct inode_grant opened[64] = {0};
   for (unsigned i = 0; !e && i < count; i++)
-    e = ops[i].kind == MUT_ALLOCATE
+    e = ops[i].kind == MUT_MKNOD
+            ? (by_inode
+                   ? EINVAL
+                   : namespace_apply(fs, &ops[i], enforce ? &credentials : NULL,
+                                     pins, pin_count))
+        : ops[i].kind == MUT_ALLOCATE
             ? (by_inode
                    ? mutation_apply_grant(fs, &ops[i], &credentials, &grants[i])
                    : EINVAL)

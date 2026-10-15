@@ -229,7 +229,8 @@ errcode_t metadata_apply(ext2_filsys fs, const struct mutation *op,
   if (e)
     return e;
   unsigned type = in.i_mode & LINUX_S_IFMT;
-  if (type != LINUX_S_IFREG && type != LINUX_S_IFDIR && type != LINUX_S_IFLNK)
+  if (type != LINUX_S_IFREG && type != LINUX_S_IFDIR && type != LINUX_S_IFLNK &&
+      !special_type(type))
     return EOPNOTSUPP;
   if (in.i_flags & GRANT_UNSUPPORTED)
     return EOPNOTSUPP;

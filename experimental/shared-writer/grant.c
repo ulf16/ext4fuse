@@ -39,7 +39,8 @@ static errcode_t identity(ext2_filsys fs, const struct inode_grant *g,
   unsigned type = in->i_mode & LINUX_S_IFMT;
   if (in->i_generation != g->generation ||
       (g->flags == GRANT_NODE
-           ? (type != LINUX_S_IFREG && type != LINUX_S_IFLNK)
+           ? (type != LINUX_S_IFREG && type != LINUX_S_IFLNK &&
+              !special_type(type))
            : type !=
                  (g->flags == GRANT_DIRECTORY ? LINUX_S_IFDIR : LINUX_S_IFREG)))
     return ESTALE;

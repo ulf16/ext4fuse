@@ -50,6 +50,16 @@ errcode_t mount_inode_stat(ext2_filsys fs, ext2_ino_t ino, unsigned char **data,
       removed_dir ? 0 : EXT2_I_SIZE((struct ext2_inode *)&in),
       removed_dir ? 0 : ext2fs_get_stat_i_blocks(fs, (struct ext2_inode *)&in),
       fs->blocksize};
+  /* Field 7 is block size for data inodes, portable major:minor for devices.
+   * It never carries host dev_t, whose encoding differs on macOS and Linux. */
+  unsigned type = in.i_mode & LINUX_S_IFMT;
+  if (type == LINUX_S_IFCHR || type == LINUX_S_IFBLK) {
+    uint32_t dev = in.i_block[in.i_block[0] ? 0 : 1];
+    uint32_t major = (dev >> 8) & (in.i_block[0] ? 255 : 4095);
+    uint32_t minor =
+        (dev & 255) | (in.i_block[0] ? 0 : ((dev >> 12) & 0xfffff00));
+    fields[7] = ((uint64_t)major << 32) | minor;
+  }
   if (fields[5] > INT64_MAX || fields[6] > INT64_MAX)
     return EOVERFLOW;
   for (unsigned i = 0; i < 4; i++) {

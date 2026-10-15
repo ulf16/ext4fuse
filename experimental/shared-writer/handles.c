@@ -507,6 +507,10 @@ int handles_dispatch(const char *image, const struct credentials *c,
         e = EINVAL;
       if (!e && (in.i_mode & LINUX_S_IFMT) == LINUX_S_IFLNK)
         e = ELOOP;
+      /* IPC belongs to the host kernel. Device inodes never become regular
+       * data grants, irrespective of the mount's nodev enforcement. */
+      if (!e && special_type(in.i_mode))
+        e = ENXIO;
       if (!e && (offset & OPEN_DIRECTORY) && !directory)
         e = ENOTDIR;
       if (!e && directory && (access & GRANT_WRITE))

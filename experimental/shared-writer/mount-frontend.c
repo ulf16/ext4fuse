@@ -14,6 +14,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
+#ifndef __APPLE__
+#include <linux/fs.h>
+#include <sys/sysmacros.h>
+#endif
 #ifdef __APPLE__
 #include <sys/vnode.h>
 #endif
@@ -210,6 +214,13 @@ static int decode_stat(const unsigned char *raw, struct stat *st) {
   st->st_gid = f[4];
   st->st_size = f[5];
   st->st_blocks = f[6];
+  if (S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode)) {
+    uint64_t ma = f[7] >> 32, mi = f[7] & UINT32_MAX;
+    st->st_rdev = makedev(ma, mi);
+    if ((uint64_t)major(st->st_rdev) != ma ||
+        (uint64_t)minor(st->st_rdev) != mi)
+      return -EOVERFLOW;
+  }
 #ifdef __APPLE__
   st->st_blksize = 0;
   st->st_atimespec = (struct timespec){(int64_t)f[8], f[9]};
@@ -217,7 +228,7 @@ static int decode_stat(const unsigned char *raw, struct stat *st) {
   st->st_ctimespec = (struct timespec){(int64_t)f[12], f[13]};
   st->st_birthtimespec = (struct timespec){(int64_t)f[14], f[15]};
 #else
-  st->st_blksize = f[7];
+  st->st_blksize = S_ISCHR(st->st_mode) || S_ISBLK(st->st_mode) ? 4096 : f[7];
   st->st_atim = (struct timespec){(int64_t)f[8], f[9]};
   st->st_mtim = (struct timespec){(int64_t)f[10], f[11]};
   st->st_ctim = (struct timespec){(int64_t)f[12], f[13]};
@@ -463,6 +474,13 @@ static void fsync_cb(fuse_req_t req, fuse_ino_t ino, int datasync,
   (void)datasync;
   error(req, empty(req, 122, NULL, NULL, 0, ino, fi->fh, 0));
 }
+static void mknod_cb(fuse_req_t req, fuse_ino_t parent, const char *name,
+                     mode_t mode, dev_t dev) {
+  unsigned char numbers[8];
+  put(numbers, major(dev), 4);
+  put(numbers + 4, minor(dev), 4);
+  entry_reply(req, 129, parent, name, numbers, sizeof(numbers), 0, mode, NULL);
+}
 static void mkdir_cb(fuse_req_t req, fuse_ino_t parent, const char *name,
                      mode_t mode) {
   entry_reply(req, 113, parent, name, NULL, 0, 0, mode & 07777, NULL);
@@ -476,7 +494,16 @@ static void rmdir_cb(fuse_req_t req, fuse_ino_t parent, const char *name) {
 static void rename_cb(fuse_req_t req, fuse_ino_t parent, const char *name,
                       fuse_ino_t newparent, const char *newname,
                       unsigned flags) {
-  error(req, empty(req, 116, name, newname, strlen(newname), parent, flags,
+  unsigned wire = 0;
+  if (flags == RENAME_NOREPLACE)
+    wire = 1;
+  else if (flags == RENAME_EXCHANGE)
+    wire = 2;
+  else if (flags) {
+    error(req, -EINVAL);
+    return;
+  }
+  error(req, empty(req, 116, name, newname, strlen(newname), parent, wire,
                    newparent));
 }
 static void link_cb(fuse_req_t req, fuse_ino_t ino, fuse_ino_t parent,
@@ -767,6 +794,9 @@ static void removexattr_cb(fuse_req_t req, fuse_ino_t ino, const char *name) {
 static void init_cb(void *unused, struct fuse_conn_info *info) {
   (void)unused;
   info->want &= ~FUSE_CAP_WRITEBACK_CACHE;
+#ifdef FUSE_DARWIN_CAP_RENAME_EXT
+  fuse_darwin_set_feature_flag(info, FUSE_DARWIN_CAP_RENAME_EXT);
+#endif
 #ifdef FUSE_DARWIN_CAP_FALLOCATE
   fuse_darwin_set_feature_flag(info, FUSE_DARWIN_CAP_FALLOCATE);
 #endif
@@ -804,6 +834,7 @@ static const struct fuse_lowlevel_ops operations = {
     .setattr = setattr_cb,
     .readlink = readlink_cb,
     .mkdir = mkdir_cb,
+    .mknod = mknod_cb,
     .unlink = unlink_cb,
     .rmdir = rmdir_cb,
     .symlink = symlink_cb,

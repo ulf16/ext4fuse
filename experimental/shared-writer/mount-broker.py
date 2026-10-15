@@ -146,13 +146,13 @@ class Broker:
         elif op==13:
             self.s.unlinkat(None,path);self.hidden.pop(path,None)
         elif op==14:
-            if arg:raise OSError(errno.EOPNOTSUPP,'rename extensions unavailable')
+            if arg not in (0,1,2):raise OSError(errno.EINVAL,'invalid rename flags')
             candidate=None
             if re.fullmatch(rb'\.fuse_hidden[0-9a-fA-F]{16}',data.rsplit(b'/',1)[-1]):
                 st=self.s.statat(None,path,follow_symlinks=False)
                 identity=(st['inode'],st['generation'])
                 if identity in self.identities.values():candidate=identity
-            self.s.renameat(None,path,None,data)
+            self.s.renameat(None,path,None,data,flags=arg)
             # Volatile, exact-identity tracking is only for libfuse lifecycle
             # cleanup in this live mount, never a prefix scan on recovery.
             moved={}
@@ -321,8 +321,8 @@ class LowBroker(Broker):
             self.s._mount_nodes();self.remember(None,b'.',root=True)
             return 0,b''
         if not self.initialized:raise OSError(errno.EBUSY,'mount handshake required')
-        named={101,105,113,114,115,116,117,118}
-        payload={106,107,108,116,118,124,125,126,128}
+        named={101,105,113,114,115,116,117,118,129}
+        payload={106,107,108,116,118,124,125,126,128,129}
         if (bool(path)!=(op in named) or (data and op not in payload) or
             (op==106 and len(data)!=8) or (op==108 and len(data)!=64) or
             (op not in (103,106,107,108,109,111,112,116,121,122,128) and offset)):
@@ -375,10 +375,20 @@ class LowBroker(Broker):
             return self.finish_entry(self.remember(h,path))
         if op in (114,115):
             self.component(path);self.s.unlinkat(h,path,remove_directory=op==114);return 0,b''
+        if op==129:
+            self.capacity();self.component(path)
+            if arg&~0o170777:raise OSError(errno.EOPNOTSUPP,'special creation permission bits')
+            if len(data)!=8:raise OSError(errno.EINVAL,'device number frame')
+            major,minor=struct.unpack('<II',data)
+            if arg&0o170000 in (0,0o100000):
+                if major or minor:raise OSError(errno.EINVAL,'regular device number')
+                opened=self.s.openat(h,path,'w',create=True,exclusive=True,mode=arg&0o777);opened.close()
+            else:self.s.mknodat(h,path,arg,major=major,minor=minor)
+            return self.finish_entry(self.remember(h,path))
         if op==116:
-            if offset:raise OSError(errno.EOPNOTSUPP,'rename extensions unavailable')
+            if offset not in (0,1,2):raise OSError(errno.EINVAL,'invalid rename flags')
             self.component(path);self.component(data)
-            self.s.renameat(h,path,self.node(arg)['handle'],data);return 0,b''
+            self.s.renameat(h,path,self.node(arg)['handle'],data,flags=offset);return 0,b''
         if op==117:
             self.component(path)
             if node['lookups']==2**64-1:raise OSError(errno.EOVERFLOW,'kernel lookup counter overflow')

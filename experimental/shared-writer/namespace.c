@@ -37,7 +37,8 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
     if (in.i_links_count ||
         ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFREG &&
          (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR &&
-         (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFLNK) ||
+         (in.i_mode & LINUX_S_IFMT) != LINUX_S_IFLNK &&
+         !special_type(in.i_mode)) ||
         (in.i_flags & GRANT_UNSUPPORTED))
       return EIO;
     if ((in.i_mode & LINUX_S_IFMT) == LINUX_S_IFLNK &&
@@ -131,11 +132,20 @@ static errcode_t reclaim(ext2_filsys fs, ext2_ino_t ino) {
   unsigned type = in.i_mode & LINUX_S_IFMT;
   if (in.i_links_count ||
       (type != LINUX_S_IFREG && type != LINUX_S_IFDIR &&
-       type != LINUX_S_IFLNK) ||
+       type != LINUX_S_IFLNK && !special_type(type)) ||
       (in.i_flags & GRANT_UNSUPPORTED))
     return EIO;
-  if (!ext2fs_is_fast_symlink((struct ext2_inode *)&in) ||
-      (in.i_flags & EXT4_EXTENTS_FL))
+  if (special_type(type)) {
+    if (EXT2_I_SIZE((struct ext2_inode *)&in) ||
+        (ext2fs_inode_i_blocks(fs, (struct ext2_inode *)&in) !=
+         (ext2fs_file_acl_block(fs, (struct ext2_inode *)&in)
+              ? fs->blocksize / 512
+              : 0)) ||
+        (in.i_flags & EXT4_EXTENTS_FL))
+      return EIO;
+    memset(in.i_block, 0, sizeof(in.i_block));
+  } else if (!ext2fs_is_fast_symlink((struct ext2_inode *)&in) ||
+             (in.i_flags & EXT4_EXTENTS_FL))
     e = ext2fs_punch(fs, ino, (struct ext2_inode *)&in, NULL, 0, ~0ULL);
   else
     memset(in.i_block, 0, sizeof(in.i_block));
@@ -225,7 +235,8 @@ static errcode_t entry_inode(ext2_filsys fs, ext2_ino_t ino,
   if (e)
     return e;
   unsigned type = in->i_mode & LINUX_S_IFMT;
-  if (type != LINUX_S_IFREG && type != LINUX_S_IFDIR && type != LINUX_S_IFLNK)
+  if (type != LINUX_S_IFREG && type != LINUX_S_IFDIR && type != LINUX_S_IFLNK &&
+      !special_type(type))
     return EOPNOTSUPP;
   if (type == LINUX_S_IFDIR && (in->i_flags & (EXT4_CASEFOLD_FL)))
     return EOPNOTSUPP;
@@ -531,6 +542,130 @@ static errcode_t copy_default_acl(ext2_filsys fs, ext2_ino_t parent,
   free(value);
   return e;
 }
+static unsigned entry_type(unsigned mode) {
+  switch (mode & LINUX_S_IFMT) {
+  case LINUX_S_IFDIR:
+    return EXT2_FT_DIR;
+  case LINUX_S_IFLNK:
+    return EXT2_FT_SYMLINK;
+  case LINUX_S_IFIFO:
+    return EXT2_FT_FIFO;
+  case LINUX_S_IFSOCK:
+    return EXT2_FT_SOCK;
+  case LINUX_S_IFCHR:
+    return EXT2_FT_CHRDEV;
+  case LINUX_S_IFBLK:
+    return EXT2_FT_BLKDEV;
+  default:
+    return EXT2_FT_REG_FILE;
+  }
+}
+static errcode_t create_special(ext2_filsys fs, ext2_ino_t dir,
+                                const char *name, const struct mutation *op,
+                                const struct credentials *c) {
+  unsigned type = op->mode & LINUX_S_IFMT;
+  int device = type == LINUX_S_IFCHR || type == LINUX_S_IFBLK;
+  if (!special_type(type) || (op->mode & ~(LINUX_S_IFMT | 0777)) ||
+      op->length ||
+      (device ? (op->offset >> 32 > 4095 || (uint32_t)op->offset > 1048575)
+              : op->offset != 0))
+    return EINVAL;
+  if (device && c && c->uid)
+    return EPERM;
+  unsigned mode = op->mode & 0777;
+  uint32_t uid = op->uid, gid = op->gid;
+  if (uid == UINT32_MAX || gid == UINT32_MAX)
+    return EINVAL;
+  unsigned char *acl = NULL;
+  size_t acl_length = 0;
+  errcode_t e = c ? policy_creation(fs, dir, c, mode, 0, &mode, &uid, &gid,
+                                    &acl, &acl_length)
+                  : 0;
+  ext2_ino_t ino = 0;
+  struct ext2_inode previous, in = {0};
+  if (!e)
+    e = ext2fs_new_inode(fs, dir, type | mode, NULL, &ino);
+  if (!e)
+    e = ext2fs_read_inode(fs, ino, &previous);
+  if (!e && previous.i_generation == UINT32_MAX)
+    e = EOVERFLOW;
+  if (!e) {
+    in.i_mode = type | mode;
+    in.i_links_count = 1;
+    in.i_uid = uid;
+    in.i_gid = gid;
+    ext2fs_set_i_uid_high(in, uid >> 16);
+    ext2fs_set_i_gid_high(in, gid >> 16);
+    in.i_generation = previous.i_generation + 1;
+    if (device) {
+      uint32_t major = op->offset >> 32, minor = op->offset;
+      in.i_block[1] = (minor & 255) | (major << 8) | ((minor & ~255U) << 12);
+    }
+    e = ext2fs_write_new_inode(fs, ino, &in);
+    if (!e)
+      ext2fs_inode_alloc_stats2(fs, ino, 1, 0);
+  }
+  if (!e && acl)
+    e = set_acl(fs, ino, "system.posix_acl_access", acl, acl_length);
+  free(acl);
+  if (!e)
+    e = link_name(fs, dir, name, ino, entry_type(type));
+  if (!e)
+    e = stamp(fs, dir, 1);
+  return e;
+}
+/* Exchange replaces both names without dropping either inode's link or pins.
+ * Both ancestry checks precede mutation; ancestor/descendant swaps are invalid.
+ */
+static errcode_t exchange(ext2_filsys fs, ext2_ino_t from, const char *name,
+                          ext2_ino_t ino, const struct ext2_inode *in,
+                          ext2_ino_t to, const char *newname, ext2_ino_t victim,
+                          const struct ext2_inode *old,
+                          const struct credentials *c) {
+  int a = (in->i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR;
+  int b = (old->i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR;
+  errcode_t e = 0;
+  if (a)
+    e = no_cycle(fs, ino, to);
+  if (!e && b)
+    e = no_cycle(fs, victim, from);
+  if (!e && a)
+    e = directory_check(fs, ino, from, 0, 0);
+  if (!e && b)
+    e = directory_check(fs, victim, to, 0, 0);
+  if (!e && from != to && c && a)
+    e = policy_inode(fs, ino, c, 2);
+  if (!e && from != to && c && b)
+    e = policy_inode(fs, victim, c, 2);
+  if (!e)
+    e = unlink_name(fs, from, name, ino);
+  if (!e)
+    e = unlink_name(fs, to, newname, victim);
+  if (!e)
+    e = link_name(fs, from, name, victim, entry_type(old->i_mode));
+  if (!e)
+    e = link_name(fs, to, newname, ino, entry_type(in->i_mode));
+  if (!e && from != to) {
+    if (a)
+      e = directory_check(fs, ino, from, 0, to);
+    if (!e && b)
+      e = directory_check(fs, victim, to, 0, from);
+    if (!e && a != b) {
+      e = parent_links(fs, from, b - a);
+      if (!e)
+        e = parent_links(fs, to, a - b);
+    }
+  }
+  if (!e)
+    e = stamp(fs, ino, 0);
+  if (!e)
+    e = stamp(fs, victim, 0);
+  if (!e)
+    e = stamp(fs, from, 1);
+  if (!e && from != to)
+    e = stamp(fs, to, 1);
+  return e;
+}
 static errcode_t create_entry(ext2_filsys fs, ext2_ino_t dir, const char *name,
                               const struct mutation *op,
                               const struct credentials *c) {
@@ -632,13 +767,19 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
   errcode_t e = supported(fs);
   if (e)
     return e;
-  if (!op || op->kind < MUT_LINK || op->kind > MUT_SYMLINK || op->offset)
+  if (!op ||
+      (op->kind != MUT_MKNOD &&
+       (op->kind < MUT_LINK || op->kind > MUT_SYMLINK)) ||
+      (op->kind == MUT_RENAME ? op->offset > 2
+                              : op->kind != MUT_MKNOD && op->offset))
     return EINVAL;
-  int creating = op->kind == MUT_MKDIR || op->kind == MUT_SYMLINK;
+  int creating =
+      op->kind == MUT_MKDIR || op->kind == MUT_SYMLINK || op->kind == MUT_MKNOD;
   int payload =
       op->kind == MUT_LINK || op->kind == MUT_RENAME || op->kind == MUT_SYMLINK;
   if ((!creating && (op->mode || op->uid || op->gid)) ||
-      (creating && op->mode > (op->kind == MUT_MKDIR ? 01777 : 0777)) ||
+      (creating && op->kind != MUT_MKNOD &&
+       op->mode > (op->kind == MUT_MKDIR ? 01777 : 0777)) ||
       (payload ? (!op->length || op->length > 4096 || !op->data ||
                   memchr(op->data, 0, op->length))
                : op->length))
@@ -676,7 +817,8 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     if (!e)
       e = EEXIST;
     else if (e == EXT2_ET_FILE_NOT_FOUND)
-      e = create_entry(fs, from, name, op, c);
+      e = op->kind == MUT_MKNOD ? create_special(fs, from, name, op, c)
+                                : create_entry(fs, from, name, op, c);
     free(name);
     return e;
   }
@@ -727,16 +869,22 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     }
     if (!e && victim && op->kind == MUT_LINK)
       e = EEXIST;
+    if (!e && op->kind == MUT_RENAME && op->offset == 1 && victim)
+      e = EEXIST;
+    if (!e && op->kind == MUT_RENAME && op->offset == 2 && !victim)
+      e = ENOENT;
     if (!e && victim && op->kind == MUT_RENAME) {
       e = entry_inode(fs, victim, &old);
       unsigned other = e ? 0 : old.i_mode & LINUX_S_IFMT;
-      if (!e && type == LINUX_S_IFDIR && other != LINUX_S_IFDIR)
+      if (!e && op->offset != 2 && type == LINUX_S_IFDIR &&
+          other != LINUX_S_IFDIR)
         e = ENOTDIR;
-      if (!e && type != LINUX_S_IFDIR && other == LINUX_S_IFDIR)
+      if (!e && op->offset != 2 && type != LINUX_S_IFDIR &&
+          other == LINUX_S_IFDIR)
         e = EISDIR;
       if (!e)
         e = removable(fs, to, &old, c);
-      if (!e && victim != ino && other == LINUX_S_IFDIR)
+      if (!e && op->offset != 2 && victim != ino && other == LINUX_S_IFDIR)
         e = directory_check(fs, victim, to, 1, 0);
     }
     if (!e && type == LINUX_S_IFDIR && victim != ino) {
@@ -751,16 +899,16 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     e = drop(fs, from, name, ino, pins, count);
   else if (!e && op->kind == MUT_RENAME &&
            victim == ino) { /* same-inode no-op */
+  } else if (!e && op->kind == MUT_RENAME && op->offset == 2) {
+    e = exchange(fs, from, name, ino, &in, to, newname, victim, &old, c);
   } else if (!e) {
     if (op->kind == MUT_LINK && in.i_links_count == 65535)
       e = EMLINK;
     if (!e && victim)
-      e = type == LINUX_S_IFDIR
+      e = (old.i_mode & LINUX_S_IFMT) == LINUX_S_IFDIR
               ? drop_directory(fs, to, newname, victim, pins, count)
               : drop(fs, to, newname, victim, pins, count);
-    unsigned filetype = type == LINUX_S_IFDIR   ? EXT2_FT_DIR
-                        : type == LINUX_S_IFLNK ? EXT2_FT_SYMLINK
-                                                : EXT2_FT_REG_FILE;
+    unsigned filetype = entry_type(type);
     if (!e)
       e = link_name(fs, to, newname, ino, filetype);
     if (!e && op->kind == MUT_RENAME)

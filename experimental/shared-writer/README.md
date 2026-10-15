@@ -944,8 +944,9 @@ cannot prevent an unrelated program from directly editing its files.
 Supported callbacks are stat/getattr/statfs/access, open/create/read/write,
 truncate, flush/fsync, mkdir/rmdir, hard link, symlink/readlink, rename/unlink, and
 directory open/read/release/fsync, chmod/chown/utimens and user/POSIX ACL
-xattr get/list/set/remove. Rename extensions, special file creation, privileged
-security/trusted attributes remain unsupported. Native macOS access ACL editing
+xattr get/list/set/remove. Atomic rename extensions and special-file creation
+are described in the final section below. Privileged security/trusted attributes
+remain unsupported. Native macOS access ACL editing
 is supported for the representable subset described below.
 Unsupported operations return an error rather than pretending success.
 Creation accepts ordinary permission bits (mkdir also permits sticky);
@@ -1790,3 +1791,55 @@ requires fsck-clean metadata images while proving allocated user payload blocks
 are absent, measures occupied scratch bytes on a 256 MiB filesystem with a
 128 MiB allocated file, and tests the export budget. Native checks run with
 sanitizers on macOS and Linux CI. Hardware power-loss behavior remains uncertified.
+
+## Atomic rename extensions and special inode creation
+
+The experimental session and FUSE mount support **no-replace** and **exchange**
+renames. `Session.rename` and `renameat` take keyword `flags=1` (destination must
+not exist) or `flags=2` (both existing names are atomically exchanged). Zero retains
+ordinary replacement. Combined/unknown flags are rejected; whiteout creation is
+not implemented. The frontend translates Linux `renameat2` and Darwin
+`renamex_np` flag values and negotiates macFUSE extended-rename support.
+
+No-replace checks destination existence before the same-inode shortcut. Exchange
+accepts different inode types and nonempty directories, preserves both inode
+identities and their open/lookup pins, and updates `..`, parent link counts and
+change timestamps inside the same transaction. Both moved directory ancestries
+are checked before mutation. Cycles, sticky/immutable restrictions, permission
+failures and any later error discard the whole staged batch. Existing non-casefold
+HTrees retain their indexes. Darwin VFS can short-circuit a native identical-path
+rename as success before sending a request; the explicit session API retains
+no-replace's destination-exists check.
+
+`Session.mknod(path, mode, major=0, minor=0)` and `mknodat(directory, path, ...)`
+create FIFO, socket, character-device and block-device inodes. `mode` includes the
+file type and ordinary 0777 permission bits. Creation applies current uid/gid,
+umask, parent setgid group and supported access ACL inheritance. Device creation
+requires numeric root authority. Portable Linux device numbers support 12-bit
+major and 20-bit minor fields; non-device nodes require zero device numbers.
+The on-disk new encoding is independent of the host's `dev_t`. Mounted stat
+translates into host encoding and refuses unrepresentable values.
+
+The FUSE `mknod` callback supports these types and regular-file creation. Special
+nodes support namespace changes, hard links, attributes and inode identity pins.
+An unlinked pinned special inode retains metadata until its final pin is dropped;
+reclamation clears its opaque device fields and frees attributes without treating
+device identifiers as file-block pointers. They never receive ordinary file-data
+grants. The mount remains **nodev,nosuid**: storing a device node does not grant
+access to a host device. Device I/O and emulating a remote device are outside this
+feature.
+
+FIFO/socket data transport belongs to the host kernel, not ext4 image data.
+Linux tests require real FIFO and UNIX socket traffic. On the tested macOS
+Sequoia/macFUSE 5.4.0 mount, FIFO creation/stat/metadata/link/unlink work, but FIFO
+open returns EPERM before reaching the broker; native FIFO I/O is reported as a
+separate platform limitation. UNIX socket binding and traffic are tested.
+
+`test-namespace-extensions.py` checks all twelve profiles, no-replace collisions,
+file/directory and nonempty directory exchanges, retained cwd/open identities,
+cycle/sticky/authority checks, special-inode pins/EA reclamation, failed batches
+and interrupted sealed replay. `test-namespace-extension-storage.py` checks
+independently indexed directories and fsck-clean metadata snapshots containing
+maximum device numbers. `test-mounted-namespace-extensions.py` exercises actual
+platform rename syscalls, special-file metadata/lifetime, local IPC and nodev
+refusal. CI additionally runs privileged Linux device-node creation.

@@ -13,6 +13,12 @@
 #define GRANT_UNSUPPORTED                                                      \
   (EXT2_COMPR_FL | EXT4_ENCRYPT_FL | EXT4_VERITY_FL | EXT4_INLINE_DATA_FL |    \
    EXT4_EA_INODE_FL)
+/* These inode bodies contain device identifiers or no payload, never blocks. */
+static inline int special_type(unsigned mode) {
+  unsigned type = mode & LINUX_S_IFMT;
+  return type == LINUX_S_IFIFO || type == LINUX_S_IFSOCK ||
+         type == LINUX_S_IFCHR || type == LINUX_S_IFBLK;
+}
 struct inode_grant {
   uint32_t inode, generation, access, flags;
 };
