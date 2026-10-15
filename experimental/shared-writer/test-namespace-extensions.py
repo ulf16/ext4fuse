@@ -81,16 +81,18 @@ with tempfile.TemporaryDirectory(prefix='namespace-extensions-',dir=a.work) as t
    s.mknod('/regular-target',stat.S_IFSOCK|0o600);s.rename('/regular-target','/replace');check(stat.S_ISSOCK(fields(s,'/replace')[1]))
    # Failed batches must roll back an earlier exchange and failed creation.
    atomic(s,lambda:s.applyat([dict(kind='rename',path='/left',target='/right',flags=2),dict(kind='mkdir',path='/left')]),errno.EEXIST)
+   atomic(s,lambda:s.applyat([dict(kind='mknod',path='/rollback-special',mode=stat.S_IFIFO|0o600),dict(kind='mkdir',path='/left')]),errno.EEXIST)
    check(s._rpc(12)[0]==0)
   fixture.run(['e2fsck','-fn',root/'image.img']);check(fixture.sha(source)==original)
   print('PASS namespace extensions',source.name,flush=True)
  # Caller authority, umask and inherited access ACLs apply to non-data inodes.
  root=tmp/'policy';chain.clone(sources[0],root)
  with opened(root) as s:
-  s.mkdir('/public',0o777);s.chmod('/public',0o777);s.mkdir('/sticky',0o1777);s.chmod('/sticky',0o1777);s.mknod('/sticky/root',stat.S_IFIFO|0o666)
+  s.mkdir('/public',0o777);s.chmod('/public',0o777);s.mkdir('/sticky',0o1777);s.chmod('/sticky',0o1777);s.mkdir('/group',0o777);s.chown('/group',0,34567);s.chmod('/group',0o2777);s.mknod('/sticky/root',stat.S_IFIFO|0o666)
   acl=struct.pack('<I',2)+b''.join(struct.pack('<HHI',t,p,i) for t,p,i in [(1,7,2**32-1),(2,4,34567),(4,7,2**32-1),(16,7,2**32-1),(32,7,2**32-1)])
   s.setxattr('/public','system.posix_acl_default',acl)
  with opened(root,Credentials(12345,23456,(),0o027)) as s:
+  s.mknod('/group/masked',stat.S_IFIFO|0o666);check(fields(s,'/group/masked')[1]&0o777==0o640 and fields(s,'/group/masked')[4]==34567)
   s.mknodat(None,'/public/user',stat.S_IFIFO|0o666);check(fields(s,'/public/user')[3:5]==(12345,23456));check(bool(s.getxattr('/public/user','system.posix_acl_access')))
   atomic(s,lambda:s.mknod('/public/denied',stat.S_IFCHR|0o600,major=1,minor=3),errno.EPERM)
   s.mknod('/public/own',stat.S_IFSOCK|0o600)

@@ -72,7 +72,10 @@ with tempfile.TemporaryDirectory(prefix='mount-broker-',dir=a.work) as tmp:
             call(11,b'/dir',arg=0o777);directory,_=call(8,b'/dir')
             size,page=call(9,token=directory);check(size>0 and struct.unpack_from('<II',page)==(1,2))
             call(10,token=directory);call(12,b'/dir')
-            denied(lambda:call(14,b'/existing-file',b'/x',arg=1),errno.EOPNOTSUPP)
+            call(14,b'/existing-file',b'/x',arg=1)
+            denied(lambda:call(14,b'/x',b'/x',arg=1),errno.EEXIST)
+            call(14,b'/x',b'/existing-file',arg=1)
+            denied(lambda:call(14,b'/existing-file',b'/x',arg=3),errno.EINVAL)
             call(21,b'/',arg=7)
             # Malformed private transport framing cannot execute a mutation.
             frame=module.HEADER.pack(b'badmagic',3,0,0,os.getuid(),os.getgid(),0,0,0,0,0)

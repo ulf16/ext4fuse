@@ -171,10 +171,10 @@ with tempfile.TemporaryDirectory(prefix='namespace-',dir=args.work) as directory
                              (lambda:s.link('/target','/target'),errno.EEXIST),
                              (lambda:s.unlink('/destination'),errno.EISDIR),
                              (lambda:s.rename('/target','/destination'),errno.EISDIR),
-                             (lambda:s.unlink('/fifo'),errno.EOPNOTSUPP),
                              (lambda:s.link('/target','/readonly/x'),errno.EACCES),
                              (lambda:s.link('/target','/symdir/x'),errno.ELOOP)]:
                 atomic(s,op,error)
+            s.unlink('/fifo');clean(s)  # Special inode unlink is now supported.
             for target in ('/a/../b','/','/a//b'):
                 atomic(s,lambda target=target:s.rename('/target',target),ValueError)
             # Source search, rather than write, permits a hardlink from a read-only parent.
