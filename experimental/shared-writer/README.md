@@ -1012,14 +1012,17 @@ attribute timeouts remain; there is no writeback cache, NFS export or multi-user
 A disconnected macFUSE mount may require explicit `umount -f MOUNTPOINT` before
 reusing its mountpoint. This does not replace managed-image transaction recovery.
 
-Mount admission requires a clean Linux-format filesystem and no journal replay.
+Mount admission requires a clean Linux-format filesystem. The explicit
+`--recover-journal` startup option below can replay a supported internal journal
+on a private candidate before admission.
 It rejects bigalloc, quota, ea_inode, active modern orphan records, inline data,
 encryption, verity, casefold, readonly and largedir feature profiles. An inactive
 orphan-file feature is accepted because the existing legacy-orphan backend has
 been independently fsck/recovery-tested on those same profiles. Casefold
 directory operations still fail EOPNOTSUPP at use; supported non-casefold HTree
-mutations are described below. This is managed-image redo
-recovery, not native ext4/JBD2 journaling or physical-power-loss certification.
+mutations are described below. Ongoing writes use managed-image redo
+recovery rather than native ext4/JBD2 commits; physical-power-loss certification
+remains outstanding.
 The Python orchestration uses authenticated chunk updates and periodic full-scan
 checkpoints as described below; mounted latency and resource limits remain experimental.
 
@@ -1582,3 +1585,65 @@ notification thread to avoid blocking the serialized request loop. Native
 allocation reporting remains a platform integration gap;
 Linux tests require native block counts to change. Space reclamation is also
 verified independently with debugfs and e2fsck.
+
+### Opt-in dirty-filesystem journal recovery
+
+The experimental writer can recover an internal JBD2 journal before opening the
+native reader. Default admission continues to refuse filesystems needing replay.
+For an ordinary image, create a managed copy and recover it with:
+
+```sh
+python3 experimental/shared-writer/journal-recover.py image SOURCE.img CHAIN
+# Retry an interrupted recovery in the same chain:
+python3 experimental/shared-writer/journal-recover.py chain CHAIN
+```
+
+The source image remains unchanged. Existing managed chains can also pass
+`--recover-journal` to `mount-broker.py`; trusted Python callers can use
+`Session(..., recover_journal=True)`. This occurs under the chain lock, before
+starting the native reader. Recovery requires e2fsprogs `e2fsck` and `debugfs`.
+
+For an explicitly selected, unmounted physical device, use the existing device
+admission and off-device recovery directory:
+
+```sh
+python3 experimental/shared-writer/live-device.py init DEVICE JOURNAL --recover-journal
+python3 experimental/shared-writer/live-device.py mount DEVICE JOURNAL \
+  --work RUNTIME --mountpoint MOUNT --recover-journal
+# Or publish/finish recovery without mounting:
+python3 experimental/shared-writer/live-device.py recover DEVICE JOURNAL --work RUNTIME --recover-journal
+```
+
+Initialization only captures and recovers a private shadow; it never changes the
+original device. Mount/recover first installs the device guard and publishes the
+sealed recovery generation through the ordinary sector redo protocol, before
+exposing files. Interrupted publication uses the same retained generation on a
+fresh recovery. If initialization sealed its baseline but journal replay failed,
+the retained chain can be retried with the explicit recovery option; a dirty
+shadow cannot install the device guard or start the reader.
+
+Recovery runs `e2fsck -p -E journal_only,nodiscard` on a second private candidate,
+then requires a complete read-only `e2fsck -fn`. Journal identity, geometry,
+supported features and modern superblock checksums are checked before invoking
+replay: preen must not silently recreate a damaged journal. If the source had an
+unclean state bit, it is marked clean only after the full check succeeds, and
+checked again afterward. Tool output and execution time are bounded. The candidate
+is diffed into authenticated old/new pages; only a sealed, validated generation
+can modify the managed image or device. Failed/unsealed candidates are retained
+in aborted generations for inspection and retired by normal checkpoints.
+
+This supports internal journals with legacy, checksum-v2 and checksum-v3 records,
+including committed transactions, revokes, escaped blocks and incomplete tails.
+External/shared journals, journal error states, unknown journal features,
+fast commit, MMP and unsupported writer feature profiles remain refused. Other
+filesystem damage requiring general repair is refused; this is not automatic
+`e2fsck -y`. Recovery needs temporary space for another full image and performs
+full-image scans and filesystem checks at startup.
+
+This adds native journal recovery at import/startup. New writes still use our
+external redo generations; they do not create Linux JBD2 transactions. It does
+not make this experimental branch a fully journaled production ext4 driver.
+`test-journal-recovery.py` exercises real debugfs-generated JBD2 records across
+all twelve reader/writer profiles and crashes before/during generation replay.
+`test-journal-native.py` checks actual disposable hdiutil/loop devices, recovered
+mounted reads and writes, and interrupted physical publication.

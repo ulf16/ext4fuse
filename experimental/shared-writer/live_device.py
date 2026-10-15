@@ -89,8 +89,9 @@ def guard(target):
     boundary('live:guarded')
 
 
-def init(device,root):
+def init(device,root,*,recover_journal=False):
     """Capture one owned shadow while holding admission; no target writes."""
+    if type(recover_journal) is not bool:raise ValueError('journal recovery option must be boolean')
     root=inplace.block.canonical(root);root.mkdir(mode=0o700);directory(root.parent)
     with offline.locked(root),Device(device,root) as target:
         merkle.Tree(target.size) # reject over-budget geometry before copying
@@ -103,7 +104,10 @@ def init(device,root):
                 copied.write(offline.read_at(target.fd,min(merkle.CHUNK,target.size-pos),pos))
             copied.flush();sync(copied.fileno())
         directory(managed)
-        uuid=offline.clean_image(managed/'image.img',target.size)
+        if recover_journal:
+            from journal_recovery import inspect
+            uuid=inspect(managed/'image.img')['uuid']
+        else:uuid=offline.clean_image(managed/'image.img',target.size)
         with regular(managed/'image.img') as image:
             st=os.fstat(image.fileno())
             saved=dict(version=2,algorithm=merkle.ALGORITHM,head=0,pending=None,
@@ -114,6 +118,12 @@ def init(device,root):
         inplace.seal(managed,'chain-state',saved)
         inplace.seal(root,'live-state',dict(version=1,identity=target.identity,size=target.size,
                      sector=target.sector,uuid=uuid,head=0,sha256=baseline.root(),phase='clean'))
+        if recover_journal:
+            from journal_recovery import managed as recover_managed
+            recover_managed(managed)
+            if offline.clean_image(managed/'image.img',target.size)!=uuid:refuse('recovered device shadow identity changed')
+            target.check()
+            if scan(target).root()!=baseline.root() or magic(target)!=b'\x53\xef':refuse('device changed while recovering private journal shadow')
     return root
 
 
@@ -148,6 +158,9 @@ class Controller:
             refuse('continuous shadow state is stale or incompatible')
         with regular(self.chain/'image.img') as image:
             sb=offline.read_at(image.fileno(),1024,1024)
+            flags=int.from_bytes(sb[58:60],'little');features=int.from_bytes(sb[96:100],'little')
+            if not flags&1 or flags&2 or features&4:
+                refuse('shadow requires native journal recovery before device publication')
             if sb[56:58]!=b'\x53\xef' or sb[104:120].hex()!=self.state['uuid']:
                 refuse('continuous shadow filesystem identity changed')
     def _activate(self):

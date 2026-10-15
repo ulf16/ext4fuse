@@ -14,16 +14,17 @@ broker=importlib.util.module_from_spec(spec);spec.loader.exec_module(broker)
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='action',required=True)
-    initial=sub.add_parser('init');initial.add_argument('device');initial.add_argument('root',type=Path)
+    initial=sub.add_parser('init');initial.add_argument('device');initial.add_argument('root',type=Path);initial.add_argument('--recover-journal',action='store_true')
     for action in ('mount','recover'):
         command=sub.add_parser(action);command.add_argument('device');command.add_argument('root',type=Path)
         command.add_argument('--work',type=Path,required=True)
+        command.add_argument('--recover-journal',action='store_true')
         command.add_argument('--checkpoint-every',type=int,default=64)
         if action=='mount':
             command.add_argument('--mountpoint',type=Path,required=True)
             command.add_argument('--control-socket',type=Path)
     a=p.parse_args()
-    if a.action=='init':print(init(a.device,a.root));return
+    if a.action=='init':print(init(a.device,a.root,recover_journal=a.recover_journal));return
     work=a.work.resolve()
     if a.action=='mount':
         _,work,mount=broker.validate_mount(a.root/'chain',work,a.mountpoint)
@@ -33,7 +34,7 @@ def main():
     mask=os.umask(0);os.umask(mask)
     with Controller(a.root,a.device) as target:
         with session.Session(target.chain,work/'mutation-producer',work/'reader-server',
-                Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=a.checkpoint_every,commit_sink=target) as s:
+                Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=a.checkpoint_every,commit_sink=target,recover_journal=a.recover_journal) as s:
             if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket)
         target.finish()
     print('Continuous device is synchronized, checked and cleanly published.')

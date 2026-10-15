@@ -154,26 +154,31 @@ def recover(root):
 
 def append(root, producer):
     with locked(root) as root:
-        state = recover_locked(root)
-        cache = merkle.activate(root, state)[1] if state['version'] == 2 else None
-        if state['head'] >= 99_999_998:
-            raise ValueError('generation limit')
-        proposed = root / f"g-{state['head'] + 1:08d}"
-        if proposed.exists() or proposed.is_symlink():
-            raise ValueError('generation already exists')
-        state['pending'] = state['head'] + 1
-        inplace.seal(root, 'chain-state', state)
-        boundary('chain-intent')
-        generation = root / f"g-{state['pending']:08d}"
-        generation.mkdir(mode=0o700)
-        directory(root)
-        inplace.capture_overlay(root / 'image.img', generation, producer, expected_base=state['sha256'], integrity=cache)
-        boundary('chain-prepared')
-        return recover_locked(root, cache)
+        return append_locked(root, producer)
+
+
+def append_locked(root, producer, cache=None):
+    """Caller holds chain-lock, including while a recovery producer runs."""
+    state = recover_locked(root, cache)
+    cache = cache if cache is not None else merkle.activate(root, state)[1] if state['version'] == 2 else None
+    if state['head'] >= 99_999_998:
+        raise ValueError('generation limit')
+    proposed = root / f"g-{state['head'] + 1:08d}"
+    if proposed.exists() or proposed.is_symlink():
+        raise ValueError('generation already exists')
+    state['pending'] = state['head'] + 1
+    inplace.seal(root, 'chain-state', state)
+    boundary('chain-intent')
+    generation = root / f"g-{state['pending']:08d}"
+    generation.mkdir(mode=0o700)
+    directory(root)
+    inplace.capture_overlay(root / 'image.img', generation, producer, expected_base=state['sha256'], integrity=cache)
+    boundary('chain-prepared')
+    return recover_locked(root, cache)
 
 
 GEN_FILES = {'operations', 'operations.result', 'request-producer', 'transaction', 'transaction.pending', 'pages', 'started',
-             'started.pending', 'complete', 'complete.pending'}
+             'started.pending', 'complete', 'complete.pending', 'journal-candidate', 'journal-replay.log'}
 CAPTURE_FILES = {'blocks', 'manifest', 'manifest.pending'}
 
 

@@ -487,3 +487,29 @@ jobs:
           path: |
             ${{ runner.temp }}/allocation-writer/allocation-results.json
             ${{ runner.temp }}/allocation-writer/mounted-allocation-locks-results.json
+
+  journal-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install journal recovery and disposable device dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Require disposable loop devices and native FUSE
+        run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
+      - name: Build journal recovery runtime with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/journal-writer" --sanitize
+      - name: Prepare independently checked filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/journal-writer"
+      - name: Verify native journal formats, admission and interrupted redo recovery
+        run: python3 experimental/shared-writer/test-journal-recovery.py --work "$RUNNER_TEMP/journal-writer"
+      - name: Verify dirty loop-device recovery and mounted writes
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-journal-native.py --work "$RUNNER_TEMP/journal-writer"
+      - name: Save native journal recovery validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journal-recovery-validation
+          path: |
+            ${{ runner.temp }}/journal-writer/journal-recovery-results.json
+            ${{ runner.temp }}/journal-writer/journal-native-results.json

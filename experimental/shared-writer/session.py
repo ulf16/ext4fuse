@@ -30,11 +30,13 @@ class Session:
     serialized inside this object; other cooperating processes are excluded.
     Any unresolvable recovery/reader error leaves the session failed closed.
     """
-    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0, commit_sink=None):
+    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0, commit_sink=None, recover_journal=False):
         if credentials is not None and not isinstance(credentials, Credentials):
             raise ValueError('expected trusted Credentials')
         if type(checkpoint_every) is not int or not 0 <= checkpoint_every <= 1_000_000:
             raise ValueError('invalid checkpoint interval')
+        if type(recover_journal) is not bool:
+            raise ValueError('journal recovery option must be boolean')
         self._commit_sink = commit_sink
         self._checkpoint_every = checkpoint_every
         self._credentials = credentials
@@ -50,6 +52,9 @@ class Session:
         self.producer = Path(producer).absolute()
         try:
             self.state = chain.recover_locked(self.root)
+            if recover_journal:
+                from journal_recovery import managed_locked
+                self.state=managed_locked(self.root,self.state)
             self.state, self._integrity = merkle.activate(self.root, self.state)
             if self._commit_sink is not None:
                 self._commit_sink.recover(self.state)

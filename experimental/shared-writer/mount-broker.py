@@ -529,12 +529,13 @@ def main():
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--root',type=Path,required=True)
     parser.add_argument('--mountpoint',type=Path,required=True)
+    parser.add_argument('--recover-journal',action='store_true',help='recover an internal native journal on the managed image before mounting')
     parser.add_argument('--control-socket',type=Path,help='optional socket in a private owned directory outside mountpoint')
     parser.add_argument('--checkpoint-every',type=int,default=64,help='retire completed generations after this many commits; zero disables')
     args=parser.parse_args()
     root,work,mount=validate_mount(args.root,args.work,args.mountpoint)
     mask=os.umask(0);os.umask(mask)
-    with session.Session(root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every) as s:
+    with session.Session(root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every,recover_journal=args.recover_journal) as s:
         run_mount(s,work,mount,args.control_socket)
     print('Experimental mount stopped; managed image and recovery logs retained.',file=sys.stderr)
 if __name__=='__main__':main()
