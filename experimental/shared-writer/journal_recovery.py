@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Opt-in native journal replay on private candidates, never source devices."""
-import errno,fcntl,os,re,selectors,shutil,struct,subprocess,sys,time
+import contextlib,contextvars,errno,fcntl,os,re,selectors,shutil,struct,subprocess,sys,time
 from pathlib import Path
 import chain,inplace,merkle
 from durable import boundary,digest,directory,regular,sync
@@ -17,17 +17,31 @@ def tool(name):
  if executable is None:raise OSError(errno.ENOENT,name+' is required for native journal recovery')
  return str(Path(executable).resolve())
 
+_abort_fd=contextvars.ContextVar('journal_candidate_abort',default=None)
+
+@contextlib.contextmanager
+def abort_on(fd):
+ token=_abort_fd.set(fd)
+ try:yield
+ finally:_abort_fd.reset(token)
+
 def command(argv,env,output=None,timeout=600,pass_fds=()):
  """Bound trusted tool output as well as wall time; never accept prompts."""
  data=bytearray();deadline=time.monotonic()+timeout
  with subprocess.Popen(list(map(str,argv)),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,pass_fds=pass_fds) as child:
   try:
    with selectors.DefaultSelector() as poll:
-    poll.register(child.stdout,selectors.EVENT_READ)
-    while poll.get_map():
+    poll.register(child.stdout,selectors.EVENT_READ,'output')
+    abort=_abort_fd.get()
+    if abort is not None:poll.register(abort,selectors.EVENT_READ,'abort')
+    while child.stdout.fileno() in poll.get_map():
      left=deadline-time.monotonic()
      if left<=0:raise OSError(errno.ETIMEDOUT,'journal recovery tool timed out')
      for key,_ in poll.select(min(left,1)):
+      if key.data=='abort':
+       message=os.read(key.fd,4)
+       code=int.from_bytes(message,'little') if len(message)==4 else errno.EIO
+       raise OSError(code if 0<code<4096 else errno.EIO,'journal candidate I/O failed; replay tool terminated')
       chunk=os.read(key.fd,8192)
       if not chunk:poll.unregister(key.fileobj);continue
       data.extend(chunk)

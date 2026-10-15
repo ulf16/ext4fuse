@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Bounded private replay views: formats, namespace recovery and refusal safety."""
-import argparse,json,shutil,struct,tempfile
+import argparse,json,shutil,struct,tempfile,time
 from pathlib import Path
 import journal_candidate as candidate,journal_fixtures as fixture,journal_recovery as journal
 p=argparse.ArgumentParser();p.add_argument('--work',type=Path,required=True);p.add_argument('--limit',type=int);a=p.parse_args();checks=0;maximum=0
@@ -48,19 +48,22 @@ with tempfile.TemporaryDirectory(prefix='candidate-test-',dir=a.work) as tmp:
   for kind in ('committed','uncommitted','revoke','escaped','tail'):
    image=tmp/f'v2-{kind}.img';detail=fixture.create(modern,image,version=2,kind=kind);replay(image,detail['new'])
  for problem in ('budget','metadata','checksum','uuid','feature'):
-  image=tmp/(problem+'.img');fixture.metadata(modern or sources[0],image)
+  image=tmp/(problem+'.img')
+  if problem=='metadata':fixture.create(modern or sources[0],image)
+  else:fixture.metadata(modern or sources[0],image)
   if problem=='metadata':fixture.debug(image,'set_inode_field /existing-file links_count 0')
   elif problem not in ('budget',):
    blocks=list(map(int,fixture.debug(image,'blocks <8>').split()))
    with image.open('rb') as f:f.seek(1048);block=1024<<struct.unpack('<I',f.read(4))[0]
    offset,data={'checksum':(252,b'BAD!'),'uuid':(48,bytes(16)),'feature':(40,struct.pack('>I',0x80000000))}[problem]
    with image.open('r+b') as f:f.seek(blocks[0]*block+offset);f.write(data)
-  before=fixture.sha(image)
+  before=fixture.sha(image);started=time.monotonic()
   try:
    with image.with_suffix('.stream').open('wb') as output:
     with candidate.candidate(image,a.work,4096 if problem=='budget' else 256*1024**2,image.with_suffix('.daemon.log'),output) as view:journal.replay_candidate(view,image.with_suffix('.replay.log'))
   except (OSError,ValueError):check(True,problem)
   else:raise AssertionError('unsafe candidate accepted: '+problem)
   check(fixture.sha(image)==before)
+  if problem=='budget':check(time.monotonic()-started<30,'candidate I/O failure did not terminate tool promptly')
 (a.work/'journal-candidate-results.json').write_text(json.dumps(dict(result='passed',checks=checks,profiles=len(sources),maximum_overlay_bytes=maximum),indent=2)+'\n')
 print('PASS',checks,'bounded journal candidate checks',flush=True)

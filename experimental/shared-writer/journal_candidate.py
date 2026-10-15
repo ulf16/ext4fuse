@@ -28,9 +28,11 @@ def candidate(source,work,limit,log,output):
    os.close(write);write=-1
    if not select.select([read],[],[],30)[0] or os.read(read,1)!=b'\1':raise OSError(errno.EIO,'journal candidate mount failed; diagnostic log retained')
    mounted=True;boundary('candidate:mounted')
-   yield mount/'image'
+   with journal_recovery.abort_on(read):yield mount/'image'
    process.stdin.write(b'S');process.stdin.flush();process.stdin.close()
    if process.wait(timeout=120)!=0:raise OSError(errno.EIO,'journal candidate stream failed')
+   if os.path.ismount(mount):unmount(mount)
+   if os.path.ismount(mount):raise OSError(errno.EIO,'journal candidate mount did not detach')
    mounted=False;boundary('candidate:streamed')
  finally:
   os.close(read)

@@ -1743,8 +1743,11 @@ and their newly referenced data, rather than a snapshot of pre-replay metadata.
 (default 256 MiB, page aligned, configurable from 4 KiB to 1 GiB). RAM also holds
 old pages and indexing overhead; this is a changed-page budget, not a total RSS
 limit. Exhaustion refuses replay without writing the source. A retained import
-can retry with a larger budget. Sealed replay no longer needs the volatile
-candidate. There is no full-image fallback.
+can retry with a larger budget. Candidate I/O errors signal the supervising
+process through a private pipe, so a tool stuck in its own error cleanup is
+terminated promptly. Sealed replay no longer needs the volatile candidate.
+There is no full-image fallback. Teardown verifies that the private mount has
+actually detached, including when the producer disappears mid-stream.
 
 Initialization records durable import consent, then streams complete old/new
 pages into the authenticated external transaction log. It **leaves the original

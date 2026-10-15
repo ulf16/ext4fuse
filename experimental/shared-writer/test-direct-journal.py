@@ -35,7 +35,11 @@ def cli(action,dev,root,crash=None,ok=True):
  deadline=time.monotonic()+20
  while result.returncode and b'Device or resource busy' in result.stderr and time.monotonic()<deadline:
   time.sleep(.2);result=subprocess.run(args,env=dict(os.environ,EXT4_TEST_CRASH=crash or ''),capture_output=True,timeout=180)
- check((result.returncode==0)==ok,(action,crash,result.stdout,result.stderr));return result
+ check((result.returncode==0)==ok,(action,crash,result.stdout,result.stderr))
+ if crash:
+  inner=crash.startswith(('candidate:','journal:'))
+  check(result.returncode==77 or inner and result.returncode==1 and (root/'direct-state').exists(),('fault not reached',crash,result.stderr))
+ return result
 
 def verify(dev,root,expected):
  cli('recover',dev,root);check((root/'chain/image.img').stat().st_blocks==0)

@@ -10,17 +10,33 @@
 #include <limits.h>
 #include <pthread.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 static struct fuse *mount_fs;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t main_thread;
+static int loop_done;
+static void wake_loop(int signal_number) { (void)signal_number; }
 static uint64_t capacity;
-static int ready_fd, sealed, result = ECANCELED;
+static int ready_fd, sealed, notified, result = ECANCELED;
+static void failed(int error) {
+  if (error && !notified) {
+    unsigned char message[4] = {error & 255, (error >> 8) & 255,
+                                (error >> 16) & 255, (error >> 24) & 255};
+    notified = 1;
+    /* One bounded message wakes the supervisor even if e2fsprogs deadlocks in
+     * its own write-error cleanup. The candidate never publishes after error.
+     */
+    (void)write(ready_fd, message, sizeof(message));
+  }
+}
 static struct timespec modified;
 static int file(const char *path) { return !strcmp(path, "/image"); }
 static int attributes(const char *path, struct stat *st,
@@ -86,6 +102,7 @@ static int read_file(const char *path, char *data, size_t n, off_t off,
     return -EOVERFLOW;
   pthread_mutex_lock(&mutex);
   int e = overlay_read(active_overlay, off, n, data, 0);
+  failed(e);
   pthread_mutex_unlock(&mutex);
   return e ? -e : (int)n;
 }
@@ -98,6 +115,7 @@ static int write_file(const char *path, const char *data, size_t n, off_t off,
     return -EINVAL;
   pthread_mutex_lock(&mutex);
   int e = sealed ? EROFS : overlay_write(active_overlay, off, n, data);
+  failed(e);
   if (!e)
     clock_gettime(CLOCK_REALTIME, &modified);
   pthread_mutex_unlock(&mutex);
@@ -121,8 +139,7 @@ static void *initialized(struct fuse_conn_info *conn, struct fuse_config *cfg) {
   unsigned char ready = 1;
   if (write(ready_fd, &ready, 1) != 1)
     fuse_exit(mount_fs);
-  close(ready_fd);
-  ready_fd = -1;
+
   return NULL;
 }
 static void *control(void *unused) {
@@ -141,11 +158,56 @@ static void *control(void *unused) {
   }
   pthread_mutex_unlock(&mutex);
   fuse_exit(mount_fs);
-  fuse_unmount(mount_fs);
+  /* fuse_exit does not wake a blocking receive. Interrupt the main thread until
+   * it observes exit; unmount only after joining this thread, since macFUSE's
+   * unmount helper can fork and must not run from our control thread. */
+  while (!__atomic_load_n(&loop_done, __ATOMIC_ACQUIRE)) {
+    pthread_kill(main_thread, SIGUSR1);
+    struct timespec pause = {0, 10000000};
+    nanosleep(&pause, NULL);
+  }
   return NULL;
+}
+static int detached(const char *path, dev_t host) {
+  struct stat st;
+  return !stat(path, &st) && st.st_dev == host;
+}
+static int cleanup_mount(const char *path, dev_t host) {
+  if (detached(path, host))
+    return 0;
+  /* Some macFUSE libfuse3 versions return from fuse_unmount while the dead
+   * mount remains. Use a separate executable and verify the host directory is
+   * visible again. This also runs when the producer disappeared mid-stream. */
+#ifdef __APPLE__
+  char *args[] = {"/sbin/umount", "-f", (char *)path, NULL};
+#else
+  char *args[] = {"fusermount3", "-uz", (char *)path, NULL};
+#endif
+  extern char **environ;
+  posix_spawn_file_actions_t actions;
+  int e = posix_spawn_file_actions_init(&actions);
+  if (e)
+    return e;
+  posix_spawn_file_actions_adddup2(&actions, STDERR_FILENO, STDOUT_FILENO);
+  pid_t child;
+  e = posix_spawnp(&child, args[0], &actions, NULL, args, environ);
+  posix_spawn_file_actions_destroy(&actions);
+  if (e)
+    return e;
+  int status;
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR)
+      return errno;
+  }
+  return detached(path, host) ? 0 : EIO;
 }
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
+  struct sigaction wake = {.sa_handler = wake_loop};
+  sigemptyset(&wake.sa_mask);
+  if (sigaction(SIGUSR1, &wake, NULL))
+    return 1;
+  main_thread = pthread_self();
   if (argc != 5)
     return 2;
   char *end;
@@ -159,6 +221,10 @@ int main(int argc, char **argv) {
   ready_fd = (int)fd;
   if (fcntl(ready_fd, F_SETFD, FD_CLOEXEC) < 0)
     return 1;
+  struct stat mount_info;
+  if (stat(argv[2], &mount_info) || !S_ISDIR(mount_info.st_mode))
+    return 1;
+  dev_t host_device = mount_info.st_dev;
   struct stat source;
   if (lstat(argv[1], &source) || !S_ISREG(source.st_mode) ||
       source.st_uid != getuid() || source.st_nlink != 1 ||
@@ -202,8 +268,12 @@ int main(int argc, char **argv) {
     return 1;
   }
   int loop = fuse_loop(mount_fs);
+  __atomic_store_n(&loop_done, 1, __ATOMIC_RELEASE);
   pthread_join(thread, NULL);
+  fuse_unmount(mount_fs);
+  int cleanup = cleanup_mount(argv[2], host_device);
+  close(ready_fd);
   fuse_destroy(mount_fs);
   overlay_close(active_overlay);
-  return loop || result ? 1 : 0;
+  return loop || result || cleanup ? 1 : 0;
 }
