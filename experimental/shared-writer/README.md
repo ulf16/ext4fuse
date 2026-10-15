@@ -21,7 +21,9 @@ Publication exports a new image: copy the base, apply staged pages, fsync, then
 atomically link the completed file to a new destination without replacing an
 existing file. Failures remove staging files. A process crash can leave an orphan
 staging file; no source image is modified. Directory-entry durability across power
-loss is not certified. Dirty filesystems and pending journal recovery are rejected.
+loss is not certified. The basic overlay exporter rejects dirty filesystems.
+Managed sessions can explicitly recover a supported pending internal journal
+before reader admission, as described in the journal-recovery section below.
 
 ## Run
 
@@ -224,9 +226,10 @@ Only new disposable copies created by preparation are supported. There is no API
 to commit to an arbitrary existing image, block device, or mounted filesystem.
 Private directories and cooperating-process locks remain assumptions; concurrent
 external writers are unsupported. Tests simulate process termination and torn
-pages, not physical power loss or failed hardware. Mounted write support and native
-Linux journal interoperability remain future work. Managed transaction chaining
-and log retirement are described below. The installed read-only reader and Homebrew package are unchanged.
+pages, not physical power loss or failed hardware. Later sections extend this
+stage with managed mounts, device publication and opt-in native journal recovery.
+New writes still use external redo rather than Linux JBD2 commits. Managed
+transaction chaining and log retirement are described below. The installed read-only reader and Homebrew package are unchanged.
 
 ## Managed transaction chains and reader refresh
 
@@ -1644,6 +1647,7 @@ This adds native journal recovery at import/startup. New writes still use our
 external redo generations; they do not create Linux JBD2 transactions. It does
 not make this experimental branch a fully journaled production ext4 driver.
 `test-journal-recovery.py` exercises real debugfs-generated JBD2 records across
-all twelve reader/writer profiles and crashes before/during generation replay.
+all twelve reader/writer profiles, including coupled inode/bitmap/directory
+transactions and crashes before/during generation replay.
 `test-journal-native.py` checks actual disposable hdiutil/loop devices, recovered
 mounted reads and writes, and interrupted physical publication.

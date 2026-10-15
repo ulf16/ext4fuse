@@ -37,3 +37,23 @@ def create(source,image,*,version=3,kind='committed',unclean=True):
  if b'Journal start:            1' not in dump:raise AssertionError((output,dump))
  expected=original if kind in ('uncommitted','revoke') else data+original[block:]
  return dict(block=block,number=number,old=original,new=expected,log=dump)
+
+def metadata(source,image):
+ """Journal a complete clean namespace change: inode, bitmap, directory, data."""
+ image=Path(image);shutil.copyfile(source,image);after=image.with_suffix('.after')
+ shutil.copyfile(source,after);payload=image.with_suffix('.created');data=b'committed namespace and allocation metadata\n';payload.write_bytes(data)
+ debug(after,f'write {payload} /journal-created');run(['e2fsck','-fn',after])
+ with image.open('rb') as old:
+  old.seek(1024);sb=old.read(1024)
+ block=1024<<struct.unpack_from('<I',sb,24)[0];numbers=[];records=image.with_suffix('.records')
+ with image.open('rb') as old,after.open('rb') as new,records.open('wb') as out:
+  for number in range(image.stat().st_size//block):
+   a,b=old.read(block),new.read(block)
+   if a!=b:numbers.append(number);out.write(b)
+ if len(numbers)<4:raise AssertionError('namespace fixture did not change coupled metadata')
+ commands=[f'journal_open -c -v 3',f'journal_write -b {",".join(map(str,numbers))} {records}','journal_close',
+           f'set_super_value feature_incompat {struct.unpack_from("<I",sb,96)[0]|4}','set_super_value state 0']
+ script=image.with_suffix('.commands');script.write_text('\n'.join(commands)+'\n');run(['debugfs','-w','-f',script,image])
+ dump=run(['debugfs','-R','logdump -S',image])
+ if b'Journal start:            1' not in dump:raise AssertionError(dump)
+ return data

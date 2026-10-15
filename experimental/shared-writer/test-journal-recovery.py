@@ -12,9 +12,9 @@ def check(value,detail='journal recovery check failed'):
  global checks
  assert value,detail;checks+=1
 def opened(root,**kwargs):return session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),**kwargs)
-def verify(root,expected):
+def verify(root,expected,path='/existing-file'):
  with opened(root) as s:
-  with s.open('/existing-file') as h:check(h.read()==expected)
+  with s.open(path) as h:check(h.read()==expected)
  fixture.run(['e2fsck','-fn',root/'image.img'])
 
 sources=sorted(p for p in (a.work/'fixtures').glob('*-csum*.img') if '-output' not in p.name)
@@ -43,6 +43,12 @@ with tempfile.TemporaryDirectory(prefix='journal-recovery-',dir=a.work) as tmp:
    # Journal generations and their bounded logs must retire normally.
    with opened(root) as s:s.checkpoint()
    check(not list(root.glob('g-*')));check(fixture.sha(source)==source_hash)
+  # Replay one coupled namespace/allocation transaction, not just data pages.
+  image=tmp/f'{index}-metadata.img';expected=fixture.metadata(source,image);original=fixture.sha(image)
+  root=tmp/f'{index}-metadata';chain.clone(image,root);journal.managed(root)
+  with opened(root) as s:
+   with s.open('/journal-created') as h:check(h.read()==expected)
+  fixture.run(['e2fsck','-fn',root/'image.img']);check(fixture.sha(image)==original)
  # Explicitly exercise checksum-v2 as well as the modern default v3.
  modern=next((p for p in sources if 'csum1' in p.name),None)
  if modern:
@@ -56,14 +62,14 @@ with tempfile.TemporaryDirectory(prefix='journal-recovery-',dir=a.work) as tmp:
   else:raise AssertionError('unbounded recovery subprocess accepted')
  # Failure points before sealing must preserve dirty bytes; sealed replay must
  # complete idempotently after a fresh process starts, including torn pages.
- image=tmp/'fault.img';detail=fixture.create(sources[0],image);original=fixture.sha(image)
+ image=tmp/'fault.img';expected=fixture.metadata(sources[0],image);original=fixture.sha(image)
  for number,phase in enumerate(('journal:copied','journal:replayed','journal:checked','journal:stream-ready','journal:streamed',
        'chain-intent','record','undo-log','prepared','chain-prepared','validated','started','half:0:0','page:0','synced','head-ready','head-published')):
   root=tmp/f'fault-{number}';chain.clone(image,root)
   result=subprocess.run([sys.executable,here/'journal-recover.py','chain',root],env=dict(os.environ,EXT4_TEST_CRASH=phase),capture_output=True,timeout=120)
   check(result.returncode!=0,(phase,result.stdout,result.stderr))
   if phase.startswith('journal:'):check(fixture.sha(root/'image.img')==original,'candidate replay escaped before sealing')
-  journal.managed(root);verify(root,detail['new']);head=chain.read_state(root)['head'];journal.managed(root);check(chain.read_state(root)['head']==head)
+  journal.managed(root);verify(root,expected,'/journal-created');head=chain.read_state(root)['head'];journal.managed(root);check(chain.read_state(root)['head']==head)
   check(fixture.sha(image)==original)
  # Non-journal damage must not be fixed by journal recovery, and no device is
  # ever handed to e2fsck. Unknown/external journal geometry is refused early.
