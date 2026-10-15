@@ -95,20 +95,25 @@ def budget_check(value):
 
 def init(device,root,work,*,check_bytes=1024**3):
  budget_check(check_bytes)
- root=inplace.block.canonical(root);root.mkdir(mode=0o700);directory(root.parent)
- with old.locked(root),Device(device,root) as target:
-  if live_device.magic(target)!=b'\x53\xef':refuse('initial direct device must have intact ext4 magic')
-  baseline=live_device.scan(target)
-  managed=root/'chain';managed.mkdir(mode=0o700);directory(root);path=managed/'image.img';token(path,target.size)
-  view=View(path,target,lambda:refuse('initialization cannot write device'))
-  try:
-   with image_io.register(path,view):
-    uuid,_=checked(path,target,work,root,check_bytes)
-    if live_device.scan(target).root()!=baseline.root() or live_device.magic(target)!=b'\x53\xef':refuse('direct source changed during admission')
-    info=os.lstat(path)
-    inplace.seal(managed,'chain-state',dict(version=2,algorithm=merkle.ALGORITHM,head=0,pending=None,sha256=baseline.root(),device=info.st_dev,inode=info.st_ino,size=target.size))
-    inplace.seal(root,'direct-state',dict(version=1,identity=target.identity,size=target.size,sector=target.sector,uuid=uuid,phase='clean',token_device=info.st_dev,token_inode=info.st_ino))
-  finally:view.close()
+ root=inplace.block.canonical(root)
+ if root.exists() or root.is_symlink():raise FileExistsError(root)
+ # The new directory is on its parent's already checked off-device filesystem.
+ # Claim first: transient busy-device failures must not leave an unusable root.
+ with Device(device,root.parent) as target:
+  root.mkdir(mode=0o700);directory(root.parent)
+  with old.locked(root):
+   if live_device.magic(target)!=b'\x53\xef':refuse('initial direct device must have intact ext4 magic')
+   baseline=live_device.scan(target)
+   managed=root/'chain';managed.mkdir(mode=0o700);directory(root);path=managed/'image.img';token(path,target.size)
+   view=View(path,target,lambda:refuse('initialization cannot write device'))
+   try:
+    with image_io.register(path,view):
+     uuid,_=checked(path,target,work,root,check_bytes)
+     if live_device.scan(target).root()!=baseline.root() or live_device.magic(target)!=b'\x53\xef':refuse('direct source changed during admission')
+     info=os.lstat(path)
+     inplace.seal(managed,'chain-state',dict(version=2,algorithm=merkle.ALGORITHM,head=0,pending=None,sha256=baseline.root(),device=info.st_dev,inode=info.st_ino,size=target.size))
+     inplace.seal(root,'direct-state',dict(version=1,identity=target.identity,size=target.size,sector=target.sector,uuid=uuid,phase='clean',token_device=info.st_dev,token_inode=info.st_ino))
+   finally:view.close()
  return root
 
 class Controller:

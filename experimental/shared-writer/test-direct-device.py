@@ -54,6 +54,19 @@ if a.limit:sources=sources[:a.limit]
 check(bool(sources))
 with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
  tmp=Path(tmp)
+ # Busy admission must be retryable without deleting a partially initialized root.
+ real_device=direct.Device
+ class BusyDevice:
+  def __init__(self,*unused):pass
+  def __enter__(self):raise OSError(errno.EBUSY,'injected busy device')
+  def __exit__(self,*unused):pass
+ direct.Device=BusyDevice
+ try:
+  try:direct.init('/dev/unused',tmp/'busy-admission',a.work)
+  except OSError as error:check(error.errno==errno.EBUSY)
+  else:raise AssertionError('busy device admitted')
+  check(not (tmp/'busy-admission').exists())
+ finally:direct.Device=real_device
  for index,source in enumerate(sources):
   image=tmp/f'disposable-{index}.img';shutil.copyfile(source,image);before=fixture.sha(image);device=attach(image)
   try:
@@ -143,7 +156,6 @@ with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
   before=fixture.sha(image);recover(device,root,False);check(fixture.sha(image)==before);check(rawmagic(image)==bytes(2))
   with controller(root,device) as c:direct.old.write_at(c.target.fd,original,position);c.target.flush()
   recover(device,root)
-  # Too little metadata scratch leaves an otherwise committed device guarded.
   # Reader RPCs must reject a changed guard before consulting the native reader.
   with controller(root,device) as c:
    with opened(c) as s:
@@ -157,6 +169,7 @@ with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
      finally:direct.old.write_at(c.target.fd,saved_guard,offset);c.target.flush()
    check(c.failed);check(rawmagic(image)==bytes(2))
   recover(device,root)
+  # Too little metadata scratch leaves an otherwise committed device guarded.
   with controller(root,device) as c:
    with opened(c) as s:s.checkpoint()
    c.check_bytes=4096
