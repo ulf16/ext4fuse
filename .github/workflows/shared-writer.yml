@@ -533,6 +533,8 @@ jobs:
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-direct-device.py --work "$RUNNER_TEMP/direct-device"
       - name: Verify bounded native journal replay candidates
         run: python3 experimental/shared-writer/test-journal-candidate.py --work "$RUNNER_TEMP/direct-device"
+      - name: Verify replay space beside large allocated user data
+        run: python3 experimental/shared-writer/test-journal-candidate-space.py --work "$RUNNER_TEMP/direct-device"
       - name: Verify no-shadow dirty loop-device recovery and crash boundaries
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-direct-journal.py --work "$RUNNER_TEMP/direct-device"
       - name: Save direct-device validation
@@ -544,4 +546,5 @@ jobs:
             ${{ runner.temp }}/direct-device/direct-device-results.json
             ${{ runner.temp }}/direct-device/metadata-snapshot-results.json
             ${{ runner.temp }}/direct-device/journal-candidate-results.json
+            ${{ runner.temp }}/direct-device/journal-candidate-space-results.json
             ${{ runner.temp }}/direct-device/direct-journal-results.json

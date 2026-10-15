@@ -1766,7 +1766,10 @@ handle, transaction and 4 TiB Merkle limits still apply.
 
 `test-journal-candidate.py` compares bounded replay with independent full-copy
 test oracles across all twelve profiles and journal formats, and checks budget,
-checksum, UUID, feature and metadata failures. `test-direct-journal.py` uses
+checksum, UUID, feature and metadata failures. `test-journal-candidate-space.py`
+proves that replay beside a 128 MiB allocated file on a 256 MiB filesystem needs
+only changed-page storage; the macOS fixture used 12 KiB of changed pages and a
+24,624-byte old/new stream. `test-direct-journal.py` uses
 explicitly disposable native devices to verify unchanged initial sources,
 zero-allocation tokens, cold replay, mounted writes, tampered-log refusal, budget
 retry, and process loss throughout candidate/staging/guard/physical replay/close.
