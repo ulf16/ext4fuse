@@ -5,7 +5,7 @@ import argparse,contextlib,errno,json,os,plistlib,shutil,signal,subprocess,sys,t
 from pathlib import Path
 import chain,direct_device as direct,image_io,journal_fixtures as fixture,live_device as live,session
 from credentials import Credentials
-p=argparse.ArgumentParser();p.add_argument('--work',type=Path,required=True);p.add_argument('--limit',type=int);p.add_argument('--worker',nargs=2,metavar=('ROOT','DEVICE'));a=p.parse_args();here=Path(__file__).resolve().parent;checks=0
+p=argparse.ArgumentParser();p.add_argument('--work',type=Path,required=True);p.add_argument('--limit',type=int);p.add_argument('--worker',nargs=2,metavar=('ROOT','DEVICE'));a=p.parse_args();here=Path(__file__).resolve().parent;checks=0;sectors=set()
 if a.worker:
  root,device=a.worker
  with direct.Controller(root,device,a.work) as c:
@@ -33,11 +33,11 @@ def controller(root,device):
  try:yield c
  finally:c.__exit__()
 
-def attach(image):
+def attach(image,sector=512):
  if sys.platform=='darwin':
   info=plistlib.loads(run(['hdiutil','attach','-nomount','-imagekey','diskimage-class=CRawDiskImage','-plist',image]));return min((n['dev-entry'] for n in info['system-entities'] if 'dev-entry' in n),key=len)
  if sys.platform=='linux':
-  device=run(['losetup','--find','--show',image]).decode().strip()
+  device=run(['losetup','--find','--show','--sector-size',str(sector),image]).decode().strip()
   if shutil.which('udevadm'):run(['udevadm','settle','--timeout=15'])
   return device
  raise RuntimeError('native disposable device required')
@@ -71,11 +71,13 @@ with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
   check(not (tmp/'busy-admission').exists())
  finally:direct.Device=real_device
  for index,source in enumerate(sources):
-  image=tmp/f'disposable-{index}.img';shutil.copyfile(source,image);before=fixture.sha(image);device=attach(image)
+  image=tmp/f'disposable-{index}.img';shutil.copyfile(source,image);before=fixture.sha(image);requested_sector=4096 if source.name.startswith('4096-') else 512;device=attach(image,requested_sector)
   try:
    root=tmp/f'device-{index}';admission(lambda:direct.init(device,root,a.work));check(fixture.sha(image)==before)
    token=root/'chain/image.img';check(token.stat().st_size==source.stat().st_size and token.stat().st_blocks==0)
    with controller(root,device) as c:
+    sectors.add(c.target.sector)
+    if sys.platform=='linux':check(c.target.sector==requested_sector)
     if index==0:
      # Native children receive only read capability; no raw write descriptor.
      capability_before=fixture.sha(image)
@@ -120,7 +122,8 @@ with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
   finally:detach(device)
  # One native device is reused only through clean, checked sessions. The backing
  # file is never rewritten underneath an attached hdiutil/loop device.
- image=tmp/'fault-device.img';shutil.copyfile(sources[0],image);device=attach(image);root=tmp/'fault-device'
+ fault_source=next((p for p in sources if p.name.startswith('4096-extents')),sources[0])
+ image=tmp/'fault-device.img';shutil.copyfile(fault_source,image);device=attach(image,4096 if fault_source.name.startswith('4096-') else 512);root=tmp/'fault-device'
  try:
   admission(lambda:direct.init(device,root,a.work))
   with controller(root,device) as c:
@@ -205,5 +208,5 @@ with tempfile.TemporaryDirectory(prefix='direct-native-',dir=a.work) as tmp:
   if active:unmount(mount,True)
   if log:log.close()
   detach(device)
-(a.work/'direct-device-results.json').write_text(json.dumps(dict(result='passed',checks=checks,profiles=len(sources),platform=sys.platform),indent=2)+'\n')
+(a.work/'direct-device-results.json').write_text(json.dumps(dict(result='passed',checks=checks,profiles=len(sources),platform=sys.platform,logical_sectors=sorted(sectors)),indent=2)+'\n')
 print('PASS',checks,'native direct-device checks')

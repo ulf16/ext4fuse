@@ -1728,7 +1728,8 @@ not those scan costs or the need for an external recovery journal. Existing
 feature, permission, handle, transaction and 4 TiB Merkle limits still apply.
 
 `test-direct-device.py` uses only explicitly created hdiutil/loop targets. It
-checks all twelve profiles, zero token allocation after writes, read-only child
+checks all twelve profiles, native Linux 512/4096-byte logical sectors (including
+4 KiB sector crash recovery), zero token allocation after writes, read-only child
 capabilities, foreign-device/token refusal, regular/sparse/allocation/namespace
 and open-unlink operations, actual mounted writes, corrupted sealed logs,
 untouched-device corruption, scratch-budget failure, and guard/replay/close
