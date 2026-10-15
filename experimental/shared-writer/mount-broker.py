@@ -148,16 +148,24 @@ class Broker:
         elif op==14:
             if arg not in (0,1,2):raise OSError(errno.EINVAL,'invalid rename flags')
             candidate=None
+            original=self.s.statat(None,path,follow_symlinks=False)
+            try:destination=self.s.statat(None,data,follow_symlinks=False)
+            except OSError as e:
+                if e.errno!=errno.ENOENT:raise
+                destination=None
+            same=destination is not None and (original['inode'],original['generation'])==(destination['inode'],destination['generation'])
             if re.fullmatch(rb'\.fuse_hidden[0-9a-fA-F]{16}',data.rsplit(b'/',1)[-1]):
                 st=self.s.statat(None,path,follow_symlinks=False)
                 identity=(st['inode'],st['generation'])
                 if identity in self.identities.values():candidate=identity
             self.s.renameat(None,path,None,data,flags=arg)
+            if same:return 0,b''
             # Volatile, exact-identity tracking is only for libfuse lifecycle
             # cleanup in this live mount, never a prefix scan on recovery.
             moved={}
             for name,identity in self.hidden.items():
                 if name==path or name.startswith(path.rstrip(b'/')+b'/'):name=data+name[len(path):]
+                elif arg==2 and (name==data or name.startswith(data.rstrip(b'/')+b'/')):name=path+name[len(data):]
                 moved[name]=identity
             self.hidden=moved
             if candidate:self.hidden[data]=candidate

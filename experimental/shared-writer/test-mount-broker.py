@@ -76,6 +76,16 @@ with tempfile.TemporaryDirectory(prefix='mount-broker-',dir=a.work) as tmp:
             denied(lambda:call(14,b'/x',b'/x',arg=1),errno.EEXIST)
             call(14,b'/x',b'/existing-file',arg=1)
             denied(lambda:call(14,b'/existing-file',b'/x',arg=3),errno.EINVAL)
+            first,_=call(3,b'/swap-first',arg=(0o600<<32)|os.O_RDWR|os.O_CREAT|os.O_EXCL)
+            second,_=call(3,b'/swap-second',arg=(0o600<<32)|os.O_RDWR|os.O_CREAT|os.O_EXCL)
+            hidden1=b'/.fuse_hidden0000000100000002';hidden2=b'/.fuse_hidden0000000100000003'
+            call(14,b'/swap-first',hidden1);call(14,b'/swap-second',hidden2)
+            call(14,hidden1,hidden2,arg=2)
+            check(b.hidden[hidden1]==b.identities[second] and b.hidden[hidden2]==b.identities[first])
+            call(15,hidden1,b'/same-inode');call(14,hidden1,b'/same-inode',arg=2)
+            check(hidden1 in b.hidden and b'/same-inode' not in b.hidden)
+            call(13,b'/same-inode');call(7,token=first);call(7,token=second)
+            call(23,hidden1);call(23,hidden2);check(not b.hidden)
             call(21,b'/',arg=7)
             # Malformed private transport framing cannot execute a mutation.
             frame=module.HEADER.pack(b'badmagic',3,0,0,os.getuid(),os.getgid(),0,0,0,0,0)

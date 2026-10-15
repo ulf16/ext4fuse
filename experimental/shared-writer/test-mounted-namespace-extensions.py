@@ -59,6 +59,8 @@ try:
     finally:os.close(held_dir)
     denied(lambda:rename(mount/'right',f,2),errno.EINVAL)
     os.mkfifo(mount/'fifo',0o640);check(stat.S_ISFIFO((mount/'fifo').stat().st_mode))
+    if sys.platform=='linux' and os.getuid()!=0:
+     os.chmod(mount/'fifo',0);denied(lambda:os.open(mount/'fifo',os.O_RDONLY|os.O_NONBLOCK),errno.EACCES);os.chmod(mount/'fifo',0o640)
     try:rd=os.open(mount/'fifo',os.O_RDONLY|os.O_NONBLOCK)
     except OSError as e:
      if sys.platform!='darwin' or e.errno!=errno.EPERM:raise
@@ -75,6 +77,11 @@ try:
      if rd is not None:os.close(rd)
     with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as listener:
      listener.bind(str(mount/'sock'));listener.listen(1);listener.settimeout(5);check(stat.S_ISSOCK((mount/'sock').stat().st_mode))
+     if sys.platform=='linux' and os.getuid()!=0:
+      os.chmod(mount/'sock',0)
+      with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as blocked:
+       blocked.settimeout(5);denied(lambda:blocked.connect(str(mount/'sock')),errno.EACCES)
+      os.chmod(mount/'sock',0o600)
      with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as client:
       client.settimeout(5);client.connect(str(mount/'sock'));peer,_=listener.accept()
       with peer:client.sendall(b'unix socket');check(peer.recv(20)==b'unix socket')
