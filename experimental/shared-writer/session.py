@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Serialized offline image session with one resident native reader."""
+import image_io
 import errno
 import importlib.util
 import os
@@ -61,7 +62,7 @@ class Session:
             self._checkpoint_head = self.state['head']
             self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                             stderr=subprocess.DEVNULL, bufsize=0)
+                                             stderr=subprocess.DEVNULL, bufsize=0, **image_io.child(self.root / 'image.img'))
             os.set_blocking(self._process.stdin.fileno(), False)
             if credentials is not None:
                 self._rpc(6, credentials.encode())
@@ -115,6 +116,9 @@ class Session:
 
     def _rpc(self, op, path=b'', offset=0, length=0):
         try:
+            before_request = getattr(self._commit_sink, 'before_request', None)
+            if before_request is not None:
+                before_request()
             deadline = time.monotonic() + 30
             self._send(REQUEST.pack(b'E4RD0001', op, len(path), offset, length) + path, deadline)
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))

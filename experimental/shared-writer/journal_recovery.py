@@ -17,10 +17,10 @@ def tool(name):
  if executable is None:raise OSError(errno.ENOENT,name+' is required for native journal recovery')
  return str(Path(executable).resolve())
 
-def command(argv,env,output=None,timeout=600):
+def command(argv,env,output=None,timeout=600,pass_fds=()):
  """Bound trusted tool output as well as wall time; never accept prompts."""
  data=bytearray();deadline=time.monotonic()+timeout
- with subprocess.Popen(list(map(str,argv)),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env) as child:
+ with subprocess.Popen(list(map(str,argv)),stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,env=env,pass_fds=pass_fds) as child:
   try:
    with selectors.DefaultSelector() as poll:
     poll.register(child.stdout,selectors.EVENT_READ)

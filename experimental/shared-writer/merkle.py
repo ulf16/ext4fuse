@@ -6,6 +6,7 @@ Only roots are persisted, alongside complete page preimages/redo. No mutable
 on-disk hash index needs its own crash protocol. The cache is trusted only while
 chain-lock is held and the image's identity/mtime/ctime fingerprint is unchanged.
 """
+import image_io
 import fcntl
 import hashlib
 import json
@@ -152,7 +153,7 @@ def capture(image_path, generation, producer, tree, expected_base):
         info = os.fstat(image.fileno())
         state = dict(device=info.st_dev, inode=info.st_ino, size=tree.size, sha256=expected_base)
         tree.check(image, state)
-        process = subprocess.Popen([str(producer), str(image_path), '--stream'], stdout=subprocess.PIPE)
+        process = subprocess.Popen([str(producer), str(image_path), '--stream'], stdout=subprocess.PIPE, **image_io.child(image_path))
         try:
             read = inplace.block.read_exact
             magic, size, staged = struct.unpack('<8sQQ', read(process.stdout, 24))
@@ -310,8 +311,7 @@ def recover(root, state, tree=None):
         complete = (generation / 'complete').exists()
         if complete and not started:
             raise ValueError('completion without start marker')
-        fd = os.open(root / 'image.img', os.O_RDWR | os.O_NOFOLLOW)
-        with os.fdopen(fd, 'r+b', buffering=0) as image, regular(generation / 'pages') as log:
+        with image_io.opened(root / 'image.img', True) as image, regular(generation / 'pages') as log:
             owned(log)
             fcntl.flock(image, fcntl.LOCK_EX | fcntl.LOCK_NB)
             identity(image, meta)
@@ -342,7 +342,7 @@ def recover(root, state, tree=None):
                         offset = index * PAGE + half * 2048
                         data = memoryview(new)[half * 2048:(half + 1) * 2048]
                         while data:
-                            written = os.pwrite(image.fileno(), data, offset)
+                            written = image_io.write_at(image, data, offset)
                             if written <= 0:
                                 raise OSError('short page write')
                             data = data[written:]
@@ -350,7 +350,7 @@ def recover(root, state, tree=None):
                         boundary(f'half:{number}:{half}')
                     boundary(f'page:{number}')
                 boundary('applied')
-                sync(image.fileno())
+                image_io.flush(image)
                 boundary('synced')
                 # Read back every touched chunk, including its clean bytes.
                 plan(image, log, meta['count'], tree, 'result')

@@ -513,3 +513,29 @@ jobs:
           path: |
             ${{ runner.temp }}/journal-writer/journal-recovery-results.json
             ${{ runner.temp }}/journal-writer/journal-native-results.json
+
+  direct-device:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install direct device and mounted test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Require disposable loop devices and native FUSE
+        run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
+      - name: Build direct-device runtime with sanitizers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/direct-device" --sanitize
+      - name: Prepare independently checked filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/direct-device"
+      - name: Verify metadata-only checks omit allocated user data
+        run: python3 experimental/shared-writer/test-metadata-snapshot.py --work "$RUNNER_TEMP/direct-device"
+      - name: Verify no-shadow writes, native mounts and interrupted physical recovery
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-direct-device.py --work "$RUNNER_TEMP/direct-device"
+      - name: Save direct-device validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-device-validation
+          path: |
+            ${{ runner.temp }}/direct-device/direct-device-results.json
+            ${{ runner.temp }}/direct-device/metadata-snapshot-results.json

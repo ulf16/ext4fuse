@@ -14,17 +14,27 @@ broker=importlib.util.module_from_spec(spec);spec.loader.exec_module(broker)
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='action',required=True)
-    initial=sub.add_parser('init');initial.add_argument('device');initial.add_argument('root',type=Path);initial.add_argument('--recover-journal',action='store_true')
+    initial=sub.add_parser('init');initial.add_argument('device');initial.add_argument('root',type=Path);initial.add_argument('--recover-journal',action='store_true');initial.add_argument('--storage',choices=('shadow','direct'),default='shadow');initial.add_argument('--work',type=Path);initial.add_argument('--check-bytes',type=int,default=1024**3)
     for action in ('mount','recover'):
         command=sub.add_parser(action);command.add_argument('device');command.add_argument('root',type=Path)
         command.add_argument('--work',type=Path,required=True)
         command.add_argument('--recover-journal',action='store_true')
+        command.add_argument('--check-bytes',type=int,default=1024**3)
         command.add_argument('--checkpoint-every',type=int,default=64)
         if action=='mount':
             command.add_argument('--mountpoint',type=Path,required=True)
             command.add_argument('--control-socket',type=Path)
     a=p.parse_args()
-    if a.action=='init':print(init(a.device,a.root,recover_journal=a.recover_journal));return
+    direct_mode=(a.action=='init' and a.storage=='direct') or (a.action!='init' and (a.root/'direct-state').exists())
+    if (a.root/'direct-state').exists() and (a.root/'live-state').exists():p.error('ambiguous device storage format')
+    if direct_mode and a.recover_journal:p.error('direct mode requires an already recovered native journal; no full-image fallback is performed')
+    if a.action=='init':
+        if direct_mode:
+            if a.work is None:p.error('--storage direct requires --work RUNTIME')
+            from direct_device import init as direct_init
+            print(direct_init(a.device,a.root,a.work,check_bytes=a.check_bytes))
+        else:print(init(a.device,a.root,recover_journal=a.recover_journal))
+        return
     work=a.work.resolve()
     if a.action=='mount':
         _,work,mount=broker.validate_mount(a.root/'chain',work,a.mountpoint)
@@ -32,7 +42,11 @@ def main():
         if mount.is_relative_to(root) or root.is_relative_to(mount):
             raise ValueError('mountpoint must be outside continuous device journal')
     mask=os.umask(0);os.umask(mask)
-    with Controller(a.root,a.device) as target:
+    if direct_mode:
+        from direct_device import Controller as DirectController
+        controller=DirectController(a.root,a.device,work,check_bytes=a.check_bytes)
+    else:controller=Controller(a.root,a.device)
+    with controller as target:
         with session.Session(target.chain,work/'mutation-producer',work/'reader-server',
                 Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=a.checkpoint_every,commit_sink=target,recover_journal=a.recover_journal) as s:
             if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket)

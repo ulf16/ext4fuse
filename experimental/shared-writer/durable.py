@@ -30,6 +30,10 @@ def directory(path):
 
 
 def regular(path):
+    from image_io import lookup
+    view = lookup(path)
+    if view is not None:
+        return view.open(False)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     if not stat.S_ISREG(os.fstat(fd).st_mode):
         os.close(fd)

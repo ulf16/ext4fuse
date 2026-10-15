@@ -3,9 +3,10 @@
 This experimental backend retains the native reader and uses libext2fs for
 filesystem mutations. It includes a private FUSE 3 frontend for managed image copies,
 guarded offline device publication, and continuous device write-through via a
-private disk-backed shadow. Production Homebrew packaging and general-purpose
+private disk-backed shadow or the direct storage mode described at the end.
+Production Homebrew packaging and general-purpose
 write support remain outside this prototype. See the final continuous-device
-section for its commands, storage requirements and recovery limits.
+sections for commands, storage requirements and recovery limits.
 
 The source image is opened read-only and must be a regular file. A custom
 libext2fs I/O manager stages writes in bounded 4 KiB copy-on-write pages. A test-only
@@ -1651,3 +1652,88 @@ all twelve reader/writer profiles, including coupled inode/bitmap/directory
 transactions and crashes before/during generation replay.
 `test-journal-native.py` checks actual disposable hdiutil/loop devices, recovered
 mounted reads and writes, and interrupted physical publication.
+
+### Physical writing without a full data shadow
+
+The opt-in **direct** storage mode retains the native reader and libext2fs
+mutator, but reads unchanged blocks from the exclusively claimed physical device.
+It does not copy regular-file data into a persistent shadow. Select it when
+initializing a new recovery directory:
+
+```sh
+python3 experimental/shared-writer/live-device.py init DEVICE JOURNAL \
+  --storage direct --work RUNTIME
+python3 experimental/shared-writer/live-device.py mount DEVICE JOURNAL \
+  --work RUNTIME --mountpoint MOUNT
+# After interruption, with the same device and intact recovery directory:
+python3 experimental/shared-writer/live-device.py recover DEVICE JOURNAL --work RUNTIME
+```
+
+`direct-device.py init/mount/recover` provides the same direct-only interface.
+Existing shadow recovery directories keep their format; mount/recover detects
+the direct marker automatically. Shadow mode remains the default for the old
+initialization command. Existing histories are not converted or discarded.
+
+The off-device directory stores identity/state files and sealed transaction page
+preimages/redo, not a complete data image. `chain/image.img` is an opaque sparse
+identity token with the device's logical size and **zero allocated data blocks**.
+Its apparent size in `ls -lh` is not occupied shadow storage. It is never a backup,
+ordinary image, or source for external filesystem tools; outside the explicit
+controller its bytes are holes. The controller validates its identity, ownership,
+mode, size and lack of allocated blocks before activating a device. Native
+readers/mutators receive a narrowly scoped, inherited **read-only** descriptor
+whose identity is checked against that token; they cannot write the physical
+source. The FUSE frontend receives no raw device descriptor.
+
+Mutations still stage bounded pages in the C overlay. Before any physical write,
+the coordinator seals complete old/new pages and their authenticated roots in the
+off-device journal. Replay writes through the held writable device descriptor,
+keeps the primary magic guarded, flushes the device, authenticates touched chunks
+and publishes the durable chain head before acknowledging. Partial sector/page
+writes, lost replies and interrupted head publication recover from those same
+retained pages. Sub-sector writes use aligned sector read/modify/write; they never
+expose the guarded magic. Cold recovery authenticates the entire normalized device
+before replay; warm updates retain the existing touched-chunk verification model.
+Device claim/geometry/guard checks also precede reader RPCs. A failure keeps the
+device guarded and requires a fresh recovery process.
+
+Clean close releases all live pins/orphans and requires an independent read-only
+`e2fsck -fn` on a **temporary sparse metadata-only check image**. The exporter uses
+the same metadata selection as e2image: superblock/descriptors, initialized inode
+tables and bitmaps, directories, long symlinks, external attributes, mapping-tree
+blocks and internal journal/orphan-file storage. Ordinary file payloads are omitted.
+Only selected metadata sub-blocks are copied; other bytes in their host pages stay
+zero. Sorted page runs and explicit hole punching prevent host write allocation
+from densely filling gaps. This scratch image is not a recoverable data backup.
+It is deleted after checking and rebuilt after interruption. A full device scan
+checks that the exact committed root is unchanged before clean magic restoration.
+
+`--check-bytes BYTES` bounds selected metadata export (default 1 GiB, configurable
+from 4 KiB to 1 TiB). Host page rounding and allocation overhead are separate;
+the recovery filesystem must support sparse files and hole punching. Too little
+scratch space, an exporter/check failure or device mismatch prevents clean close;
+retained redo remains available for recovery with a suitable budget. Persistent
+redo storage grows with outstanding changes and the checkpoint interval, rather
+than filesystem capacity. Checkpointing retires old logs only after full device
+verification. Keep the entire recovery directory on another drive until the
+device is clean; Linux still cannot replay this external log.
+
+Initial direct admission requires a clean supported filesystem with no pending
+native journal recovery. It **does not** silently create a full copy to handle a
+dirty source. The preceding native-journal import path remains available in
+shadow mode. Direct mode does not yet stream native JBD2 recovery into a bounded
+candidate. Full-device scans at admission, cold recovery, checkpoints and close
+also remain; this change removes the full-size data-copy storage requirement,
+not those scan costs or the need for an external recovery journal. Existing
+feature, permission, handle, transaction and 4 TiB Merkle limits still apply.
+
+`test-direct-device.py` uses only explicitly created hdiutil/loop targets. It
+checks all twelve profiles, zero token allocation after writes, read-only child
+capabilities, foreign-device/token refusal, regular/sparse/allocation/namespace
+and open-unlink operations, actual mounted writes, corrupted sealed logs,
+untouched-device corruption, scratch-budget failure, and guard/replay/close
+interruption boundaries with fresh-process recovery. `test-metadata-snapshot.py`
+requires fsck-clean metadata images while proving allocated user payload blocks
+are absent, measures occupied scratch bytes on a 256 MiB filesystem with a
+128 MiB allocated file, and tests the export budget. Native checks run with
+sanitizers on macOS and Linux CI. Hardware power-loss behavior remains uncertified.
