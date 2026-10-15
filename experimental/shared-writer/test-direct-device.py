@@ -36,7 +36,10 @@ def controller(root,device):
 def attach(image):
  if sys.platform=='darwin':
   info=plistlib.loads(run(['hdiutil','attach','-nomount','-imagekey','diskimage-class=CRawDiskImage','-plist',image]));return min((n['dev-entry'] for n in info['system-entities'] if 'dev-entry' in n),key=len)
- if sys.platform=='linux':return run(['losetup','--find','--show',image]).decode().strip()
+ if sys.platform=='linux':
+  device=run(['losetup','--find','--show',image]).decode().strip()
+  if shutil.which('udevadm'):run(['udevadm','settle','--timeout=15'])
+  return device
  raise RuntimeError('native disposable device required')
 def detach(device):run(['hdiutil','detach',device] if sys.platform=='darwin' else ['losetup','--detach',device])
 def opened(c,checkpoint=0):return session.Session(c.chain,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),commit_sink=c,checkpoint_every=checkpoint)
