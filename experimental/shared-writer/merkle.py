@@ -261,7 +261,9 @@ def plan(image, log, count, tree, actual, cold=False):
     return tree.updates(leaves)
 
 
-def recover(root, state, tree=None):
+def recover(root, state, tree=None, *, validate_only=False):
+    # Dry validation permits direct import to authenticate all old/new pages
+    # before touching the device guard. It neither starts nor publishes replay.
     import inplace
     if state['pending'] is None:
         with regular(root / 'image.img') as image:
@@ -331,6 +333,10 @@ def recover(root, state, tree=None):
             if fingerprint(os.fstat(image.fileno())) != before:
                 raise ValueError('image changed during Merkle replay validation')
             boundary('validated')
+            if validate_only:
+                if started or complete:
+                    raise ValueError('unprotected import already has replay markers')
+                return state
             if fingerprint(os.fstat(image.fileno())) != before:
                 raise ValueError('image changed before Merkle replay')
             if not complete:

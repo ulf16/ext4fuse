@@ -1718,14 +1718,60 @@ than filesystem capacity. Checkpointing retires old logs only after full device
 verification. Keep the entire recovery directory on another drive until the
 device is clean; Linux still cannot replay this external log.
 
-Initial direct admission requires a clean supported filesystem with no pending
-native journal recovery. It **does not** silently create a full copy to handle a
-dirty source. The preceding native-journal import path remains available in
-shadow mode. Direct mode does not yet stream native JBD2 recovery into a bounded
-candidate. Full-device scans at admission, cold recovery, checkpoints and close
-also remain; this change removes the full-size data-copy storage requirement,
-not those scan costs or the need for an external recovery journal. Existing
-feature, permission, handle, transaction and 4 TiB Merkle limits still apply.
+Dirty internal journals require explicit consent during direct initialization:
+
+```sh
+python3 experimental/shared-writer/live-device.py init DEVICE JOURNAL \
+  --storage direct --work RUNTIME --recover-journal
+# Resume staging or complete an interrupted physical replay:
+python3 experimental/shared-writer/live-device.py recover DEVICE JOURNAL --work RUNTIME
+```
+
+The private `journal-candidate` FUSE service presents a regular file to trusted
+e2fsprogs. Reads fall through to the held **read-only** device descriptor; writes
+stay in the bounded C page overlay. No full-size candidate is copied or allocated.
+The temporary mount requires working native FUSE, including for initialization
+and for resuming an interrupted, unsealed import. It is private to the caller,
+and has no network service or physical write capability. Its apparent capacity
+is virtual; it disappears when the producer seals its stream or closes its
+control pipe. Startup replay uses the same strict journal validation,
+`e2fsck -p -E journal_only,nodiscard`, and two full read-only consistency audits
+as shadow mode. The candidate includes recovered namespace/allocation metadata
+and their newly referenced data, rather than a snapshot of pre-replay metadata.
+
+`--journal-bytes BYTES` bounds the candidate's distinct modified 4096-byte pages
+(default 256 MiB, page aligned, configurable from 4 KiB to 1 GiB). RAM also holds
+old pages and indexing overhead; this is a changed-page budget, not a total RSS
+limit. Exhaustion refuses replay without writing the source. A retained import
+can retry with a larger budget. Sealed replay no longer needs the volatile
+candidate. There is no full-image fallback.
+
+Initialization records durable import consent, then streams complete old/new
+pages into the authenticated external transaction log. It **leaves the original
+dirty device unchanged**. Before guarding the device, mount/recover validates the
+entire sealed log and source root. Interrupted unsealed candidates are discarded
+and rebuilt; sealed candidates are reused verbatim. Recovery then installs the
+guard and applies the transaction through the usual durable sector-write path.
+The native reader starts only after replay and full-root verification succeed.
+Changing a device externally after direct initialization remains an error; this
+option does not rebase an existing direct history onto an unrelated journal.
+
+Internal legacy/checksum-v2/checksum-v3 journals, committed transactions, revokes,
+escaped blocks and incomplete tails use e2fsprogs replay. External journals,
+fast-commit, MMP, unsupported features, journal errors and non-journal damage
+remain refused. New writes still use our external recovery log, rather than
+creating Linux-replayable JBD2 transactions. Full-device scans at admission,
+cold recovery, checkpoints and close remain. Existing feature, permission,
+handle, transaction and 4 TiB Merkle limits still apply.
+
+`test-journal-candidate.py` compares bounded replay with independent full-copy
+test oracles across all twelve profiles and journal formats, and checks budget,
+checksum, UUID, feature and metadata failures. `test-direct-journal.py` uses
+explicitly disposable native devices to verify unchanged initial sources,
+zero-allocation tokens, cold replay, mounted writes, tampered-log refusal, budget
+retry, and process loss throughout candidate/staging/guard/physical replay/close.
+Linux includes actual 4096-byte logical sectors. These tests do not use or alter
+user disks.
 
 `test-direct-device.py` uses only explicitly created hdiutil/loop targets. It
 checks all twelve profiles, native Linux 512/4096-byte logical sectors (including

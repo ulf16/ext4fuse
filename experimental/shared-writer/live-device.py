@@ -24,15 +24,15 @@ def main():
         if action=='mount':
             command.add_argument('--mountpoint',type=Path,required=True)
             command.add_argument('--control-socket',type=Path)
+    for command in (initial,*[sub.choices[n] for n in ('mount','recover')]):command.add_argument('--journal-bytes',type=int,default=256*1024**2)
     a=p.parse_args()
     direct_mode=(a.action=='init' and a.storage=='direct') or (a.action!='init' and (a.root/'direct-state').exists())
     if (a.root/'direct-state').exists() and (a.root/'live-state').exists():p.error('ambiguous device storage format')
-    if direct_mode and a.recover_journal:p.error('direct mode requires an already recovered native journal; no full-image fallback is performed')
     if a.action=='init':
         if direct_mode:
             if a.work is None:p.error('--storage direct requires --work RUNTIME')
             from direct_device import init as direct_init
-            print(direct_init(a.device,a.root,a.work,check_bytes=a.check_bytes))
+            print(direct_init(a.device,a.root,a.work,check_bytes=a.check_bytes,recover_journal=a.recover_journal,journal_bytes=a.journal_bytes))
         else:print(init(a.device,a.root,recover_journal=a.recover_journal))
         return
     work=a.work.resolve()
@@ -44,11 +44,11 @@ def main():
     mask=os.umask(0);os.umask(mask)
     if direct_mode:
         from direct_device import Controller as DirectController
-        controller=DirectController(a.root,a.device,work,check_bytes=a.check_bytes)
+        controller=DirectController(a.root,a.device,work,check_bytes=a.check_bytes,journal_bytes=a.journal_bytes)
     else:controller=Controller(a.root,a.device)
     with controller as target:
         with session.Session(target.chain,work/'mutation-producer',work/'reader-server',
-                Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=a.checkpoint_every,commit_sink=target,recover_journal=a.recover_journal) as s:
+                Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=a.checkpoint_every,commit_sink=target,recover_journal=a.recover_journal and not direct_mode) as s:
             if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket)
         target.finish()
     print('Continuous device is synchronized, checked and cleanly published.')

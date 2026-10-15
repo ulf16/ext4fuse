@@ -157,8 +157,12 @@ def append(root, producer):
         return append_locked(root, producer)
 
 
-def append_locked(root, producer, cache=None):
-    """Caller holds chain-lock, including while a recovery producer runs."""
+def prepare_locked(root, producer, cache=None):
+    """Seal a producer generation without replay; return its state and cache.
+
+    Caller holds chain-lock. Direct journal import must authenticate this sealed
+    generation before installing the physical guard and granting write access.
+    """
     state = recover_locked(root, cache)
     cache = cache if cache is not None else merkle.activate(root, state)[1] if state['version'] == 2 else None
     if state['head'] >= 99_999_998:
@@ -174,11 +178,16 @@ def append_locked(root, producer, cache=None):
     directory(root)
     inplace.capture_overlay(root / 'image.img', generation, producer, expected_base=state['sha256'], integrity=cache)
     boundary('chain-prepared')
+    return state, cache
+
+
+def append_locked(root, producer, cache=None):
+    state, cache = prepare_locked(root, producer, cache)
     return recover_locked(root, cache)
 
 
 GEN_FILES = {'operations', 'operations.result', 'request-producer', 'transaction', 'transaction.pending', 'pages', 'started',
-             'started.pending', 'complete', 'complete.pending', 'journal-candidate', 'journal-replay.log'}
+             'started.pending', 'complete', 'complete.pending', 'journal-candidate', 'journal-replay.log', 'journal-daemon.log'}
 CAPTURE_FILES = {'blocks', 'manifest', 'manifest.pending'}
 
 

@@ -69,10 +69,11 @@ policy_unit = compile_source(here / 'policy-unit.c', 'policy-unit')
 native_unit = compile_source(here / 'native-inherit-unit.c', 'native-inherit-unit')
 index_collision = compile_source(repo / 'test/collision-set.c', 'index-collision-fixture')
 index_corrupt = compile_source(here / 'index-corrupt.c', 'index-corrupt')
+candidate = compile_source(here / 'journal-candidate.c', 'journal-candidate')
 snapshot = compile_source(here / 'metadata-snapshot.c', 'metadata-snapshot')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
-for name, objects in [('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
+for name, objects in [('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
                       ('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
                       ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, index, mutation, metadata, path_at, producer]),

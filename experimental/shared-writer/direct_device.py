@@ -2,7 +2,7 @@
 """Guarded physical I/O with sealed page redo and no persistent data shadow."""
 import contextlib,os,stat,sys
 from pathlib import Path
-import chain,image_io,inplace,journal_recovery,live_device,merkle
+import chain,image_io,inplace,journal_candidate,journal_recovery,live_device,merkle
 from durable import regular,sync,directory,boundary
 from device_admission import Device,refuse
 old=live_device.offline
@@ -93,12 +93,42 @@ def checked(path,target,work,root,budget):
 def budget_check(value):
  if type(value) is not int or not 4096<=value<=2**40:raise ValueError('metadata scratch budget must be 4 KiB..1 TiB')
 
-def init(device,root,work,*,check_bytes=1024**3):
- budget_check(check_bytes)
+def prepare_import(root,work,limit,uuid):
+ """Seal and authenticate replay without granting any physical write capability.
+
+ Caller holds the device and chain locks. An interrupted unsealed producer can
+ be discarded; a sealed generation must be validated and reused verbatim.
+ """
+ current=chain.read_state(root)
+ if current['head']!=0:refuse('native journal import must precede direct writes')
+ header=journal_recovery.inspect(root/'image.img')
+ if not header['needed'] or header['uuid']!=uuid:refuse('native journal import source changed')
+ generation=root/'g-00000001'
+ if current['pending'] is not None and not (generation/'transaction').exists():
+  current=chain.recover_locked(root)
+ if current['pending'] is None:
+  adapter=root.parent/'journal-import-producer'
+  if adapter.exists() or adapter.is_symlink():
+   with regular(adapter) as f:
+    info=os.fstat(f.fileno())
+    if info.st_uid!=os.getuid() or info.st_nlink!=1:refuse('unsafe journal producer adapter')
+   adapter.unlink();directory(adapter.parent)
+  script=Path(__file__).with_name('direct-journal-producer.py').resolve()
+  text='#!'+sys.executable+'\nimport os,sys\nos.execv('+repr(sys.executable)+', ['+repr(sys.executable)+', '+repr(str(script))+'] + sys.argv[1:] + '+repr(['--work',str(Path(work).resolve()),'--journal-bytes',str(limit)])+')\n'
+  fd=os.open(adapter,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o700)
+  with os.fdopen(fd,'w') as f:f.write(text);f.flush();sync(f.fileno())
+  directory(adapter.parent)
+  current,_=chain.prepare_locked(root,adapter)
+ if current['pending']!=1:refuse('invalid native journal import generation')
+ if merkle.recover(root,current,validate_only=True) is None:refuse('unsealed native journal import')
+ return current
+
+def init(device,root,work,*,check_bytes=1024**3,recover_journal=False,journal_bytes=256*1024**2):
+ budget_check(check_bytes);journal_candidate.budget(journal_bytes)
+ if type(recover_journal) is not bool:raise ValueError('invalid journal recovery consent')
  root=inplace.block.canonical(root)
  if root.exists() or root.is_symlink():raise FileExistsError(root)
- # The new directory is on its parent's already checked off-device filesystem.
- # Claim first: transient busy-device failures must not leave an unusable root.
+ # Claim before mkdir so busy admission is safely retryable.
  with Device(device,root.parent) as target:
   root.mkdir(mode=0o700);directory(root.parent)
   with old.locked(root):
@@ -108,17 +138,25 @@ def init(device,root,work,*,check_bytes=1024**3):
    view=View(path,target,lambda:refuse('initialization cannot write device'))
    try:
     with image_io.register(path,view):
-     uuid,_=checked(path,target,work,root,check_bytes)
+     header=journal_recovery.inspect(path)
+     if header['needed']:
+      if not recover_journal:refuse('dirty direct device requires explicit --recover-journal')
+      uuid=header['uuid'];phase='importing'
+     else:uuid,_=checked(path,target,work,root,check_bytes);phase='clean'
      if live_device.scan(target).root()!=baseline.root() or live_device.magic(target)!=b'\x53\xef':refuse('direct source changed during admission')
      info=os.lstat(path)
      inplace.seal(managed,'chain-state',dict(version=2,algorithm=merkle.ALGORITHM,head=0,pending=None,sha256=baseline.root(),device=info.st_dev,inode=info.st_ino,size=target.size))
-     inplace.seal(root,'direct-state',dict(version=1,identity=target.identity,size=target.size,sector=target.sector,uuid=uuid,phase='clean',token_device=info.st_dev,token_inode=info.st_ino))
+     inplace.seal(root,'direct-state',dict(version=1,identity=target.identity,size=target.size,sector=target.sector,uuid=uuid,phase=phase,token_device=info.st_dev,token_inode=info.st_ino))
+     if phase=='importing':
+      boundary('direct:import-intent')
+      with chain.locked(managed):prepare_import(managed,work,journal_bytes,uuid)
+      if live_device.scan(target).root()!=baseline.root() or live_device.magic(target)!=b'\x53\xef':refuse('direct source changed during native replay preparation')
    finally:view.close()
  return root
 
 class Controller:
- def __init__(self,root,device,work,*,check_bytes=1024**3):
-  budget_check(check_bytes)
+ def __init__(self,root,device,work,*,check_bytes=1024**3,journal_bytes=256*1024**2):
+  budget_check(check_bytes);journal_candidate.budget(journal_bytes);self.journal_bytes=journal_bytes
   self.root=Path(root);self.path=device;self.work=Path(work);self.check_bytes=check_bytes;self.failed=False;self.head=None
  def seal(self,**changes):
   self.state=dict(self.state,**changes);inplace.seal(self.root,'direct-state',self.state)
@@ -131,7 +169,7 @@ class Controller:
    self.root=self.stack.enter_context(old.locked(self.root));self.chain=self.root/'chain'
    self.target=self.stack.enter_context(Device(self.path,self.root));self.state=old.load(self.root,'direct-state')
    s=self.state
-   if not isinstance(s,dict) or set(s)!=FIELDS or type(s['version']) is not int or s['version']!=1 or (s['identity'],s['size'],s['sector'])!=(self.target.identity,self.target.size,self.target.sector) or s['phase'] not in ('clean','arming','active','closing') or not isinstance(s['uuid'],str) or len(s['uuid'])!=32:
+   if not isinstance(s,dict) or set(s)!=FIELDS or type(s['version']) is not int or s['version']!=1 or (s['identity'],s['size'],s['sector'])!=(self.target.identity,self.target.size,self.target.sector) or s['phase'] not in ('clean','arming','active','closing','importing','import-arming') or not isinstance(s['uuid'],str) or len(s['uuid'])!=32:
     refuse('invalid direct target state or identity')
    info=os.lstat(self.chain/'image.img')
    if (info.st_dev,info.st_ino)!=(s['token_device'],s['token_inode']):refuse('direct token replaced')
@@ -140,7 +178,17 @@ class Controller:
    if (current['device'],current['inode'],current['size'])!=(info.st_dev,info.st_ino,self.target.size):refuse('direct chain token identity changed')
    if any(type(s[k]) is not int or s[k]<0 for k in ('size','sector','token_device','token_inode')) or any(c not in '0123456789abcdef' for c in s['uuid']) or s['uuid']=='0'*32:refuse('invalid direct state fields')
    if current['version']!=2 or current['algorithm']!=merkle.ALGORITHM:refuse('direct chain version changed')
-   if s['phase']!='active':
+   self.view=View(self.chain/'image.img',self.target,self.require_guard);self.stack.callback(self.view.close)
+   self.stack.enter_context(image_io.register(self.chain/'image.img',self.view))
+   if s['phase'] in ('importing','import-arming'):
+    if s['phase']=='importing' and live_device.magic(self.target)!=b'\x53\xef':refuse('unguarded import source changed')
+    with chain.locked(self.chain):
+     if s['phase']=='importing':prepare_import(self.chain,self.work,self.journal_bytes,s['uuid'])
+     else:
+      if current['head']!=0 or current['pending']!=1 or merkle.recover(self.chain,current,validate_only=True) is None:refuse('invalid armed import generation')
+    self.seal(phase='import-arming');boundary('direct:import-arming')
+    live_device.guard(self.target);self.seal(phase='active');boundary('direct:active')
+   elif s['phase']!='active':
     if current['pending'] is not None:refuse('pending direct transaction without active guard')
     if s['phase']=='clean' and live_device.magic(self.target)!=b'\x53\xef':refuse('clean direct device was changed')
     if live_device.scan(self.target).root()!=current['sha256']:refuse('direct device changed outside recovery')
@@ -149,8 +197,6 @@ class Controller:
     self.seal(phase='arming');boundary('direct:arming')
     live_device.guard(self.target);self.seal(phase='active');boundary('direct:active')
    self.require_guard()
-   self.view=View(self.chain/'image.img',self.target,self.require_guard);self.stack.callback(self.view.close)
-   self.stack.enter_context(image_io.register(self.chain/'image.img',self.view))
    return self
   except BaseException:self.stack.close();raise
  def __exit__(self,*unused):self.stack.close()

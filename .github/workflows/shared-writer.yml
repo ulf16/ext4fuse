@@ -516,7 +516,7 @@ jobs:
 
   direct-device:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Install direct device and mounted test dependencies
@@ -531,6 +531,10 @@ jobs:
         run: python3 experimental/shared-writer/test-metadata-snapshot.py --work "$RUNNER_TEMP/direct-device"
       - name: Verify no-shadow writes, native mounts and interrupted physical recovery
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-direct-device.py --work "$RUNNER_TEMP/direct-device"
+      - name: Verify bounded native journal replay candidates
+        run: python3 experimental/shared-writer/test-journal-candidate.py --work "$RUNNER_TEMP/direct-device"
+      - name: Verify no-shadow dirty loop-device recovery and crash boundaries
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-direct-journal.py --work "$RUNNER_TEMP/direct-device"
       - name: Save direct-device validation
         if: always()
         uses: actions/upload-artifact@v4
@@ -539,3 +543,5 @@ jobs:
           path: |
             ${{ runner.temp }}/direct-device/direct-device-results.json
             ${{ runner.temp }}/direct-device/metadata-snapshot-results.json
+            ${{ runner.temp }}/direct-device/journal-candidate-results.json
+            ${{ runner.temp }}/direct-device/direct-journal-results.json
