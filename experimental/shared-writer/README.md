@@ -960,9 +960,11 @@ POSIX ACL access/default inheritance, sticky/protected-link rules and immutable/
 append safeguards. Caller uid/gid/umask originate in FUSE context. Where FUSE can
 provide supplementary groups, those are supplied for the request; otherwise the
 broker uses only the authenticated primary gid, rather than granting the daemon's
-potentially broader group list. Linux kernel ACL enforcement is not advertised;
-macOS uses default_permissions plus extended_security for native kernel checks
-and retains broker authorization. nodev/nosuid are fixed.
+potentially broader group list. Linux requires kernel POSIX ACL support and enables default_permissions so
+kernel-managed FIFO/socket I/O enforces modes and named-user/group ACLs too.
+The backend still validates ACL updates, mode synchronization and inheritance.
+macOS uses default_permissions plus extended_security for native kernel checks.
+Both retain broker authorization; nodev/nosuid are fixed.
 Lifecycle-only handle release/flush/fsync and kernel metadata requests can use the
 mount owner's context; they grant no new data or namespace access. This is not a
 multi-user mount or a replacement for the stable native macOS ACL reader.

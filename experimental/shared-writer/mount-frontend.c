@@ -807,7 +807,19 @@ static void init_cb(void *unused, struct fuse_conn_info *info) {
   info->want &= ~FUSE_CAP_FLOCK_LOCKS;
 #endif
 #ifdef FUSE_CAP_POSIX_ACL
+#ifdef __APPLE__
   info->want &= ~FUSE_CAP_POSIX_ACL;
+#else
+  /* FIFO/socket I/O lives in the kernel and can bypass our open callback.
+   * Enforce their mode and ACL there, while retaining broker authorization.
+   * The backend already handles ACL xattr conversion, mode and inheritance.
+   * Fail closed rather than silently ignoring named-user/group ACLs. */
+  if (!(info->capable & FUSE_CAP_POSIX_ACL)) {
+    fprintf(stderr, "Linux kernel POSIX ACL support is required\n");
+    exit(EXIT_FAILURE);
+  }
+  info->want |= FUSE_CAP_POSIX_ACL;
+#endif
 #endif
 #ifdef FUSE_CAP_HANDLE_KILLPRIV
   info->want &= ~FUSE_CAP_HANDLE_KILLPRIV;
@@ -880,10 +892,10 @@ int main(int argc, char **argv) {
                    argv[1],
                    "-f",
                    "-s",
-                   "-onodev,nosuid,fsname=ext4fuse-experimental"
+                   "-onodev,nosuid,default_permissions,fsname=ext4fuse-experimental"
 #ifdef __APPLE__
                    ,
-                   "-odefault_permissions,extended_security"
+                   "-oextended_security"
 #endif
   };
   struct fuse_args args =

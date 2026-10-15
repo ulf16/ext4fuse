@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
 """Native rename flags, FIFO/socket traffic and nodev special inode metadata."""
-import argparse,ctypes,errno,json,os,shutil,socket,stat,subprocess,sys,tempfile,time
+import argparse,ctypes,errno,json,os,shutil,socket,stat,struct,subprocess,sys,tempfile,time
 from pathlib import Path
 import chain,session,journal_fixtures as fixture
 from credentials import Credentials
@@ -21,9 +21,11 @@ def check(v,detail='mounted namespace extension check failed'):
  assert v,detail;checks+=1
 
 def denied(call,errors):
- try:call()
+ try:value=call()
  except OSError as e:check(e.errno in ((errors,) if isinstance(errors,int) else errors),repr(e))
- else:raise AssertionError('unexpected native success')
+ else:
+  if isinstance(value,int):os.close(value)
+  raise AssertionError('unexpected native success')
 def unmount(m):fixture.run(['/sbin/umount',m] if sys.platform=='darwin' else ['fusermount3','-u',m])
 sources=sorted(p for p in (a.work/'fixtures').glob('*-csum*.img') if '-output' not in p.name)
 if a.limit:sources=sources[:a.limit]
@@ -33,6 +35,11 @@ try:
   root=tmp/f'chain-{index}';chain.clone(source,root)
   with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
    s.chmod('/',0o777);s.mknod('/char-seed',stat.S_IFCHR|0o666,major=1,minor=3);s.mknod('/block-seed',stat.S_IFBLK|0o666,major=8,minor=1);s.chown('/char-seed',os.getuid(),os.getgid());s.chown('/block-seed',os.getuid(),os.getgid())
+   if sys.platform=='linux' and os.getuid()!=0:
+    for name,tag,identity,permissions in [('acl-fifo',2,os.getuid(),6),('acl-denied-fifo',2,os.getuid(),0),('group-fifo',8,os.getgid(),6),('group-denied-fifo',8,os.getgid(),0)]:
+     s.mknod('/'+name,stat.S_IFIFO|0o600)
+     acl=struct.pack('<I',2)+b''.join(struct.pack('<HHI',tag,perm,uid) for tag,perm,uid in ([(1,0,2**32-1)]+([(2,permissions,identity)] if tag==2 else [])+[(4,0,2**32-1)]+([(8,permissions,identity)] if tag==8 else [])+[(16,6,2**32-1),(32,0,2**32-1)]))
+     s.setxattr('/'+name,'system.posix_acl_access',acl)
   mount=short/f'm{index}';mount.mkdir();logpath=tmp/f'mount-{index}.log';proc=None;active=False
   try:
    with logpath.open('wb') as log:
@@ -58,6 +65,10 @@ try:
      check(os.stat('child',dir_fd=held_dir).st_size==5)
     finally:os.close(held_dir)
     denied(lambda:rename(mount/'right',f,2),errno.EINVAL)
+    if sys.platform=='linux' and os.getuid()!=0:
+     for prefix in ['acl','group']:
+      fd=os.open(mount/(prefix+'-fifo'),os.O_RDONLY|os.O_NONBLOCK);os.close(fd);check(True)
+      denied(lambda:os.open(mount/(prefix+'-denied-fifo'),os.O_RDONLY|os.O_NONBLOCK),errno.EACCES)
     os.mkfifo(mount/'fifo',0o640);check(stat.S_ISFIFO((mount/'fifo').stat().st_mode))
     if sys.platform=='linux' and os.getuid()!=0:
      os.chmod(mount/'fifo',0);denied(lambda:os.open(mount/'fifo',os.O_RDONLY|os.O_NONBLOCK),errno.EACCES);os.chmod(mount/'fifo',0o640)
