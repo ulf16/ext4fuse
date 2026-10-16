@@ -700,7 +700,7 @@ jobs:
       - name: Verify sustained mixed transactions and storage failures on all profiles
         run: python3 experimental/shared-writer/test-endurance.py --work "$RUNNER_TEMP/endurance" --rounds 240 --seed 918273
       - name: Install mounted endurance runtime
-        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.2
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.3
       - name: Verify concurrent mounted acknowledgements across repeated process loss
         run: python3 experimental/shared-writer/test-mounted-endurance.py --work "$RUNNER_TEMP/endurance" --prefix "$RUNNER_TEMP/endurance-prefix" --cycles 3 --acks 32
       - name: Save endurance qualification

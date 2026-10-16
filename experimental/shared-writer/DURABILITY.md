@@ -57,7 +57,9 @@ remounts. All acknowledged content and hardlinks must survive every cycle.
 an error at an I/O call site:
 
 - 1 KiB and 4 KiB ext4 images independently run out of blocks and inodes. Failed
-  multi-operation batches must roll back their names, metadata and bytes; deleting
+  multi-operation batches must roll back their names, metadata and bytes. Smaller
+  writes consume the final fragments; `debugfs` must report zero free blocks or
+  zero free inodes at the failure. Deleting
   an acknowledged filler must permit new writes.
 - A new 64 MiB HFS+ disk image on macOS, or a size-limited private Linux tmpfs,
   holds the managed chain. A filler consumes its real free space before a request,

@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import plistlib
 import resource
+import re
 import shutil
 import subprocess
 import sys
@@ -95,11 +96,11 @@ def volume(base, block_size):
     rows = []
     for kind in ('blocks', 'inodes'):
         root = base/f'{block_size}-{kind}'; fresh(source, root)
-        expected = {'/ack': b'previously acknowledged'}; committed = []
+        expected = {'/ack': b'previously acknowledged'}; committed = []; chunk_size = MiB
         with opened(root) as s:
             for n in range(512):
                 name = f'/fill-{n}'
-                data = bytes([n % 251 + 1])*MiB if kind == 'blocks' else b''
+                data = bytes([n % 251 + 1])*chunk_size if kind == 'blocks' else b''
                 # Earlier staged metadata and a fresh name must also roll back.
                 old_mode = s.statat(None, '/ack')['mode'] & 0o777
                 ops = [dict(kind='chmod', path='/ack', mode=0o600 if old_mode != 0o600 else 0o640),
@@ -110,11 +111,18 @@ def volume(base, block_size):
                     assert not s._failed, 'ordinary ext4 exhaustion poisoned session'
                     absent(s, name); verify(s, expected)
                     assert s.statat(None, '/ack')['mode'] & 0o777 == old_mode
+                    if kind == 'blocks' and chunk_size > block_size:
+                        chunk_size //= 2
+                        continue
                     break
                 committed.append(name); expected[name] = data
                 s.checkpoint()
             else: raise AssertionError('bounded ext4 filesystem did not exhaust')
             assert committed
+            stats = model.command(['debugfs', '-R', 'stats', root/'image.img'])
+            free_blocks = int(re.search(rb'Free blocks:\s+(\d+)', stats).group(1))
+            free_inodes = int(re.search(rb'Free inodes:\s+(\d+)', stats).group(1))
+            assert (free_blocks if kind == 'blocks' else free_inodes) == 0, stats
             # A failed write must preserve existing bytes, not just allocation maps.
             before = s.read('/ack')
             if kind == 'blocks':
@@ -128,7 +136,7 @@ def volume(base, block_size):
             s.checkpoint()
         finish(root, expected)
         rows.append(dict(kind=kind, block_size=block_size, acknowledged=len(committed)+1,
-                         failure='ENOSPC', recovered=True))
+                         failure='ENOSPC', recovered=True, free_blocks=free_blocks, free_inodes=free_inodes))
         print('PASS actual ext4 exhaustion', block_size, kind, len(committed)+1, flush=True)
     assert hashlib.sha256(source.read_bytes()).hexdigest() == original
     return rows
@@ -214,13 +222,17 @@ def logs(base):
                 else:
                     assert read_all(s, '/candidate', 2*MiB) == b'C'*(2*MiB)
                     assert s.statat(None, '/candidate')['inode'] == s.statat(None, '/candidate-alias')['inode']
+                    assert s.statat(None, '/candidate')['links'] == 2
                     committed = True
                 if stage in ('before-request', 'record'): assert not committed
                 if stage in ('prepared', 'applied', 'head-ready'):
                     assert committed, 'sealed redo was lost'
                     assert failed_closed, 'blocked replay must fail closed'
                 s.applyat([dict(kind='create', path='/resumed', data_hex=b'resumed'.hex())]); s.checkpoint()
-            finish(root, {'/ack': b'previously acknowledged', '/resumed': b'resumed'})
+            expected = {'/ack': b'previously acknowledged', '/resumed': b'resumed'}
+            if committed:
+                expected.update({'/candidate': b'C'*(2*MiB), '/candidate-alias': b'C'*(2*MiB)})
+            finish(root, expected)
             rows.append(dict(stage=stage, bytes_filled=hits[0], error=failure,
                              failed_closed=failed_closed, sealed_recovered=committed))
             print('PASS actual recovery-volume exhaustion', stage, flush=True)
@@ -299,6 +311,13 @@ def direct_logs(base):
                         s.applyat([dict(kind='create', path=f'/resumed-{number}', data_hex=b'resumed'.hex())])
                         s.checkpoint()
                     target.finish()
+                with direct_target(root, device) as target:
+                    with opened(target.chain, target) as s:
+                        assert s.read('/ack') == b'device acknowledged'
+                        assert s.read(f'/resumed-{number}') == b'resumed'
+                        if stage == 'record': absent(s, candidate)
+                        else: assert s.read(candidate) == bytes([number+1])*MiB
+                    target.finish()
                 checked(backing)
                 assert (root/'chain/image.img').stat().st_blocks == 0
                 rows.append(dict(stage=stage, number=number, path=candidate, committed=stage!='record',
@@ -339,6 +358,11 @@ def memory_worker(request):
         finally: held.clear()
         assert hits and failure and allocated > 8*MiB, 'memory budget did not reject transaction'
         failed_closed = s._failed
+        if cfg['stage'] != 'before-request':
+            assert failed_closed, 'memory-starved replay did not fail closed'
+            try: s.read('/ack')
+            except OSError as e: assert e.errno == errno.EIO
+            else: raise AssertionError('memory-failed session served a stale reader')
     request.with_suffix('.result').write_text(json.dumps(dict(limit=cfg['limit'], stage=cfg['stage'],
                                                failure=failure, failed_closed=failed_closed, resident_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
                                                touched_bytes=allocated)))
