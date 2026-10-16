@@ -1,20 +1,39 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 #include "namespace.h"
+#include "overlay.h"
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 /* Bound validation work independently of untrusted inode/index counts. */
-#define INDEX_BLOCKS 16384
-#define INDEX_NAMES 65536
+#define INDEX_BLOCKS 131072
+#define INDEX_NAMES 1048576
+#define INDEX_CACHE 64
 struct index_check {
   ext2_filsys fs;
   ext2_ino_t ino;
   struct ext2_inode in;
-  unsigned blocks, names, algorithm;
+  unsigned blocks, names, capacity, algorithm;
   unsigned char *seen;
   blk64_t *physical;
   char **name;
 };
+/* Cache only successful complete validations of one immutable overlay view.
+ * No filesystem pointer is retained: libext2fs handles are reopened frequently.
+ * Every overlay write, base refresh/suspend and rollback changes the revision.
+ * Compare the inode and superblock too, including in-memory bitmap counters and
+ * hash policy. A changed view always takes the complete corruption check. */
+static struct index_cached {
+  uint64_t epoch;
+  ext2_ino_t ino;
+  struct ext2_inode in;
+  struct ext2_super_block super;
+} cache[INDEX_CACHE];
+static unsigned next_cache;
+static uint64_t scans, hits;
+void namespace_index_stats(uint64_t *full, uint64_t *reused) {
+  *full = scans;
+  *reused = hits;
+}
 static unsigned get16(const unsigned char *p) { return p[0] | p[1] << 8; }
 static uint32_t get32(const unsigned char *p) {
   return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
@@ -76,6 +95,14 @@ static errcode_t leaf(struct index_check *c, unsigned logical, uint32_t low,
         return EIO;
       if (c->names == INDEX_NAMES)
         return EFBIG;
+      if (c->names == c->capacity) {
+        unsigned capacity = c->capacity ? c->capacity * 2 : 64;
+        char **names = realloc(c->name, capacity * sizeof(*names));
+        if (!names)
+          return ENOMEM;
+        c->name = names;
+        c->capacity = capacity;
+      }
       char *name = malloc(n + 1);
       if (!name)
         return ENOMEM;
@@ -144,6 +171,15 @@ errcode_t namespace_index_check(ext2_filsys fs, ext2_ino_t ino) {
   errcode_t e = ext2fs_read_inode(fs, ino, &c.in);
   if (e || !(c.in.i_flags & EXT2_INDEX_FL))
     return e;
+  uint64_t epoch = overlay_epoch(active_overlay);
+  for (unsigned i = 0; epoch && i < INDEX_CACHE; i++)
+    if (cache[i].epoch == epoch && cache[i].ino == ino &&
+        !memcmp(&cache[i].in, &c.in, sizeof(c.in)) &&
+        !memcmp(&cache[i].super, fs->super, sizeof(*fs->super))) {
+      hits++;
+      return 0;
+    }
+  scans++;
   if (fs->blocksize != 1024 && fs->blocksize != 2048 && fs->blocksize != 4096)
     return EOPNOTSUPP;
   uint64_t size = EXT2_I_SIZE(&c.in);
@@ -160,8 +196,7 @@ errcode_t namespace_index_check(ext2_filsys fs, ext2_ino_t ino) {
   c.blocks = size / fs->blocksize;
   c.seen = calloc(c.blocks, 1);
   c.physical = calloc(c.blocks, sizeof(*c.physical));
-  c.name = calloc(INDEX_NAMES, sizeof(*c.name));
-  if (!c.seen || !c.physical || !c.name) {
+  if (!c.seen || !c.physical) {
     e = ENOMEM;
     goto out;
   }
@@ -195,6 +230,13 @@ errcode_t namespace_index_check(ext2_filsys fs, ext2_ino_t ino) {
       e = EIO;
       goto out;
     }
+  if (!e && epoch) {
+    struct index_cached *entry = &cache[next_cache++ % INDEX_CACHE];
+    entry->epoch = epoch;
+    entry->ino = ino;
+    entry->in = c.in;
+    entry->super = *fs->super;
+  }
 out:
   for (unsigned i = 0; i < c.names; i++)
     free(c.name[i]);

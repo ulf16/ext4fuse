@@ -19,6 +19,8 @@ int overlay_stream(struct overlay *t, int fd);
 int overlay_export(struct overlay *t, const char *output, long fail_page);
 void overlay_fail_writes(struct overlay *t, long after);
 size_t overlay_pages(struct overlay *t);
+/* Unique view revision; zero disables validation reuse after counter exhaustion. */
+uint64_t overlay_epoch(struct overlay *t);
 const char *overlay_path(struct overlay *t);
 int reader_attach(const char *path);
 int reader_refresh(void);

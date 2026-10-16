@@ -229,7 +229,7 @@ class LowBroker(Broker):
     deduplicate hard links. Kernel nlookup is consumed exactly, including batches;
     a zero-lookup node remains pinned while any open handle still refers to it.
     """
-    NODE_LIMIT=4096
+    NODE_LIMIT=32768
     def __init__(self,s):
         super().__init__(s)
         self.nodes={};self.native_nodes={};self.bindings={};self.error_seen={};self.last_node=1

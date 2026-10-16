@@ -22,7 +22,7 @@ struct page {
 struct overlay {
   int fd, base_fd;
   unsigned sector;
-  uint64_t size;
+  uint64_t size, epoch;
   char *path;
   size_t used, limit;
   long fail_writes;
@@ -30,6 +30,14 @@ struct overlay {
   struct page *pages[BUCKETS];
 };
 struct overlay *active_overlay;
+static uint64_t view_serial;
+static int view_exhausted;
+static void changed(struct overlay *t) {
+  if (view_serial == UINT64_MAX)
+    view_exhausted = 1;
+  t->epoch = view_exhausted ? 0 : ++view_serial;
+}
+uint64_t overlay_epoch(struct overlay *t) { return t ? t->epoch : 0; }
 static struct page *find(struct overlay *t, uint64_t i) {
   for (struct page *p = t->pages[i % BUCKETS]; p; p = p->next)
     if (p->idx == i)
@@ -159,6 +167,7 @@ struct overlay *overlay_open(const char *path, size_t max) {
     return NULL;
   }
   t->fd = fd;
+  changed(t);
   t->base_fd = -1;
   int view_error = device_view(t, &s);
   if (view_error) {
@@ -175,6 +184,7 @@ struct overlay *overlay_open(const char *path, size_t max) {
   return t;
 }
 void overlay_rollback(struct overlay *t) {
+  changed(t);
   for (size_t i = 0; i < BUCKETS; i++)
     while (t->pages[i]) {
       struct page *p = t->pages[i];
@@ -230,6 +240,7 @@ int overlay_read(struct overlay *t, uint64_t off, size_t n, void *b,
   return 0;
 }
 int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *b) {
+  changed(t);
   if (t->poisoned)
     return EIO;
   if (off > t->size || n > t->size - off) {
@@ -278,7 +289,10 @@ int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *b) {
   }
   return 0;
 }
-void overlay_suspend(struct overlay *t) { t->published = 0; }
+void overlay_suspend(struct overlay *t) {
+  changed(t);
+  t->published = 0;
+}
 int overlay_publish(struct overlay *t) {
   if (t->poisoned)
     return EIO;

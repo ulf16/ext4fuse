@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='handles-',dir=args.work) as directory:
         run(['python3',here/'chain.py','init',seed,root,args.work/'prototype'])
         image=root/'image.img';identity=(image.stat().st_dev,image.stat().st_ino)
         model=bytearray((i*19+13)&255 for i in range(32768))
-        with session.Session(root,args.work/'mutation-producer',args.work/'reader-server',Credentials(100,200)) as s:
+        with session.Session(root,args.work/'mutation-producer',args.work/'reader-server-handle-limits',Credentials(100,200)) as s:
             pid=s._process.pid
             r=s.open('/existing-file','r');rw=s.open('/existing-file','rw');w=s.open('/existing-file','w')
             denied(lambda:w.read(),errno.EBADF)

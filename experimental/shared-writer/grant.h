@@ -27,6 +27,7 @@ struct inode_grant {
 int grant_valid(const struct inode_grant *grant);
 /* Internal fast path: list must already have passed namespace_orphans in the
  * same immutable/staged filesystem context; never supply unvalidated lists. */
+/* Known orphan identities must be sorted by inode for bounded membership. */
 errcode_t grant_inode_known(ext2_filsys fs, const struct inode_grant *grant,
                             struct ext2_inode *inode, const ext2_ino_t *list,
                             unsigned count);

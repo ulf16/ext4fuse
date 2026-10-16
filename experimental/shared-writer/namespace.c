@@ -15,8 +15,20 @@ static errcode_t supported(ext2_filsys fs) {
              ? EOPNOTSUPP
              : 0;
 }
+static ext2_ino_t orphan_slots[2 * PIN_LIMIT];
+static unsigned orphan_position(ext2_ino_t ino) {
+  unsigned at = (ino * 2654435761U) % (2 * PIN_LIMIT);
+  while (orphan_slots[at] && orphan_slots[at] != ino)
+    at = (at + 1) % (2 * PIN_LIMIT);
+  return at;
+}
+static int compare_inode(const void *a, const void *b) {
+  ext2_ino_t x = *(const ext2_ino_t *)a, y = *(const ext2_ino_t *)b;
+  return x < y ? -1 : x > y;
+}
 errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
   *count = 0;
+  memset(orphan_slots, 0, sizeof(orphan_slots));
   errcode_t e = supported(fs);
   if (e)
     return e;
@@ -28,9 +40,10 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
         ino > fs->super->s_inodes_count ||
         !ext2fs_test_inode_bitmap2(fs->inode_map, ino))
       return EIO;
-    for (unsigned i = 0; i < *count; i++)
-      if (list[i] == ino)
-        return EIO;
+    unsigned position = orphan_position(ino);
+    if (orphan_slots[position])
+      return EIO;
+    orphan_slots[position] = ino;
     struct ext2_inode in;
     if ((e = ext2fs_read_inode(fs, ino, &in)))
       return e;
@@ -55,7 +68,7 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
       return e;
     if ((in.i_mode & LINUX_S_IFMT) != LINUX_S_IFDIR)
       continue;
-    ext2_ino_t seen[PIN_LIMIT], node = list[i];
+    ext2_ino_t seen[ANCESTOR_LIMIT], node = list[i];
     unsigned depth = 0;
     for (;;) {
       if (node == EXT2_ROOT_INO) {
@@ -65,7 +78,7 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
           return e ? e : EIO;
         break;
       }
-      if (depth == PIN_LIMIT)
+      if (depth == ANCESTOR_LIMIT)
         return EIO;
       for (unsigned j = 0; j < depth; j++)
         if (seen[j] == node)
@@ -74,11 +87,7 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
       if ((e = ext2fs_read_inode(fs, node, &in)))
         return e;
       if (!in.i_links_count) {
-        int found = 0;
-        for (unsigned j = 0; j < *count; j++)
-          if (list[j] == node)
-            found = 1;
-        if (!found)
+        if (!orphan_slots[orphan_position(node)])
           return EIO;
       }
       ext2_ino_t parent;
@@ -96,10 +105,16 @@ errcode_t namespace_orphans(ext2_filsys fs, ext2_ino_t *list, unsigned *count) {
 }
 static int pinned(const struct inode_pin *pins, unsigned count, ext2_ino_t ino,
                   uint32_t generation) {
-  for (unsigned i = 0; i < count; i++)
-    if (pins[i].inode == ino && pins[i].generation == generation)
-      return 1;
-  return 0;
+  unsigned lo = 0, hi = count;
+  while (lo < hi) {
+    unsigned mid = lo + (hi - lo) / 2;
+    if (pins[mid].inode < ino)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return lo < count && pins[lo].inode == ino &&
+         pins[lo].generation == generation;
 }
 static errcode_t stamp(ext2_filsys fs, ext2_ino_t ino, int directory) {
   struct ext2_inode_large in = {0};
@@ -169,6 +184,9 @@ errcode_t namespace_reap(ext2_filsys fs, const struct inode_pin *pins,
   errcode_t e = namespace_orphans(fs, list, &n);
   if (e)
     return e;
+  ext2_ino_t sorted[PIN_LIMIT];
+  memcpy(sorted, list, n * sizeof(*sorted));
+  qsort(sorted, n, sizeof(*sorted), compare_inode);
   /* Reject malformed/stale broker pins before changing any metadata. */
   for (unsigned i = 0; i < count; i++) {
     struct ext2_inode in;
@@ -178,11 +196,10 @@ errcode_t namespace_reap(ext2_filsys fs, const struct inode_pin *pins,
     struct inode_grant g = {pins[i].inode, pins[i].generation,
                             directory ? GRANT_DIR_SEARCH : 0,
                             directory ? GRANT_DIRECTORY : GRANT_NODE};
-    if ((e = grant_inode_known(fs, &g, &in, list, n)))
+    if ((e = grant_inode_known(fs, &g, &in, sorted, n)))
       return e;
-    for (unsigned j = 0; j < i; j++)
-      if (pins[i].inode == pins[j].inode)
-        return EINVAL;
+    if (i && pins[i - 1].inode >= pins[i].inode)
+      return EINVAL;
   }
   ext2_ino_t head = 0;
   for (unsigned i = n; i; i--) {

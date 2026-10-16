@@ -520,7 +520,7 @@ rejects truncation and requires an append-status handle for writes. A truncating
 open obtains a handle slot before touching data; failure releases that slot, and
 quota failure cannot truncate an existing file.
 
-At most 128 handles may be active in one session. Released tokens are not reused
+At most 8,192 open handles may be active in one session. Released tokens are not reused
 within the reader process; Python file objects are bound to their issuing session
 and become EBADF after close/session shutdown. A detected stale generation is
 sticky for that table entry, even if the generation is later restored. Slots can
@@ -577,7 +577,7 @@ zero operations are reserved for internal orphan cleanup. These pins are trusted
 broker authority, not authenticated input, and must never come from an untrusted
 client or the JSON operation interface. The producer validates allocation,
 generation and regular-file identity before staging, and rejects stale or
-duplicate pins without publishing. The 128-handle limit also bounds orphan-list
+duplicate pins without publishing. The 65,536-pin budget also bounds orphan-list
 length; no live pinned inode can be allocated for another file.
 
 Removing the last filename of a pinned inode sets its link count to zero and
@@ -872,11 +872,11 @@ are never split. A byte budget too small for the next entry returns ERANGE witho
 advancing the cursor. Invalid/foreign cookies return EINVAL without changing the
 cursor. EOF is explicit, repeatable and preserves its final cookie. Snapshot
 capture can occur on the first undersized-buffer request, but no record is
-consumed. One stream may retain up to 4 MiB of entry-vector capacity, and a reader
-may retain 32 MiB across all streams. Hitting the individual cap returns EOVERFLOW;
+consumed. One stream may retain up to 64 MiB of entry-vector capacity, and a reader
+may retain 256 MiB across all streams. Hitting the individual cap returns EOVERFLOW;
 reader-wide pressure returns ENOMEM, without evicting other snapshots/cookies.
 Release or rewind makes capacity available. Snapshot assembly additionally uses
-at most one 4 MiB candidate vector (allocator reallocation can transiently retain
+at most one 64 MiB candidate vector (allocator reallocation can transiently retain
 the previous vector); a page allocates at most 1 MiB. These limits concern stream
 buffers, rather than libext2fs's filesystem metadata/bitmap allocations.
 
@@ -951,7 +951,7 @@ is supported for the representable subset described below.
 Unsupported operations return an error rather than pretending success.
 Creation accepts ordinary permission bits (mkdir also permits sticky);
 setgid inheritance is still derived by the backend. File sizing follows the inode's extent/indirect mapping capacity and signed
-64-bit offsets. The 128 open-handle, 4,096 mounted lookup/pin, 4 MiB transaction payload and 32 MiB reader
+64-bit offsets. The 8,192 open-handle, 32,768 lookup-node, 65,536 distinct-pin, 4 MiB transaction payload and 256 MiB reader
 stream bounds still apply; large files are written in bounded chunks. The mounted helper uses FUSE 3 only; the stable reader's FUSE 2 ABI
 is unaffected.
 
@@ -996,8 +996,8 @@ directory search permission. Lookup pins confer no file-data access. Open/opendi
 immutable/append checks before allocating an independent open-time grant. A node
 stays pinned while either its lookup count or open count is nonzero; release does
 not consume lookups and forget does not revoke a still-open handle. Lookup pins
-use a separate 4,096-slot pool; the existing 128 open slots remain separate.
-Distinct inode/ancestor pins and durable orphan entries are bounded at 4,096;
+use a separate 32,768-slot pool; the 8,192 open slots remain separate.
+Distinct inode/ancestor pins and durable orphan entries are bounded at 65,536;
 ancestry traversal remains bounded to 128 steps. Namespace operations returning
 new entries preflight both node slots and pin capacity before mutation. Exceeding
 a bound returns an error rather than reusing a live identity.
@@ -1340,9 +1340,10 @@ removal. It checks root/internal layouts, count/limit fields, checksums, hash ra
 and collision continuations, allocated mappings/inodes, full logical-block
 coverage, duplicate logical/physical references and duplicate names. Corrupt
 indexes fail without publication; mutations and their validation share one
-rollback/recovery boundary. Validation is a full-tree scan, so write throughput
-on large directories is not yet optimized. Limits are 16,384 logical blocks
-(16–64 MiB at supported block sizes) and 65,536 live names. Root depths zero and
+rollback/recovery boundary. Changed views still require a full-tree scan;
+unchanged views reuse successful validation as described in the scaling section
+below. Limits are 131,072 logical blocks (128–512 MiB at supported block sizes)
+and 1,048,576 live names. Root depths zero and
 one and legacy/half-MD4/TEA policies with signed/unsigned hashing are supported.
 `large_dir`/depth-two and casefold feature profiles remain rejected.
 
@@ -1948,3 +1949,53 @@ workers are now confined to Linux CI. `test-mmap-writeback-errors.py` injects EI
 and ENOSPC, requires synchronization to report each error, retries the dirty data
 and independently verifies the committed result. Low-level broker tests exercise
 writeback binding/rights and independent per-handle error observation.
+
+
+## Handle, pin and large-directory scaling
+
+Open slots grow on demand to 8,192 live data/directory handles; mounted identity
+slots grow separately to 32,768. The bounded pointer registries are fixed, but
+handle and stream records are individually allocated and freed. Tokens encode
+the slot plus a monotonically increasing serial, allowing direct lookup while
+preventing stale-token reuse after slot recycling. Node identity lookup and
+Python lookup-handle reuse use hash tables. The global distinct inode/ancestor
+pin budget is 65,536, shared with recovery/orphan admission and the binary writer
+protocol. Directory ancestry remains bounded to 128 steps. Limits deliberately
+remain finite; host descriptor, memory and FUSE limits can be reached sooner.
+
+Pin snapshots use hashed deduplication and reuse regular/special inode identity
+validation only within the same unchanged overlay view. Directory ancestry is
+still checked. The producer sorts pins once, rejects duplicate identities and
+uses binary membership during orphan retention. Orphan-cycle detection is hashed,
+and known-orphan grant checks use sorted membership. Creation still reserves
+capacity before staging; exhaustion cannot truncate a file or publish a new name.
+
+HTree validation supports up to 131,072 logical blocks and 1,048,576 names within
+the already supported depth-zero/one format. Name pointer storage grows on demand
+instead of allocating the old maximum for every directory. A bounded 64-entry
+cache retains successful full-validation results, keyed by a unique overlay view
+revision, inode contents and superblock contents. Every staged write, suspension
+before base refresh, rollback and overlay reopen invalidates reuse. Errors are
+never cached. Validation after a changed view still scans the complete tree,
+including checksums, hash ranges, collision chains, duplicate names, block
+references and allocation; this change does not skip corruption checks on mutation.
+The controller's exclusive-view rules still apply: arbitrary external image
+writes are unsupported. New linear directories are not automatically indexed,
+and large_dir/depth-two and casefold remain unsupported.
+
+Directory snapshots now have a 64 MiB per-stream and 256 MiB aggregate capacity
+budget; paging remains bounded to 4,096 entries/1 MiB per reply. These are separate
+from validation's name limit: the fixed-width snapshot records can exhaust their
+memory budget before an otherwise valid directory reaches that limit. Rewind,
+release and shutdown return the capacity; the small-budget regression build
+continues to check exhaustion and reclamation.
+
+`test-scaling.py` grows an independently fsck-checked HTree past 65,536 names,
+opens 8,192 simultaneous data handles, retains more than 4,096 distinct pins
+through rename/unlink and a real write transaction, enumerates a complete large
+snapshot, and verifies rollback and orphan reclamation. A small-pool build tests
+C-level preflight exhaustion before creation. Its native mount run opens 600
+distinct files together and checks large readdir results without duplicates.
+`index-cache-unit` requires 1,001 cache hits while proving corruption, failed
+validation, rollback, refresh, hash-policy changes and reopen force the required
+fresh validation. CI runs these checks with address/undefined sanitizers.

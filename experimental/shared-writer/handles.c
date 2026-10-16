@@ -11,25 +11,81 @@
 #include <stdlib.h>
 #include <string.h>
 extern struct struct_io_manager staged_manager;
-#define HANDLE_LIMIT 128
-#define NODE_LIMIT 4096
+#ifndef HANDLE_LIMIT
+#define HANDLE_LIMIT 8192
+#endif
+#ifndef NODE_LIMIT
+#define NODE_LIMIT 32768
+#endif
+#define TOKEN_BITS 17
+#define TOKEN_MASK ((1ULL << TOKEN_BITS) - 1)
+#if HANDLE_LIMIT + NODE_LIMIT >= (1 << TOKEN_BITS)
+#error handle slot encoding overflow
+#endif
 #define TABLE_LIMIT (HANDLE_LIMIT + NODE_LIMIT)
 static int mounted_nodes;
 struct handle {
-  uint64_t token;
+  uint64_t token, verified;
+  struct handle *node_next;
   struct inode_grant grant;
   int stale, pending;
+  unsigned slot;
+  struct handle *next, *previous;
   struct directory_stream stream;
 };
-static struct handle table[TABLE_LIMIT];
+/* Stable, individually allocated slots: growing the pool cannot invalidate a
+ * handle borrowed by a nested open. Tokens encode a slot plus a never-reused
+ * serial; a released slot can never resurrect an old capability. */
+static struct handle *table[TABLE_LIMIT], *live;
+static unsigned cursor[2];
+static struct handle *node_buckets[65536];
+static unsigned node_bucket(ext2_ino_t ino) { return (ino * 2654435761U) % 65536; }
 static uint64_t last_token;
+static struct handle *free_slot(int node) {
+  unsigned begin = node ? HANDLE_LIMIT : 0;
+  unsigned length = node ? NODE_LIMIT : HANDLE_LIMIT;
+  for (unsigned j = 0; j < length; j++) {
+    unsigned i = begin + (cursor[node] + j) % length;
+    if (!table[i]) {
+      struct handle *h = calloc(1, sizeof(*h));
+      if (!h)
+        return NULL;
+      h->slot = i;
+      h->next = live;
+      if (live)
+        live->previous = h;
+      live = table[i] = h;
+      cursor[node] = (i - begin + 1) % length;
+      return h;
+    }
+  }
+  return NULL;
+}
 static void clear_handle(struct handle *h) {
   directory_stream_clear(&h->stream);
-  memset(h, 0, sizeof(*h));
+  if (h->previous)
+    h->previous->next = h->next;
+  else
+    live = h->next;
+  if (h->next)
+    h->next->previous = h->previous;
+  if (h->slot >= HANDLE_LIMIT && h->token) {
+    struct handle **at = &node_buckets[node_bucket(h->grant.inode)];
+    while (*at && *at != h)
+      at = &(*at)->node_next;
+    if (*at)
+      *at = h->node_next;
+  }
+  table[h->slot] = NULL;
+  free(h);
+}
+static int token_available(void) { return last_token < (UINT64_MAX >> TOKEN_BITS); }
+static void assign_token(struct handle *h) {
+  h->token = (++last_token << TOKEN_BITS) | h->slot;
 }
 void handles_destroy(void) {
-  for (unsigned i = 0; i < TABLE_LIMIT; i++)
-    clear_handle(&table[i]);
+  while (live)
+    clear_handle(live);
 }
 static uint64_t le(const unsigned char *p, unsigned n) {
   uint64_t v = 0;
@@ -41,31 +97,55 @@ static void put(unsigned char *p, uint64_t v, unsigned n) {
   for (unsigned i = 0; i < n; i++)
     p[i] = v >> (8 * i);
 }
+static unsigned pin_slots[2 * PIN_LIMIT], pin_generations[2 * PIN_LIMIT];
+static unsigned pin_position(ext2_ino_t ino) {
+  unsigned at = (ino * 2654435761U) % (2 * PIN_LIMIT);
+  while (pin_slots[at] && pin_slots[at] != ino)
+    at = (at + 1) % (2 * PIN_LIMIT);
+  return at;
+}
 static errcode_t add_pin(struct inode_pin *pins, unsigned *count,
                          ext2_ino_t ino, uint32_t generation) {
   if (ino == EXT2_ROOT_INO)
     return 0;
-  for (unsigned i = 0; i < *count; i++)
-    if (pins[i].inode == ino)
-      return pins[i].generation == generation ? 0 : ESTALE;
-  if (*count == (mounted_nodes ? PIN_LIMIT : HANDLE_LIMIT))
+  unsigned at = pin_position(ino);
+  if (pin_slots[at])
+    return 0;
+  if (*count == PIN_LIMIT)
     return EMFILE;
+  pin_slots[at] = ino;
+  pin_generations[at] = generation;
   pins[*count] = (struct inode_pin){ino, generation};
   (*count)++;
   return 0;
 }
+static int compare_inode(const void *a, const void *b) {
+  ext2_ino_t x = *(const ext2_ino_t *)a, y = *(const ext2_ino_t *)b;
+  return x < y ? -1 : x > y;
+}
 static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
                               unsigned *count) {
   *count = 0;
+  memset(pin_slots, 0, sizeof(pin_slots));
   ext2_ino_t orphans[PIN_LIMIT];
   unsigned orphan_count;
   errcode_t valid = namespace_orphans(fs, orphans, &orphan_count);
   if (valid)
     return valid;
-  for (unsigned i = 0; i < TABLE_LIMIT; i++) {
-    struct handle *h = &table[i];
+  qsort(orphans, orphan_count, sizeof(*orphans), compare_inode);
+  for (struct handle *h = live; h; h = h->next) {
     if (!h->token || h->stale || h->pending)
       continue;
+    unsigned position = pin_position(h->grant.inode);
+    if (pin_slots[position] && pin_generations[position] == h->grant.generation)
+      continue;
+    uint64_t epoch = overlay_epoch(active_overlay);
+    if (epoch && h->verified == epoch && h->grant.flags != GRANT_DIRECTORY) {
+      errcode_t e = add_pin(pins, count, h->grant.inode, h->grant.generation);
+      if (e)
+        return e;
+      continue;
+    }
     struct ext2_inode in;
     errcode_t e = grant_inode_known(fs, &h->grant, &in, orphans, orphan_count);
     if (e == ESTALE) {
@@ -74,16 +154,14 @@ static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
     }
     if (e)
       return e;
-    int captured = 0;
-    for (unsigned j = 0; j < *count; j++)
-      if (pins[j].inode == h->grant.inode)
-        captured = 1;
+    h->verified = epoch;
+    int captured = !!pin_slots[pin_position(h->grant.inode)];
     e = add_pin(pins, count, h->grant.inode, in.i_generation);
     if (e)
       return e;
     if (h->grant.flags != GRANT_DIRECTORY || captured)
       continue;
-    ext2_ino_t node = h->grant.inode, seen[PIN_LIMIT];
+    ext2_ino_t node = h->grant.inode, seen[ANCESTOR_LIMIT];
     unsigned depth = 0;
     while (node != EXT2_ROOT_INO) {
       if (depth == ANCESTOR_LIMIT)
@@ -112,19 +190,20 @@ static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
 }
 static errcode_t allocate(ext2_filsys fs, const struct inode_grant *g,
                           uint64_t *size, unsigned char **data, size_t *count) {
-  struct handle *h = NULL;
-  for (unsigned i = 0; !h && i < HANDLE_LIMIT; i++)
-    if (!table[i].token)
-      h = &table[i];
-  if (!h || last_token == UINT64_MAX)
+  if (!token_available())
+    return EMFILE;
+  struct handle *h = free_slot(0);
+  if (!h)
     return EMFILE;
   struct ext2_inode in;
   errcode_t e = grant_inode(fs, g, &in);
-  if (e)
+  if (e) {
+    clear_handle(h);
     return e;
+  }
   h->grant = *g;
   h->stale = 0;
-  h->token = ++last_token;
+  assign_token(h);
   struct inode_pin pins[PIN_LIMIT];
   unsigned n;
   e = pin_snapshot(fs, pins, &n);
@@ -161,24 +240,25 @@ static errcode_t node_allocate(ext2_filsys fs, ext2_ino_t ino, uint64_t *size,
     return e;
   struct handle *slot = NULL;
   int created = 0;
-  for (unsigned i = HANDLE_LIMIT; i < TABLE_LIMIT; i++) {
-    if (table[i].token && table[i].grant.inode == ino &&
-        table[i].grant.generation == in.i_generation && !table[i].stale) {
-      slot = &table[i];
+  unsigned bucket = node_bucket(ino);
+  for (struct handle *candidate = node_buckets[bucket]; candidate; candidate = candidate->node_next) {
+    if (candidate->slot >= HANDLE_LIMIT && candidate->token && candidate->grant.inode == ino &&
+        candidate->grant.generation == in.i_generation && !candidate->stale) {
+      slot = candidate;
       break;
     }
   }
   if (!slot) {
-    for (unsigned i = HANDLE_LIMIT; i < TABLE_LIMIT; i++)
-      if (!table[i].token) {
-        slot = &table[i];
-        break;
-      }
-    if (!slot || last_token == UINT64_MAX)
+    if (!token_available())
+      return EMFILE;
+    slot = free_slot(1);
+    if (!slot)
       return EMFILE;
     created = 1;
-    slot->token = ++last_token;
+    assign_token(slot);
     slot->grant = g;
+    slot->node_next = node_buckets[bucket];
+    node_buckets[bucket] = slot;
     struct inode_pin pins[PIN_LIMIT];
     unsigned n;
     e = pin_snapshot(fs, pins, &n);
@@ -231,10 +311,10 @@ int handles_dispatch(const char *image, const struct credentials *c,
       ext2fs_free(fs);
     if (e)
       return policy_errno(e);
-    if (count == PIN_LIMIT || last_token == UINT64_MAX)
+    if (count == PIN_LIMIT || !token_available())
       return EMFILE;
     for (unsigned i = HANDLE_LIMIT; i < TABLE_LIMIT; i++)
-      if (!table[i].token)
+      if (!table[i])
         return 0;
     return EMFILE;
   }
@@ -255,19 +335,17 @@ int handles_dispatch(const char *image, const struct credentials *c,
       ext2fs_free(fs);
     if (e)
       return policy_errno(e);
-    if (n == (mounted_nodes ? PIN_LIMIT : HANDLE_LIMIT) ||
-        last_token == UINT64_MAX)
+    if (n == PIN_LIMIT || !token_available())
       return EMFILE;
-    struct handle *slot = NULL;
-    for (unsigned i = 0; !slot && i < HANDLE_LIMIT; i++)
-      if (!table[i].token)
-        slot = &table[i];
+    struct handle *slot = free_slot(0);
     if (!slot)
       return EMFILE;
     *data = calloc(8, 1);
-    if (!*data)
+    if (!*data) {
+      clear_handle(slot);
       return ENOMEM;
-    slot->token = ++last_token;
+    }
+    assign_token(slot);
     slot->pending = 1;
     put(*data, slot->token, 8);
     *count = 8;
@@ -294,11 +372,11 @@ int handles_dispatch(const char *image, const struct credentials *c,
          command == 35 || command == 36 || command == 38))
       root_request = 1;
     else {
-      for (unsigned i = 0; i < TABLE_LIMIT; i++)
-        if (table[i].token && table[i].token == token) {
-          h = &table[i];
-          break;
-        }
+      if ((token & TOKEN_MASK) >= TABLE_LIMIT)
+        return EBADF;
+      h = table[token & TOKEN_MASK];
+      if (h && h->token != token)
+        h = NULL;
       if (!h)
         return EBADF;
       if (command == 10) {

@@ -20,6 +20,11 @@ static uint64_t little(const unsigned char *p, size_t n) {
 static int read_all(FILE *f, void *data, size_t n) {
   return fread(data, 1, n, f) == n ? 0 : EINVAL;
 }
+static int compare_pin(const void *a, const void *b) {
+  uint32_t x = ((const struct inode_pin *)a)->inode;
+  uint32_t y = ((const struct inode_pin *)b)->inode;
+  return x < y ? -1 : x > y;
+}
 int main(int argc, char **argv) {
   if (argc != 3 || strcmp(argv[2], "--stream"))
     return 2;
@@ -96,6 +101,8 @@ int main(int argc, char **argv) {
       pins[i].generation = little(header + 4, 4);
     }
   }
+  if (!e)
+    qsort(pins, pin_count, sizeof(*pins), compare_pin);
   for (unsigned i = 0; !e && i < count; i++) {
     if (at) {
       unsigned char bases[32];

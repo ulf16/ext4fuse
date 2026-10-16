@@ -46,6 +46,7 @@ class Session:
         self._failed = False
         self._process = None
         self._files = set()
+        self._lookup_files = {}
         self._file_key = object()
         self._cwd = None
         self._lock = chain.locked(root)
@@ -125,7 +126,7 @@ class Session:
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
                     or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10, 28, 29, 37, 41, 42) and count)
                     or (op == 13 and (count != size or count > 4095))
-                    or (op == 12 and (count % 8 or count > 4096*8))
+                    or (op == 12 and (count % 8 or count > 65536*8))
                     or (not error and ((op in (7,14,18,19,22,24,38,39) and count != 24) or (op in (11,15,21,25) and count != 16)))
                     or (not error and op==23 and count!=8)
                     or (not error and op==27 and (count<8 or count>length or size>=2**63-1))
@@ -398,14 +399,15 @@ class Session:
             number,ino,generation,access,flags=struct.unpack('<QIIII',reply)
             if not number or not ino or ((flags,access) not in ((2,8),(4,0))):
                 self._failed=True;raise OSError(errno.EIO,'invalid lookup pin')
-            for existing in self._files:
-                if existing._token==number:
-                    if getattr(existing,'_lookup_grant',None)!=(ino,generation,access,flags):
-                        self._failed=True;raise OSError(errno.EIO,'lookup identity alias')
-                    return existing,ino,generation
+            existing=self._lookup_files.get(number)
+            if existing is not None:
+                if existing._lookup_grant!=(ino,generation,access,flags):
+                    self._failed=True;raise OSError(errno.EIO,'lookup identity alias')
+                return existing,ino,generation
             h=(DirectoryHandle if flags==2 else FileHandle)(self,number,self._file_key)
             h._lookup_grant=(ino,generation,access,flags)
             self._files.add(h)
+            self._lookup_files[number]=h
             return h,ino,generation
 
     def _mount_open_node(self, node, rights, append=False, directory=False):
@@ -674,6 +676,7 @@ class Session:
             for handle in self._files:
                 handle._closed = True
             self._files.clear()
+            self._lookup_files.clear()
             cleanup_error=None
             if self._process is not None and not self._failed:
                 try:
@@ -772,6 +775,7 @@ class FileHandle:
                 raise OSError(errno.EBADF,'unregistered file handle')
             self._closed=True
             self._owner._files.discard(self)
+            self._owner._lookup_files.pop(self._token,None)
             if not self._owner._closed and not self._owner._failed:
                 self._owner._rpc(10,struct.pack('<Q',self._token))
                 self._owner._cleanup_orphans()

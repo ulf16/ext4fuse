@@ -4,10 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 #ifndef DIRECTORY_STREAM_BYTES
-#define DIRECTORY_STREAM_BYTES (4U * 1024 * 1024)
+#define DIRECTORY_STREAM_BYTES (64U * 1024 * 1024)
 #endif
 #ifndef DIRECTORY_STREAM_TOTAL
-#define DIRECTORY_STREAM_TOTAL (32U * 1024 * 1024)
+#define DIRECTORY_STREAM_TOTAL (256U * 1024 * 1024)
 #endif
 /* Reader is serialized. Cookies are locators, not inode capabilities. A range
  * is never reused by another snapshot in this reader process. */

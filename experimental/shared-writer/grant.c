@@ -2,6 +2,7 @@
 #include "grant.h"
 #include "namespace.h"
 #include <errno.h>
+#include <stdlib.h>
 int grant_valid(const struct inode_grant *g) {
   if (!g || !g->inode)
     return EINVAL;
@@ -54,15 +55,16 @@ static errcode_t identity(ext2_filsys fs, const struct inode_grant *g,
     return e;
   return in->i_flags & GRANT_UNSUPPORTED ? EOPNOTSUPP : 0;
 }
+static int compare_inode(const void *a, const void *b) {
+  ext2_ino_t x = *(const ext2_ino_t *)a, y = *(const ext2_ino_t *)b;
+  return x < y ? -1 : x > y;
+}
 static errcode_t member(const struct inode_grant *g,
                         const struct ext2_inode *in, const ext2_ino_t *list,
                         unsigned n) {
   if (in->i_links_count)
     return 0;
-  for (unsigned i = 0; i < n; i++)
-    if (list[i] == g->inode)
-      return 0;
-  return ESTALE;
+  return bsearch(&g->inode, list, n, sizeof(*list), compare_inode) ? 0 : ESTALE;
 }
 errcode_t grant_inode_known(ext2_filsys fs, const struct inode_grant *g,
                             struct ext2_inode *in, const ext2_ino_t *list,
@@ -80,5 +82,7 @@ errcode_t grant_inode(ext2_filsys fs, const struct inode_grant *g,
   ext2_ino_t list[PIN_LIMIT];
   unsigned n;
   e = namespace_orphans(fs, list, &n);
+  if (!e)
+    qsort(list, n, sizeof(*list), compare_inode);
   return e ? e : member(g, in, list, n);
 }

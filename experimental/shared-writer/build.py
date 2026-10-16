@@ -71,9 +71,11 @@ index_collision = compile_source(repo / 'test/collision-set.c', 'index-collision
 index_corrupt = compile_source(here / 'index-corrupt.c', 'index-corrupt')
 candidate = compile_source(here / 'journal-candidate.c', 'journal-candidate')
 snapshot = compile_source(here / 'metadata-snapshot.c', 'metadata-snapshot')
+index_scale = compile_source(here/'index-scale-fixture.c','index-scale-fixture')
+index_cache = compile_source(here/'index-cache-unit.c','index-cache-unit')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
-for name, objects in [('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
+for name, objects in [('index-scale-fixture',[index_scale]), ('index-cache-unit',[overlay,manager,index,index_cache]), ('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
                       ('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
                       ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, index, mutation, metadata, path_at, producer]),
@@ -90,6 +92,10 @@ subprocess.run(compiler + flags + ['-DDIRECTORY_STREAM_BYTES=4096','-DDIRECTORY_
                '-c',str(here/'directory-stream.c'),'-o',str(limited)],check=True)
 objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,mutation,path_at,directory_ref,str(limited),mount_metadata,metadata,handles,reader,server,*server_readers]
 subprocess.run(compiler + flags + objects + libs + ['-o',str(work/'reader-server-stream-limits')],check=True)
+limited_handles=work/'handles-limited.o'
+subprocess.run(compiler+flags+['-DHANDLE_LIMIT=128','-DNODE_LIMIT=256','-c',str(here/'handles.c'),'-o',str(limited_handles)],check=True)
+objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,mutation,path_at,directory_ref,directory_stream,mount_metadata,metadata,str(limited_handles),reader,server,*server_readers]
+subprocess.run(compiler+flags+objects+libs+['-o',str(work/'reader-server-handle-limits')],check=True)
 mount_frontend=compile_source(here/'mount-frontend.c','mount-frontend')
 subprocess.run(compiler+flags+[mount_frontend]+libs+['-o',str(work/'mount-frontend')],check=True)
 print('Built shared-writer experiments in', work)

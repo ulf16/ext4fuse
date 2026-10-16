@@ -609,3 +609,23 @@ jobs:
           path: |
             ${{ runner.temp }}/mapped-io/mounted-mmap-results.json
             ${{ runner.temp }}/mapped-io/mmap-writeback-errors-results.json
+
+  handle-directory-scaling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native scaling dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build sanitized scaling runtime
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/scaling" --sanitize
+      - name: Verify expanded pools, large HTree streams and cache invalidation
+        run: python3 experimental/shared-writer/test-scaling.py --work "$RUNNER_TEMP/scaling" --mount
+      - name: Save scaling validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: handle-directory-scaling-validation
+          path: ${{ runner.temp }}/scaling/scaling-results.json
