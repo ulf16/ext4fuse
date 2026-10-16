@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix='dirrefs-',dir=args.work) as temp:
         run(['debugfs','-w','-f',script,seed]);clean_image=seed
         run(['e2fsck','-fn',clean_image]);root=temp/source.stem
         run(['python3',here/'chain.py','init',seed,root,args.work/'prototype'])
-        with session.Session(root,args.work/'mutation-producer',args.work/'reader-server',Credentials(100,200)) as s:
+        with session.Session(root,args.work/'mutation-producer',args.work/'reader-server-handle-limits',Credentials(100,200)) as s:
             pid=s._process.pid;check(s.getcwd()=='/');check(s.cwd_stat()['inode']==2)
             r=s.opendir('/');check('existing-file' in r.listdir());check(r.path()=='/');r.close()
             atomic(s,lambda:s.opendir('/missing'),errno.ENOENT)
@@ -163,14 +163,14 @@ with tempfile.TemporaryDirectory(prefix='dirrefs-',dir=args.work) as temp:
                 roots.pop().close();s.chdir('/quota');check(s.getcwd()=='/quota')
                 for handle in roots:handle.close()
                 s.rmdir('/quota');s.chdir('/');check(s._rpc(12)[0]==0);clean(s)
-                # Ancestor pins, rather than slot count, bound a deep reference.
+                # The ancestry-depth bound is independent of the enlarged pin budget.
                 paths=['/deep']
                 for _ in range(127):paths.append(paths[-1]+'/d')
                 for start in range(0,128,64):s.apply([dict(kind='mkdir',path=p) for p in paths[start:start+64]])
                 deep=s.opendir(paths[-1]);check(deep.path()==paths[-1])
                 s.mkdir(paths[-1]+'/extra')
                 atomic(s,lambda:s.opendir(paths[-1]+'/extra'),errno.EMFILE)
-                atomic(s,lambda:s.open('/existing-file'),errno.EMFILE)
+                with s.open('/existing-file') as independent:check(independent.size()>=0)
                 atomic(s,lambda:s.chdir(paths[-1]+'/extra'),errno.EMFILE)
                 check(s.getcwd()=='/');s.rmdir(paths[-1]+'/extra')
                 # All 128 retained ancestors may become unlinked together.

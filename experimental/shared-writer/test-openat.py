@@ -95,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix='openat-',dir=args.work) as temp:
         script=temp/'seed.commands';script.write_text('set_inode_field / mode 040777\nset_inode_field / uid 100\nset_inode_field /existing-file uid 100\nset_inode_field /existing-file gid 200\nset_inode_field /existing-file mode 0100660\n')
         run(['debugfs','-w','-f',script,seed]);run(['e2fsck','-fn',seed]);root=temp/source.stem
         run(['python3',here/'chain.py','init',seed,root,args.work/'prototype'])
-        with session.Session(root,args.work/'mutation-producer',args.work/'reader-server',Credentials(100,200)) as s:
+        with session.Session(root,args.work/'mutation-producer',args.work/'reader-server-handle-limits',Credentials(100,200)) as s:
             pid=s._process.pid
             oracle(s,temp/source.stem.replace(".img",""))
             s.mkdirat(None,'/a');s.mkdirat(None,'/a/b');d=s.openat(None,'/a/b',directory_only=True)
