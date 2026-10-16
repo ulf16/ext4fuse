@@ -74,7 +74,7 @@ try:
     else:
         device = run(['losetup', '--find', '--show', dirty]).decode().strip()
         if shutil.which('udevadm'): run(['udevadm', 'settle', '--timeout=15'])
-    run([cli, 'init', '--device', device, state, '--recover-journal'])
+    run([cli, '--debug', 'init', '--device', device, state, '--recover-journal'])
     check(json.loads(run([cli, 'status', state, '--json']))['phase'] == 'ready')
     run(['e2fsck', '-fn', device])
     check(run(['debugfs', '-R', 'cat /existing-file', device]) == fixture['new'])
@@ -118,6 +118,8 @@ finally:
         subprocess.run(['/sbin/umount', str(mount)] if sys.platform == 'darwin' else ['fusermount3', '-u', str(mount)], timeout=30)
     if process is not None and process.poll() is None:
         process.terminate(); process.wait(timeout=30)
+    if log.exists():
+        shutil.copyfile(log, a.work / 'packaging-device-mount.log')
     if device:
         run(['hdiutil', 'detach', device] if sys.platform == 'darwin' else ['losetup', '--detach', device])
 

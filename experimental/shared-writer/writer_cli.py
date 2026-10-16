@@ -130,6 +130,24 @@ def check_image(root):
         raise ValueError('managed image failed read-only e2fsck: ' + output.decode(errors='replace')[-2048:])
 
 
+def device_admission(call):
+    # udev briefly opens newly attached Linux loop/physical nodes. Keep the same
+    # explicit target and retain every existing identity/exclusive-claim check.
+    deadline = time.monotonic() + 15
+    announced = False
+    while True:
+        try:
+            return call()
+        except OSError as error:
+            if (sys.platform != 'linux' or error.errno not in (errno.EAGAIN, errno.EBUSY)
+                    or time.monotonic() >= deadline):
+                raise
+            if not announced:
+                print('Waiting briefly for exclusive device admission...', file=sys.stderr, flush=True)
+                announced = True
+            time.sleep(.2)
+
+
 def run_session(root, data, args, work, broker=None, mountpoint=None):
     chain_root = root / 'chain'
     options = dict(checkpoint_every=args.checkpoint_every if broker else 0)
@@ -137,8 +155,8 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
         target = None
         if data['mode'] == 'direct':
             from direct_device import Controller
-            target = stack.enter_context(Controller(root / 'device', args.device, work,
-                check_bytes=args.check_bytes, journal_bytes=args.journal_bytes))
+            target = device_admission(lambda: stack.enter_context(Controller(root / 'device', args.device, work,
+                check_bytes=args.check_bytes, journal_bytes=args.journal_bytes)))
             chain_root = target.chain
             options['commit_sink'] = target
         else:
@@ -194,8 +212,16 @@ def initialize(args):
             run_session(root, data, args, work)
         else:
             from direct_device import init
-            init(args.device, root / 'device', work, check_bytes=args.check_bytes,
-                 recover_journal=args.recover_journal, journal_bytes=args.journal_bytes)
+            def initialize_device():
+                try:
+                    return init(args.device, root / 'device', work, check_bytes=args.check_bytes,
+                         recover_journal=args.recover_journal, journal_bytes=args.journal_bytes)
+                except OSError as error:
+                    # Only transient pre-admission failures may restart initialization.
+                    if (root / 'device').exists() and error.errno in (errno.EAGAIN, errno.EBUSY):
+                        raise ValueError('device initialization started; retain state and run recover') from error
+                    raise
+            device_admission(initialize_device)
             # A dirty native journal import is sealed but not yet published by init.
             run_session(root, data, argparse.Namespace(**dict(vars(args), recover_journal=False)), work)
         seal(root, data, 'ready')
@@ -344,6 +370,7 @@ def unmount(args):
 def parser():
     p = argparse.ArgumentParser(prog='ext4fuse-writer', description=__doc__)
     p.add_argument('--version', action='store_true')
+    p.add_argument('--debug', action='store_true', help='include a traceback with failure diagnostics')
     sub = p.add_subparsers(dest='action')
     init = sub.add_parser('init', help='initialize a private image copy or an explicit offline device')
     source = init.add_mutually_exclusive_group(required=True)
@@ -408,6 +435,9 @@ def main():
             p.print_help()
             return 2
     except (OSError, ValueError, subprocess.SubprocessError) as error:
+        if args.debug:
+            import traceback
+            traceback.print_exc()
         print('ext4fuse-writer: ' + str(error), file=sys.stderr)
         if args.action in ('init', 'mount', 'recover'):
             print('State retained. Inspect status; do not delete recovery files or run another writer.', file=sys.stderr)

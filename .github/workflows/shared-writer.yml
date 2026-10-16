@@ -682,4 +682,4 @@ jobs:
             ${{ runner.temp }}/installed-writer/packaging-results.json
             ${{ runner.temp }}/installed-writer/packaging-device-results.json
             ${{ runner.temp }}/installed-writer/package-workflow-*/*.log
-            ${{ runner.temp }}/installed-writer/package-device-*/*.log
+            ${{ runner.temp }}/installed-writer/packaging-device-mount.log

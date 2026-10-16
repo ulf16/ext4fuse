@@ -138,7 +138,10 @@ manifest was sealed, choose a new state directory and retain the failed one rath
 than treating it as a recoverable filesystem. This CLI does not repair arbitrary
 metadata damage or silently adopt legacy experimental directories.
 
-Normal failures print a concise error; retain terminal output alongside `doctor`
+Linux admission waits up to 15 seconds for transient udev/device-busy races, retaining
+all exclusive-claim and identity checks. A persistently busy target is refused.
+
+Normal failures print a concise error; `--debug` adds a traceback; retain terminal output alongside `doctor`
 and `status --json` when reporting a problem. No background daemon or launchd
 service is installed. After an upgrade, keep all state and run recovery before
 remounting an interrupted volume. Unknown state format versions are refused.
