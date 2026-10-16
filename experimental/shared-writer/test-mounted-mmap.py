@@ -61,7 +61,10 @@ check(bool(sources));base=Path(tempfile.mkdtemp(prefix='mounted-mmap-',dir=a.wor
 try:
  for index,source in enumerate(sources):
   root=base/f'chain-{index}';chain.clone(source,root)
-  with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:s.chmod('/',0o777)
+  with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
+   s.chmod('/',0o777)
+   with s.openat(None,'/cold','rw',create=True,mode=0o600) as f:f.write(b'C'*(PAGE*2+17))
+   s.chown('/cold',os.getuid(),os.getgid())
   mount=base/f'mnt-{index}';mount.mkdir();logpath=base/f'mount-{index}.log';control_path=base/f'c{index}.sock';proc=None;fds=[];active=False
   try:
    with logpath.open('wb') as log:
@@ -70,7 +73,13 @@ try:
      if os.path.ismount(mount):active=True;break
      if proc.poll() is not None:break
      time.sleep(.1)
-    check(active,logpath.read_text());path=mount/'mapped';size=PAGE*3+137;expected=bytearray(b'A'*size)
+    check(active,logpath.read_text())
+    cold=os.open(mount/'cold',os.O_RDWR)
+    try:
+     with Mapping(cold,PAGE*2+17) as cm:
+      check(cm.read(0,PAGE*2+17)==b'C'*(PAGE*2+17),'cold page-in failed');cm.write(PAGE-2,b'COLD');cm.sync();os.fsync(cold);check(os.pread(cold,4,PAGE-2)==b'COLD')
+    finally:os.close(cold)
+    path=mount/'mapped';size=PAGE*3+137;expected=bytearray(b'A'*size)
     fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600);fds.append(fd);check(os.write(fd,expected)==size)
     other=os.open(path,os.O_RDWR);fds.append(other)
     with Mapping(fd,size) as m,Mapping(other,size) as second:

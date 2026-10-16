@@ -110,7 +110,9 @@ static int rpc(fuse_req_t req, unsigned op, const char *path,
   const struct fuse_ctx *ctx = req ? fuse_req_ctx(req) : NULL;
   int internal = !req || op == 102 || op == 109 || op == 112 || op == 121 ||
                  op == 122 ||
-                 (ctx && !ctx->pid && !ctx->uid && (op == 103 || op == 120 || op == 106 || op == 130));
+                 (ctx && !ctx->pid && (!ctx->uid || ctx->uid == owner) &&
+                  (op == 103 || op == 120 || op == 106 || op == 107 ||
+                   op == 130));
   if (internal)
     ctx = NULL;
   uid_t uid = ctx ? ctx->uid : owner;
