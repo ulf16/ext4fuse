@@ -48,6 +48,14 @@ test checks version and corrupted-image rejection without mounting. Tested on In
 Sequoia; Apple Silicon is not yet validated. See the tap's README for macFUSE setup,
 mounting, upgrade and removal instructions.
 
+## Writable package
+
+The separate `ext4fuse-writer` package provides explicit initialization, foreground
+mounting, status, clean unmounting and recovery for the experimental write engine.
+It coexists with the read-only reader. See the [installed workflow guide](experimental/shared-writer/WORKFLOW.md)
+for installation, image copies, direct devices and interrupted-write recovery.
+Packaging does not certify power-loss behavior or remove the writer's feature limits.
+
 ## Build on Sequoia
 
 Install macFUSE from its official installer or Homebrew cask if it is not already installed.

@@ -12,6 +12,7 @@ repo = here.parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--work', type=Path, required=True)
 parser.add_argument('--sanitize', action='store_true')
+parser.add_argument('--runtime-only', action='store_true', help='build only installed writer helpers')
 args = parser.parse_args()
 work = args.work.resolve()
 work.mkdir(parents=True, exist_ok=True)
@@ -19,6 +20,7 @@ work.mkdir(parents=True, exist_ok=True)
 def pkg(*options):
     return shlex.split(subprocess.check_output(['pkg-config', *options, 'fuse3', 'ext2fs'], text=True))
 
+subprocess.run(['pkg-config', '--atleast-version=1.47.0', 'ext2fs'], check=True)
 compiler = shlex.split(os.environ.get('CC', 'cc'))
 flags = ['-O1' if args.sanitize else '-O2', '-g', '-std=gnu99', '-Wall', '-Wextra',
          '-I' + str(here), '-I' + str(repo), '-DFUSE_USE_VERSION=31', '-D_FILE_OFFSET_BITS=64']
@@ -26,13 +28,22 @@ if sys.platform == 'darwin':
     flags += ['-DFUSE_DARWIN_ENABLE_EXTENSIONS=0', '-mmacosx-version-min=15.0']
 if args.sanitize:
     flags += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+flags += shlex.split(os.environ.get('CPPFLAGS', '')) + shlex.split(os.environ.get('CFLAGS', ''))
 flags += pkg('--cflags')
-libs = pkg('--libs', '--static')
+libs = shlex.split(os.environ.get('LDFLAGS', '')) + pkg('--libs', '--static')
+jobs = {}
+compiled = set()
 
 def compile_source(source, name):
     output = work / (name + '.o')
-    subprocess.run(compiler + flags + ['-c', str(source), '-o', str(output)], check=True)
+    jobs[str(output)] = source
     return str(output)
+
+def ensure(objects):
+    for output in objects:
+        if output not in compiled:
+            subprocess.run(compiler + flags + ['-c', str(jobs[output]), '-o', output], check=True)
+            compiled.add(output)
 
 reader_objects = []
 for line in (repo / 'Makefile').read_text().splitlines():
@@ -89,19 +100,24 @@ for name, objects in [('index-scale-fixture',[index_scale]), ('index-convert-uni
                       ('policy-unit', [policy_core, policy_acl, policy_unit]),
                       ('overlay-unit', [overlay, unit]),
                       ('read-bench', [overlay, bench, *reader_objects])]:
+    if args.runtime_only and name not in ('mutation-producer', 'reader-server', 'journal-candidate', 'metadata-snapshot'):
+        continue
+    ensure(objects)
     subprocess.run(compiler + flags + objects + libs + ['-o', str(work / name)], check=True)
-limited_index=work/'directory-index-limited.o'
-subprocess.run(compiler+flags+['-DINDEX_LEAF_BYTES=2048','-c',str(here/'directory-index.c'),'-o',str(limited_index)],check=True)
-subprocess.run(compiler+flags+[overlay,manager,str(limited_index),index_incremental]+libs+['-o',str(work/'index-incremental-limits')],check=True)
-limited = work / 'directory-stream-limited.o'
-subprocess.run(compiler + flags + ['-DDIRECTORY_STREAM_BYTES=4096','-DDIRECTORY_STREAM_TOTAL=8192',
-               '-c',str(here/'directory-stream.c'),'-o',str(limited)],check=True)
-objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,conversion,mutation,path_at,directory_ref,str(limited),mount_metadata,metadata,handles,reader,server,*server_readers]
-subprocess.run(compiler + flags + objects + libs + ['-o',str(work/'reader-server-stream-limits')],check=True)
-limited_handles=work/'handles-limited.o'
-subprocess.run(compiler+flags+['-DHANDLE_LIMIT=128','-DNODE_LIMIT=256','-c',str(here/'handles.c'),'-o',str(limited_handles)],check=True)
-objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,conversion,mutation,path_at,directory_ref,directory_stream,mount_metadata,metadata,str(limited_handles),reader,server,*server_readers]
-subprocess.run(compiler+flags+objects+libs+['-o',str(work/'reader-server-handle-limits')],check=True)
+if not args.runtime_only:
+    limited_index=work/'directory-index-limited.o'
+    subprocess.run(compiler+flags+['-DINDEX_LEAF_BYTES=2048','-c',str(here/'directory-index.c'),'-o',str(limited_index)],check=True)
+    subprocess.run(compiler+flags+[overlay,manager,str(limited_index),index_incremental]+libs+['-o',str(work/'index-incremental-limits')],check=True)
+    limited = work / 'directory-stream-limited.o'
+    subprocess.run(compiler + flags + ['-DDIRECTORY_STREAM_BYTES=4096','-DDIRECTORY_STREAM_TOTAL=8192',
+                   '-c',str(here/'directory-stream.c'),'-o',str(limited)],check=True)
+    objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,conversion,mutation,path_at,directory_ref,str(limited),mount_metadata,metadata,handles,reader,server,*server_readers]
+    subprocess.run(compiler + flags + objects + libs + ['-o',str(work/'reader-server-stream-limits')],check=True)
+    limited_handles=work/'handles-limited.o'
+    subprocess.run(compiler+flags+['-DHANDLE_LIMIT=128','-DNODE_LIMIT=256','-c',str(here/'handles.c'),'-o',str(limited_handles)],check=True)
+    objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,conversion,mutation,path_at,directory_ref,directory_stream,mount_metadata,metadata,str(limited_handles),reader,server,*server_readers]
+    subprocess.run(compiler+flags+objects+libs+['-o',str(work/'reader-server-handle-limits')],check=True)
 mount_frontend=compile_source(here/'mount-frontend.c','mount-frontend')
+ensure([mount_frontend])
 subprocess.run(compiler+flags+[mount_frontend]+libs+['-o',str(work/'mount-frontend')],check=True)
-print('Built shared-writer experiments in', work)
+print('Built writer runtime in' if args.runtime_only else 'Built shared-writer experiments in', work)

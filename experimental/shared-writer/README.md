@@ -1,3 +1,7 @@
+> **Installed workflow:** use [WORKFLOW.md](WORKFLOW.md) for the packaged
+> `ext4fuse-writer` command, installation, foreground mounts and recovery.
+> The commands below remain development/test interfaces.
+
 # Shared reader / libext2fs writer experiment
 
 This experimental backend retains the native reader and uses libext2fs for

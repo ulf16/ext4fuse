@@ -655,3 +655,31 @@ jobs:
           path: |
             ${{ runner.temp }}/directory-indexing/directory-indexing-results.json
             ${{ runner.temp }}/directory-indexing/index-incremental-results.json
+
+  installed-writer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install package and device test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Require disposable loop devices and FUSE
+        run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
+      - name: Build just the installed runtime
+        run: python3 experimental/shared-writer/build.py --runtime-only --work "$RUNNER_TEMP/installed-writer"
+      - name: Test installed foreground mounts and interrupted recovery
+        run: python3 experimental/shared-writer/test-packaging.py --work "$RUNNER_TEMP/installed-writer" --mount
+      - name: Install the device-test runtime
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/writer-prefix" --build-dir "$RUNNER_TEMP/installed-writer" --python "$(command -v python3)" --version 0.3.0-beta.1
+      - name: Test installed dirty-journal import and direct-device recovery
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-packaging-device.py --work "$RUNNER_TEMP/installed-writer" --prefix "$RUNNER_TEMP/writer-prefix"
+      - name: Save installed workflow validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-writer-validation
+          path: |
+            ${{ runner.temp }}/installed-writer/packaging-results.json
+            ${{ runner.temp }}/installed-writer/packaging-device-results.json
+            ${{ runner.temp }}/installed-writer/package-workflow-*/*.log
+            ${{ runner.temp }}/installed-writer/package-device-*/*.log

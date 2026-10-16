@@ -1,0 +1,67 @@
+.TH EXT4FUSE-WRITER 1 "October 2026" "ext4fuse-writer" "User Commands"
+.SH NAME
+ext4fuse-writer \- mount and recover a managed writable ext4 filesystem
+.SH SYNOPSIS
+.B ext4fuse-writer init
+.RB ( --image " IMAGE" | --device " DEVICE" )
+.I STATE
+.RI [ options ]
+.br
+.B ext4fuse-writer mount
+.I STATE MOUNTPOINT
+.RB [ --device " DEVICE" ]
+.br
+.B ext4fuse-writer unmount
+.I STATE
+.br
+.B ext4fuse-writer recover
+.I STATE
+.RB [ --device " DEVICE" ]
+.br
+.B ext4fuse-writer status
+.I STATE
+.RB [ --json ]
+.br
+.B ext4fuse-writer doctor
+.SH DESCRIPTION
+The owner-only foreground writer uses a private durable recovery directory.
+Image initialization clones IMAGE into STATE/chain/image.img; the source is unchanged.
+Device initialization requires an explicit offline partition and off-device STATE.
+No formatting, automatic disk selection or background service is performed.
+The write engine remains experimental.
+.SH WORKFLOW
+Initialize once, mount in one terminal, and unmount from another terminal.
+Unmount waits for clean publication and integrity checks; do not unplug first.
+Following interruption, detach any stale mount and run recover with retained STATE.
+Device mount and recovery always require an explicit matching device node.
+Never delete recovery files to bypass an error or edit an active image externally.
+.SH OPTIONS
+.TP
+.B --recover-journal
+Explicitly replay a supported dirty native Linux journal during initialization
+(or managed-image mount/recovery). General filesystem damage is refused.
+.TP
+.B --checkpoint-every N
+Retire completed generations after N commits (mount only; default 64; zero disables).
+.TP
+.B --check-bytes N
+Maximum device metadata-check scratch bytes (default 1073741824).
+.TP
+.B --journal-bytes N
+Native journal import budget (default 268435456).
+.TP
+.B --timeout SECONDS
+Unmount completion wait (default 120). A timeout retains all recovery state.
+.TP
+.B --version
+Print the installed package version.
+.SH FILES
+STATE/writer-state records workflow phase. STATE/writer-lock excludes cooperating
+workflows. STATE/chain contains the writable image and recovery history for image
+mode; STATE/device contains direct-device identity and redo history for device mode.
+Keep the whole directory. Status reads metadata only, not current integrity.
+.SH EXIT STATUS
+Zero on success, 1 on failure, 2 for invalid usage, 130 on keyboard interruption.
+.SH SEE ALSO
+The installed share/doc/ext4fuse-writer/WORKFLOW.md describes installation,
+permissions, device admission, recovery and engine/platform limits.
