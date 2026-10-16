@@ -18,7 +18,7 @@ runs:
         echo "da274408bebbfd13a5a2fc3cfc66e3ffff17c48534673aa67f88d49b99123b96  $archive" | sha256sum --check
         tar -xzf "$archive" -C "$RUNNER_TEMP"
         cd "$RUNNER_TEMP/e2fsprogs-1.47.4"
-        ./configure --prefix="$RUNNER_TEMP/writer-e2fsprogs" --disable-nls --disable-elf-shlibs > configure-ci.log
+        ./configure --prefix="$RUNNER_TEMP/writer-e2fsprogs" --disable-nls --disable-elf-shlibs --with-udev-rules-dir=no --with-crond-dir=no --with-systemd-unit-dir=no > configure-ci.log
         make -j2 > build-ci.log 2>&1 || { tail -80 build-ci.log; exit 1; }
         make install > install-ci.log 2>&1 || { tail -80 install-ci.log; exit 1; }
         make install-libs >> install-ci.log 2>&1 || { tail -80 install-ci.log; exit 1; }
