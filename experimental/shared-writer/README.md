@@ -1888,6 +1888,15 @@ batch rollback, indexed markers and every sealed-replay crash boundary.
 
 ## Writable mappings and cache coherence
 
+On macOS, cold partial-page writes to a write-only file cause macFUSE to open
+a separate internal read handle. The broker derives that cache helper only
+from an existing, authorized regular-file write capability on the same inode.
+The helper cannot write or authorize another helper. The fixed kernel
+`default_permissions` and `extended_security` checks still deny application
+read opens, and descriptor access modes deny read calls and read mappings on
+a write-only descriptor. Mounted tests check those denials both before and
+after the internal helper is established.
+
 Regular-file create/open replies now retain the shared kernel data cache instead
 of forcing direct I/O. This enables MAP_SHARED writable mappings and MAP_PRIVATE
 copies on native macFUSE and Linux FUSE mounts. Ordinary reads/writes and mappings

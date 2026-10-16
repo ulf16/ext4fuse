@@ -91,7 +91,8 @@ int main(int argc, char **argv) {
     uint32_t op = get_le(header + 8, 4), pathlen = get_le(header + 12, 4);
     uint64_t offset = get_le(header + 16, 8), length = get_le(header + 24, 8);
     int shape =
-        op == 42   ? (pathlen || offset || length)
+        op == 43   ? (pathlen != 8 || offset || length)
+        : op == 42 ? (pathlen || offset || length)
         : op == 37 ? (pathlen || offset || length)
         : op == 38 ? (pathlen < 9 || offset > 1 || length)
         : op == 39 ? (pathlen != 8 || !offset || offset > 255 || length)
@@ -126,7 +127,7 @@ int main(int argc, char **argv) {
         : op >= 8  ? (pathlen != 8 || (op != 8 && (offset || length)))
         : op == 1 || op == 2 ? !pathlen
                              : (pathlen || offset || length);
-    if (op < 1 || op > 42 ||
+    if (op < 1 || op > 43 ||
         pathlen > (op == 35 ? 4360
                    : (op == 19 || op == 20 || op == 22 || op == 25 ||
                       op == 26 || op == 31 || op == 34 || op == 38)

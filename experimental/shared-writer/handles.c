@@ -416,7 +416,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
     int directory = h->grant.flags == GRANT_DIRECTORY;
     if (!e && command >= 15 && command != 30 && command != 35 &&
         command != 36 && command != 39 && command != 40 && command != 41 &&
-        !directory)
+        command != 43 && !directory)
       e = ENOTDIR;
     if (!e && h->grant.flags == GRANT_NODE && (command == 8 || command == 11))
       e = EBADF;
@@ -496,6 +496,18 @@ int handles_dispatch(const char *image, const struct credentials *c,
         e = path_at(fs, h->grant.inode, name, c, 0, &r);
       if (!e)
         e = node_allocate(fs, r.inode, size, data, count);
+    }
+    if (!e && command == 43) {
+      /* Mounted kernel cache read-modify-write only. Derive its read handle
+       * from a live regular-file WRITE capability, never a lookup/RO pin.
+       * macOS default_permissions still gates application opens and fd I/O. */
+      if (h->grant.flags > GRANT_APPEND || !(h->grant.access & GRANT_WRITE))
+        e = EBADF;
+      if (!e) {
+        struct inode_grant g = {h->grant.inode, h->grant.generation,
+                                GRANT_READ, 0};
+        e = allocate(fs, &g, size, data, count);
+      }
     }
     if (!e && command == 39) {
       /* Open an already-looked-up identity with fresh authorization. No

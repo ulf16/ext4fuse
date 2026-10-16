@@ -65,6 +65,8 @@ try:
    s.chmod('/',0o777)
    with s.openat(None,'/cold','rw',create=True,mode=0o600) as f:f.write(b'C'*(PAGE*2+17))
    s.chown('/cold',os.getuid(),os.getgid())
+   with s.openat(None,'/cold-write-only','w',create=True,mode=0o200) as f:f.write(b'W'*(PAGE*2))
+   s.chown('/cold-write-only',os.getuid(),os.getgid())
   mount=base/f'mnt-{index}';mount.mkdir();logpath=base/f'mount-{index}.log';control_path=base/f'c{index}.sock';proc=None;fds=[];active=False
   try:
    with logpath.open('wb') as log:
@@ -79,6 +81,25 @@ try:
      with Mapping(cold,PAGE*2+17) as cm:
       check(cm.read(0,PAGE*2+17)==b'C'*(PAGE*2+17),'cold page-in failed');cm.write(PAGE-2,b'COLD');cm.sync();os.fsync(cold);check(os.pread(cold,4,PAGE-2)==b'COLD')
     finally:os.close(cold)
+    # macFUSE needs a separate internal reader for cold partial-page writes.
+    # That helper must never permit application reads or read mappings.
+    wo=mount/'cold-write-only';wfd=os.open(wo,os.O_WRONLY);fds.append(wfd)
+    def forbidden_open(flags):
+     f=os.open(wo,flags);os.close(f)
+    for flags in (os.O_RDONLY,os.O_RDWR):denied(lambda:forbidden_open(flags),errno.EACCES)
+    denied(lambda:os.pread(wfd,1,0),errno.EBADF)
+    denied(lambda:Mapping(wfd,PAGE,writable=False),errno.EACCES)
+    check(os.pwrite(wfd,b'edge',PAGE-2)==4);os.fsync(wfd)
+    for flags in (os.O_RDONLY,os.O_RDWR):denied(lambda:forbidden_open(flags),errno.EACCES)
+    denied(lambda:os.pread(wfd,1,0),errno.EBADF)
+    denied(lambda:Mapping(wfd,PAGE,writable=False),errno.EACCES)
+    os.close(wfd);fds.remove(wfd);os.chmod(wo,0o600)
+    rfd=os.open(wo,os.O_RDWR);fds.append(rfd)
+    with Mapping(rfd,PAGE*2) as wm:
+     check(wm.read(0,PAGE*2)==b'W'*(PAGE-2)+b'edge'+b'W'*(PAGE-2),'cold partial write damaged surrounding bytes')
+     wm.write(12,b'MAP');wm.sync();os.fsync(rfd);check(os.pread(rfd,3,12)==b'MAP')
+     os.pwrite(rfd,b'FD',20);check(wm.read(20,2)==b'FD','write-only open poisoned later mapped coherence')
+    os.close(rfd);fds.remove(rfd)
     path=mount/'mapped';size=PAGE*3+137;expected=bytearray(b'A'*size)
     fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600);fds.append(fd);check(os.write(fd,expected)==size)
     other=os.open(path,os.O_RDWR);fds.append(other)

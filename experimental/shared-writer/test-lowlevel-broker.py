@@ -32,6 +32,7 @@ with tempfile.TemporaryDirectory(prefix='lowlevel-broker-',dir=a.work) as tmp:
   with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),checkpoint_every=3) as s:
    s.chmod('/',0o777);s.chown('/',os.getuid(),os.getgid())
    s.chmod('/',0)
+   denied(lambda:s._rpc(43,struct.pack('<Q',0)),errno.EPERM)
    b=m.LowBroker(s)
    def call(op,ino=1,path=b'',data=b'',fh=0,arg=0,uid=None):
     return b.dispatch(op,path,data,os.getuid() if uid is None else uid,os.getgid(),0o022,os.getgroups(),ino,fh,arg)
@@ -70,6 +71,16 @@ with tempfile.TemporaryDirectory(prefix='lowlevel-broker-',dir=a.work) as tmp:
    denied(lambda:call(130,1,data=b'bad',fh=wf),errno.ESTALE)
    denied(lambda:call(130,wn,data=b'bad',fh=wf,uid=os.getuid()+1),errno.EACCES)
    denied(lambda:call(130,wn,data=b'bad',fh=wf,arg=2**63-1),errno.EFBIG)
+   # Kernel RMW readers require a live data writer and remain read-only.
+   denied(lambda:s._mount_cache_reader(b.handles[rf]),errno.EBADF)
+   denied(lambda:s._mount_cache_reader(b.node(wn)['handle']),errno.EBADF)
+   with s.opendir('/') as directory:
+    denied(lambda:s._mount_cache_reader(directory),errno.EBADF)
+   with s._mount_cache_reader(b.handles[wf]) as cache_reader:
+    check(cache_reader.read(0,7)==b'aXYdef!')
+    denied(lambda:cache_reader.write(b'bad'),errno.EBADF)
+    denied(lambda:s._mount_cache_reader(cache_reader),errno.EBADF)
+   denied(lambda:s._mount_cache_reader(cache_reader),errno.EBADF)
    second,_=call(104,wn,arg=os.O_RDWR)
    with patch.object(s,'_mount_writeback',side_effect=OSError(errno.EIO,'page write failed')):
     denied(lambda:call(130,wn,data=b'bad',fh=wf),errno.EIO)

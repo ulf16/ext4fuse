@@ -419,6 +419,11 @@ class Session:
                 self._failed=True;raise OSError(errno.EIO,'inode open grant mismatch')
             return self._opened(reply)
 
+    def _mount_cache_reader(self, writable):
+        """Private kernel RMW read capability derived only from a live writer."""
+        with self._mutex:
+            return self._opened(self._rpc(43,self._file(writable)))
+
     def _mount_writeback(self, handle, offset, data):
         """Kernel page write using existing open rights and a positional offset.
 

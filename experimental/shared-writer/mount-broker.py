@@ -365,7 +365,22 @@ class LowBroker(Broker):
         if op in (104,110):
             flags=arg&0xffffffff
             rights=self.flags(flags,directory=op==110)
-            opened=self.s._mount_open_node(h,rights,bool(flags&os.O_APPEND),op==110 or bool(flags&os.O_DIRECTORY))
+            try:opened=self.s._mount_open_node(h,rights,bool(flags&os.O_APPEND),op==110 or bool(flags&os.O_DIRECTORY))
+            except OSError as e:
+                # macFUSE opens a separate read handle for cold cached partial
+                # writes using the caller's ordinary context. It has no RMW
+                # request bit. Fixed default_permissions/extended_security gate
+                # application opens and fd read/mmap access in the kernel.
+                # Only an already authorized live writer may back this helper;
+                # metadata pins and RO handles can never authorize it.
+                if sys.platform!='darwin' or op!=104 or rights!=1 or flags&getattr(os,'O_DIRECTORY',0) or e.errno!=errno.EACCES:raise
+                opened=None
+                for writer_fh,number in list(self.bindings.items()):
+                    if number!=token:continue
+                    try:opened=self.s._mount_cache_reader(self.handles[writer_fh]);break
+                    except OSError as failure:
+                        if failure.errno!=errno.EBADF:raise
+                if opened is None:raise e
             try:
                 if flags&os.O_TRUNC:opened.truncate(0)
             except BaseException:opened.close();raise
