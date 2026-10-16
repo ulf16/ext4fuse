@@ -140,15 +140,15 @@ with patch.object(live,'Device',Simulated),live.Controller(Path(sys.argv[1]),sys
   except OSError:check(True)
   else:raise AssertionError('failed session enabled device')
  recover(root,target)
- # A full checkpoint must detect damage outside warm authenticated chunks and
- # preserve history, rather than retiring the only available redo material.
- root,target=setup('checkpoint-corruption',512)
+ # Explicit full scrub must detect damage outside warm authenticated chunks
+ # and preserve history. Live checkpoint retirement now reuses the trusted tree.
+ root,target=setup('scrub-corruption',512)
  with live.Controller(root,target) as c:
   s=open_session(c);s.chmod('/',0o755);history=sorted(c.chain.glob('g-*'))
   os.pwrite(c.target.fd,b'X',c.target.size-1)
-  try:s.checkpoint()
+  try:s.scrub()
   except OSError:check(True)
-  else:raise AssertionError('checkpoint accepted clean-byte damage')
+  else:raise AssertionError('explicit scrub accepted clean-byte damage')
   check(sorted(c.chain.glob('g-*'))==history);s.close();check(c.failed);check(live.magic(c.target)==b'\0\0')
  # A corrupted pending redo cannot cause any further device writes on recovery.
  root,target=setup('pending-corruption',512)
