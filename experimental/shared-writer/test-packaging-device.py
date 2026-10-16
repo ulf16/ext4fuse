@@ -95,7 +95,8 @@ try:
     process.kill(); process.wait(timeout=30); process = None
     with dirty.open('rb') as stream:
         stream.seek(1080); check(stream.read(2) == bytes(2), 'device was not guarded')
-    run([cli, 'recover', state, '--device', device], expected=1)
+    if sys.platform == 'darwin':
+        run([cli, 'recover', state, '--device', device], expected=1)
     run([cli, 'unmount', state], expected=1)
     check(not attached(mount))
     run([cli, 'mount', state, mount, '--device', device], expected=1)

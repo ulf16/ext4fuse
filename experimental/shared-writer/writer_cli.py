@@ -269,7 +269,9 @@ def unmount(args):
             raise ValueError('recorded mountpoint contains another filesystem; refusing to unmount it')
         command = ['/sbin/umount', mountpoint] if sys.platform == 'darwin' else [
             shutil.which('fusermount3') or 'fusermount3', '-u', mountpoint]
-        subprocess.run(command, check=True)
+        result = subprocess.run(command, check=False)
+        if result.returncode and attached(mountpoint):
+            raise subprocess.CalledProcessError(result.returncode, command)
     deadline = time.monotonic() + args.timeout
     while True:
         try:

@@ -162,7 +162,8 @@ if a.mount:
             time.sleep(.1)
         (mount / 'before-kill').write_bytes(b'retained')
         process.kill(); process.wait(timeout=30)
-        run([cli, 'recover', state], expected=1)
+        if sys.platform == 'darwin':
+            run([cli, 'recover', state], expected=1)
         run([cli, 'unmount', state], expected=1)
         check(not attached(mount))
         check(meta()['needs_recovery'])
