@@ -20,6 +20,7 @@ from unittest.mock import patch
 import chain
 import durable
 import merkle
+import merkle_store
 from merkle_store import Nodes, PAGE as HASH_PAGE
 import session
 from credentials import Credentials
@@ -124,6 +125,9 @@ with patch.object(os,'fdopen',measured):
         check(s.read('/scale')==b'acknowledged')
     counts['bytes']=0;chain.checkpoint(root)
     measurements['administrative_checkpoint']=counts['bytes'];check(counts['bytes']==info.st_size)
+    (root/'chain-state').unlink();counts['bytes']=0
+    with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
+        measurements['checkpoint_fallback_startup']=counts['bytes'];check(counts['bytes']==info.st_size)
 
 # Real process loss: the sole cold pass builds a verified preimage tree, then
 # replay checks the changed chunk and hands the resulting tree to Session.
@@ -155,6 +159,30 @@ with session.Session(clean,a.work/'mutation-producer',a.work/'reader-server',Cre
     s.checkpoint()
     refused(s.scrub);check(s._failed)
 refused(lambda:chain.recover(clean))
+# Drive actual ext4 mutations and cold replay through paged storage, using
+# smaller hash pages/budgets to force eviction on a bounded 128 MiB fixture.
+paged_source=base/'paged-source.img'
+with paged_source.open('xb') as f:f.truncate(128*1024**2)
+model.command(['mke2fs','-q','-F','-t','ext4','-b','4096','-N','256','-O','^orphan_file',paged_source])
+paged_root=base/'paged-chain';chain.clone(paged_source,paged_root)
+with patch.object(merkle,'MAX_CACHE',4096),patch.object(merkle_store,'PAGE',1024):
+    with session.Session(paged_root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
+        check(isinstance(s._integrity.nodes,Nodes))
+        for i in range(5):
+            value=bytes([i+1])*131073
+            s.applyat([dict(kind='create' if i==0 else 'write',path='/scale',data_hex=value.hex())])
+            s.checkpoint();check(s.read('/scale')==value)
+            check(len(s._integrity.nodes.pages)<=4)
+        s.scrub();check(s.read('/scale')==value)
+    proc=subprocess.run([sys.executable,'-c',worker,str(Path(__file__).parent),str(paged_root),str(a.work)],capture_output=True,timeout=120)
+    check(proc.returncode==77)
+    with session.Session(paged_root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
+        check(isinstance(s._integrity.nodes,Nodes))
+        check(s.read('/scale').startswith(b'recovered'))
+        s.checkpoint();s.scrub()
+model.command(['e2fsck','-fn',paged_root/'image.img'])
+check(model.command(['debugfs','-R','cat /scale',paged_root/'image.img'])==b'recovered'+value[len(b'recovered'):])
+
 device_measurements=None
 if a.devices:
     backing=base/'device.img';shutil.copyfile(source,backing)
@@ -206,6 +234,6 @@ if a.devices:
 
 report=dict(result='passed',checks=checks,image_size=info.st_size,image_bytes_read=measurements,
             geometry_test_bytes=8*1024**4,geometry_scope='node geometry and high offsets only; no full 8 TiB filesystem scan',
-            device_full_passes=device_measurements,paged_reference_bytes=size,paged_resident_budget=4*HASH_PAGE,diagnostics=str(base))
+            paged_ext4_replay=True,device_full_passes=device_measurements,paged_reference_bytes=size,paged_resident_budget=4*HASH_PAGE,diagnostics=str(base))
 (a.work/'integrity-scaling-results.json').write_text(json.dumps(report,indent=2)+'\n')
 print(json.dumps(report),flush=True)

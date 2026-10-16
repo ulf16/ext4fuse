@@ -82,7 +82,9 @@ def recover_locked(root, cache=None, *, cache_out=None):
         saved = read_state(root, 'checkpoint')
         if saved['pending'] is not None:
             raise ValueError('checkpoint contains a pending transaction')
-        check_image(root, saved)
+        verified = []
+        check_image(root, saved, cache_out=verified)
+        if verified: cache = verified[-1]
         if any(re.fullmatch(r'g-(\d{8})', p.name) and int(p.name[2:]) > saved['head'] for p in root.iterdir()):
             raise ValueError('checkpoint is stale; successor history needs explicit repair')
         inplace.seal(root, 'chain-state', saved)

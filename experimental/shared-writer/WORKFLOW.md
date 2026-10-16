@@ -172,7 +172,7 @@ unlinked temporary node file with a bounded 256 MiB page cache. The existing has
 format and recovery logs are unchanged. Hash-node storage is about 64–128 bytes
 per MiB of volume capacity (8 TiB needs a 512 MiB node file); temporary storage,
 filesystem geometry, transaction and OS limits still apply. Set `TMPDIR` before
-launching to select temporary storage. These files are disposable hashes, not a
+launching to select writable temporary storage outside the mounted ext4 target. These files are disposable hashes, not a
 persistent recovery index or a full-size data shadow. Preserve the recovery state,
 not the temporary hashes. Running out of scratch space must fail the operation;
 recovery can rebuild the tree after space returns.

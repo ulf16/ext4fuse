@@ -2110,3 +2110,16 @@ Real disposable image and direct-device tests measure one startup pass, zero liv
 checkpoint passes, and one direct close pass, plus cold recovery, external-edit
 refusal and silent-corruption detection by full audits. Existing Merkle crash,
 corruption, durability and exhaustion campaigns remain required.
+
+Measured on the same 32 MiB native fixture against beta.3:
+
+| Operation | beta.3 Python image reads | beta.4 Python image reads |
+| --- | ---: | ---: |
+| Initial legacy-state startup | 96 MiB | 32 MiB |
+| Subsequent cold startup | 64 MiB | 32 MiB |
+| Live checkpoint | 32 MiB | 0 |
+
+These counters cover controller image I/O, not native metadata traversal. Dirty
+startup in the final test reads 34 MiB: one 32 MiB cold pass plus touched-chunk
+verification. Real ext4 writes, checkpointing, explicit scrub and process-loss
+recovery also pass with a forced 4 KiB hash-page cache on a 128 MiB fixture.
