@@ -54,6 +54,7 @@ directory_stream = compile_source(here / 'directory-stream.c', 'directory-stream
 directory_ref = compile_source(here / 'directory-ref.c', 'directory-ref')
 namespace = compile_source(here / 'namespace.c', 'namespace')
 index = compile_source(here / 'directory-index.c', 'directory-index')
+conversion = compile_source(here/'directory-convert.c','directory-convert')
 grant = compile_source(here / 'grant.c', 'grant')
 handles = compile_source(here / 'handles.c', 'handles')
 mutation = compile_source(here / 'mutation.c', 'mutation')
@@ -73,28 +74,33 @@ candidate = compile_source(here / 'journal-candidate.c', 'journal-candidate')
 snapshot = compile_source(here / 'metadata-snapshot.c', 'metadata-snapshot')
 index_scale = compile_source(here/'index-scale-fixture.c','index-scale-fixture')
 index_cache = compile_source(here/'index-cache-unit.c','index-cache-unit')
+index_incremental = compile_source(here/'index-incremental-unit.c','index-incremental-unit')
+index_convert = compile_source(here/'index-convert-unit.c','index-convert-unit')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
-for name, objects in [('index-scale-fixture',[index_scale]), ('index-cache-unit',[overlay,manager,index,index_cache]), ('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
+for name, objects in [('index-scale-fixture',[index_scale]), ('index-convert-unit',[overlay,manager,index,conversion,index_convert]), ('index-incremental-unit',[overlay,manager,index,index_incremental]), ('index-cache-unit',[overlay,manager,index,index_cache]), ('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
                       ('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
-                      ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, index, mutation, metadata, path_at, producer]),
+                      ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, index, conversion, mutation, metadata, path_at, producer]),
                       ('handle-test-producer', [overlay, manager, handle_test]),
-                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, index, mutation, path_at, directory_ref, directory_stream, mount_metadata, metadata, handles, reader, server, *server_readers]),
+                      ('reader-server', [overlay, manager, policy_core, policy_fs, grant, namespace, index, conversion, mutation, path_at, directory_ref, directory_stream, mount_metadata, metadata, handles, reader, server, *server_readers]),
                       ('reader-watch', [overlay, reader, watch, *reader_objects]),
                       ('verify-reader', [overlay, reader, verify, *reader_objects]),
                       ('policy-unit', [policy_core, policy_acl, policy_unit]),
                       ('overlay-unit', [overlay, unit]),
                       ('read-bench', [overlay, bench, *reader_objects])]:
     subprocess.run(compiler + flags + objects + libs + ['-o', str(work / name)], check=True)
+limited_index=work/'directory-index-limited.o'
+subprocess.run(compiler+flags+['-DINDEX_LEAF_BYTES=2048','-c',str(here/'directory-index.c'),'-o',str(limited_index)],check=True)
+subprocess.run(compiler+flags+[overlay,manager,str(limited_index),index_incremental]+libs+['-o',str(work/'index-incremental-limits')],check=True)
 limited = work / 'directory-stream-limited.o'
 subprocess.run(compiler + flags + ['-DDIRECTORY_STREAM_BYTES=4096','-DDIRECTORY_STREAM_TOTAL=8192',
                '-c',str(here/'directory-stream.c'),'-o',str(limited)],check=True)
-objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,mutation,path_at,directory_ref,str(limited),mount_metadata,metadata,handles,reader,server,*server_readers]
+objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,conversion,mutation,path_at,directory_ref,str(limited),mount_metadata,metadata,handles,reader,server,*server_readers]
 subprocess.run(compiler + flags + objects + libs + ['-o',str(work/'reader-server-stream-limits')],check=True)
 limited_handles=work/'handles-limited.o'
 subprocess.run(compiler+flags+['-DHANDLE_LIMIT=128','-DNODE_LIMIT=256','-c',str(here/'handles.c'),'-o',str(limited_handles)],check=True)
-objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,mutation,path_at,directory_ref,directory_stream,mount_metadata,metadata,str(limited_handles),reader,server,*server_readers]
+objects=[overlay,manager,policy_core,policy_fs,grant,namespace,index,conversion,mutation,path_at,directory_ref,directory_stream,mount_metadata,metadata,str(limited_handles),reader,server,*server_readers]
 subprocess.run(compiler+flags+objects+libs+['-o',str(work/'reader-server-handle-limits')],check=True)
 mount_frontend=compile_source(here/'mount-frontend.c','mount-frontend')
 subprocess.run(compiler+flags+[mount_frontend]+libs+['-o',str(work/'mount-frontend')],check=True)

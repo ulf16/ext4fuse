@@ -15,14 +15,14 @@
 #define PAGE 4096
 #define BUCKETS 1024
 struct page {
-  uint64_t idx;
+  uint64_t idx, epoch;
   unsigned char data[PAGE];
   struct page *next;
 };
 struct overlay {
   int fd, base_fd;
   unsigned sector;
-  uint64_t size, epoch;
+  uint64_t size, epoch, baseline;
   char *path;
   size_t used, limit;
   long fail_writes;
@@ -43,6 +43,13 @@ static struct page *find(struct overlay *t, uint64_t i) {
     if (p->idx == i)
       return p;
   return NULL;
+}
+uint64_t overlay_baseline(struct overlay *t) {
+  return t && !t->poisoned ? t->baseline : 0;
+}
+uint64_t overlay_page_epoch(struct overlay *t, uint64_t offset) {
+  struct page *p = t ? find(t, offset / PAGE) : NULL;
+  return p ? p->epoch : 0;
 }
 static int exact_read(int fd, void *b, size_t n, uint64_t off) {
   while (n) {
@@ -168,6 +175,7 @@ struct overlay *overlay_open(const char *path, size_t max) {
   }
   t->fd = fd;
   changed(t);
+  t->baseline = t->epoch;
   t->base_fd = -1;
   int view_error = device_view(t, &s);
   if (view_error) {
@@ -185,6 +193,7 @@ struct overlay *overlay_open(const char *path, size_t max) {
 }
 void overlay_rollback(struct overlay *t) {
   changed(t);
+  t->baseline = t->epoch;
   for (size_t i = 0; i < BUCKETS; i++)
     while (t->pages[i]) {
       struct page *p = t->pages[i];
@@ -282,6 +291,7 @@ int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *b) {
       t->pages[idx % BUCKETS] = p;
       t->used++;
     }
+    p->epoch = t->epoch;
     memcpy(p->data + inside, in, len);
     off += len;
     n -= len;
@@ -291,6 +301,7 @@ int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *b) {
 }
 void overlay_suspend(struct overlay *t) {
   changed(t);
+  t->baseline = t->epoch;
   t->published = 0;
 }
 int overlay_publish(struct overlay *t) {

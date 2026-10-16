@@ -21,6 +21,8 @@ void overlay_fail_writes(struct overlay *t, long after);
 size_t overlay_pages(struct overlay *t);
 /* Unique view revision; zero disables validation reuse after counter exhaustion. */
 uint64_t overlay_epoch(struct overlay *t);
+uint64_t overlay_baseline(struct overlay *t);
+uint64_t overlay_page_epoch(struct overlay *t, uint64_t offset);
 const char *overlay_path(struct overlay *t);
 int reader_attach(const char *path);
 int reader_refresh(void);

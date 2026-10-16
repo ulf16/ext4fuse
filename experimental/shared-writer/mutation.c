@@ -202,16 +202,7 @@ static errcode_t create_file(ext2_filsys fs, ext2_ino_t dir, const char *name,
     if (e)
       return e;
   }
-  e = ext2fs_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
-  if (e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM) {
-    if (parent_inode.i_flags & EXT2_INDEX_FL)
-      return e;
-    e = ext2fs_expand_dir(fs, dir);
-    if (!e)
-      e = ext2fs_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
-  }
-  if (!e)
-    e = namespace_index_check(fs, dir);
+  e = namespace_link(fs, dir, name, *ino, EXT2_FT_REG_FILE);
   if (!e)
     e = touch(fs, dir, 0);
   return e;

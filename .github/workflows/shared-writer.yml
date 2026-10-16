@@ -629,3 +629,29 @@ jobs:
         with:
           name: handle-directory-scaling-validation
           path: ${{ runner.temp }}/scaling/scaling-results.json
+
+  incremental-directory-indexing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native directory indexing dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build sanitized directory indexing runtime
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/directory-indexing" --sanitize
+      - name: Prepare checked filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/directory-indexing"
+      - name: Verify automatic conversion, preserved identities and interrupted replay
+        run: python3 experimental/shared-writer/test-directory-indexing.py --work "$RUNNER_TEMP/directory-indexing" --mount
+      - name: Verify incremental leaves, repaired-checksum corruption and bounded caching
+        run: python3 experimental/shared-writer/test-index-incremental.py --work "$RUNNER_TEMP/directory-indexing"
+      - name: Save directory indexing validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: incremental-directory-indexing-validation
+          path: |
+            ${{ runner.temp }}/directory-indexing/directory-indexing-results.json
+            ${{ runner.temp }}/directory-indexing/index-incremental-results.json

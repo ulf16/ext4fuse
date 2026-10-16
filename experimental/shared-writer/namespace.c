@@ -280,7 +280,7 @@ static errcode_t removable(ext2_filsys fs, ext2_ino_t dir,
     return EPERM;
   return 0;
 }
-static errcode_t link_name(ext2_filsys fs, ext2_ino_t dir, const char *leaf,
+errcode_t namespace_link(ext2_filsys fs, ext2_ino_t dir, const char *leaf,
                            ext2_ino_t ino, unsigned type) {
   errcode_t e = ext2fs_link(fs, dir, leaf, ino, type);
   if (e == EXT2_ET_DIR_NO_SPACE || e == EXT2_ET_DIR_NO_SPACE_FOR_CSUM) {
@@ -288,7 +288,8 @@ static errcode_t link_name(ext2_filsys fs, ext2_ino_t dir, const char *leaf,
     errcode_t read = ext2fs_read_inode(fs, dir, &in);
     if (read || (in.i_flags & EXT2_INDEX_FL))
       return read ? read : e;
-    e = ext2fs_expand_dir(fs, dir);
+    e = ext2fs_has_feature_dir_index(fs->super)
+            ? namespace_index_convert(fs, dir) : ext2fs_expand_dir(fs, dir);
     if (!e)
       e = ext2fs_link(fs, dir, leaf, ino, type);
   }
@@ -626,7 +627,7 @@ static errcode_t create_special(ext2_filsys fs, ext2_ino_t dir,
     e = set_acl(fs, ino, "system.posix_acl_access", acl, acl_length);
   free(acl);
   if (!e)
-    e = link_name(fs, dir, name, ino, entry_type(type));
+    e = namespace_link(fs, dir, name, ino, entry_type(type));
   if (!e)
     e = stamp(fs, dir, 1);
   return e;
@@ -659,9 +660,9 @@ static errcode_t exchange(ext2_filsys fs, ext2_ino_t from, const char *name,
   if (!e)
     e = unlink_name(fs, to, newname, victim);
   if (!e)
-    e = link_name(fs, from, name, victim, entry_type(old->i_mode));
+    e = namespace_link(fs, from, name, victim, entry_type(old->i_mode));
   if (!e)
-    e = link_name(fs, to, newname, ino, entry_type(in->i_mode));
+    e = namespace_link(fs, to, newname, ino, entry_type(in->i_mode));
   if (!e && from != to) {
     if (a)
       e = directory_check(fs, ino, from, 0, to);
@@ -772,7 +773,7 @@ static errcode_t create_entry(ext2_filsys fs, ext2_ino_t dir, const char *name,
     e = copy_default_acl(fs, dir, ino, NATIVE_INHERIT_KEY);
   free(acl);
   if (!e)
-    e = link_name(fs, dir, name, ino,
+    e = namespace_link(fs, dir, name, ino,
                   directory ? EXT2_FT_DIR : EXT2_FT_SYMLINK);
   if (!e)
     e = stamp(fs, dir, 1);
@@ -929,7 +930,7 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
               : drop(fs, to, newname, victim, pins, count);
     unsigned filetype = entry_type(type);
     if (!e)
-      e = link_name(fs, to, newname, ino, filetype);
+      e = namespace_link(fs, to, newname, ino, filetype);
     if (!e && op->kind == MUT_RENAME)
       e = unlink_name(fs, from, name, ino);
     if (!e && op->kind == MUT_RENAME && (op->offset & 4)) {

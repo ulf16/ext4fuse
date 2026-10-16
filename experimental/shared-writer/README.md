@@ -1332,17 +1332,16 @@ engine, including relative directory handles and retained open inodes. Their ind
 flags and hash policy are retained. libext2fs performs hash-routed insertion,
 leaf splitting, internal-node splitting and root growth; indexed errors never
 fall back to linear `expand_dir`. Deletion preserves the index rather than
-repacking/shrinking it. New directories still start in the ordinary linear format;
-automatic conversion of growing linear directories is not part of this change.
+repacking/shrinking it. New directories start in the ordinary linear format and
+convert automatically when a new name no longer fits, as described below.
 
 A bounded validator runs before indexed traversal/mutation and after insertion or
 removal. It checks root/internal layouts, count/limit fields, checksums, hash ranges
 and collision continuations, allocated mappings/inodes, full logical-block
 coverage, duplicate logical/physical references and duplicate names. Corrupt
 indexes fail without publication; mutations and their validation share one
-rollback/recovery boundary. Changed views still require a full-tree scan;
-unchanged views reuse successful validation as described in the scaling section
-below. Limits are 131,072 logical blocks (128–512 MiB at supported block sizes)
+rollback/recovery boundary. Changed views retain global graph/allocation/name
+checks while reusing unchanged leaf certificates, as described below. Limits are 131,072 logical blocks (128–512 MiB at supported block sizes)
 and 1,048,576 live names. Root depths zero and
 one and legacy/half-MD4/TEA policies with signed/unsigned hashing are supported.
 `large_dir`/depth-two and casefold feature profiles remain rejected.
@@ -1976,12 +1975,11 @@ instead of allocating the old maximum for every directory. A bounded 64-entry
 cache retains successful full-validation results, keyed by a unique overlay view
 revision, inode contents and superblock contents. Every staged write, suspension
 before base refresh, rollback and overlay reopen invalidates reuse. Errors are
-never cached. Validation after a changed view still scans the complete tree,
-including checksums, hash ranges, collision chains, duplicate names, block
-references and allocation; this change does not skip corruption checks on mutation.
+never cached as whole-directory successes. Changed views use incremental leaf
+validation while still checking global invariants, as described below.
 The controller's exclusive-view rules still apply: arbitrary external image
-writes are unsupported. New linear directories are not automatically indexed,
-and large_dir/depth-two and casefold remain unsupported.
+writes are unsupported. Growing linear directories now convert automatically;
+large_dir/depth-two and casefold remain unsupported.
 
 Directory snapshots now have a 64 MiB per-stream and 256 MiB aggregate capacity
 budget; paging remains bounded to 4,096 entries/1 MiB per reply. These are separate
@@ -1999,3 +1997,68 @@ distinct files together and checks large readdir results without duplicates.
 `index-cache-unit` requires 1,001 cache hits while proving corruption, failed
 validation, rollback, refresh, hash-policy changes and reopen force the required
 fresh validation. CI runs these checks with address/undefined sanitizers.
+
+
+## Incremental leaf validation and automatic HTree conversion
+
+The overlay tracks a version on every written 4 KiB page, plus a separate base
+incarnation changed by suspend/base refresh, rollback and reopen. A bounded
+32 MiB certificate cache retains decoded directory leaves and their computed
+name hashes. Reuse requires the same base incarnation, physical page version,
+inode/generation, block size, hash policy, checksum identity and filesystem
+features. A write invalidates all affected leaves sharing that host page; it does
+not invalidate unrelated leaves solely because an inode timestamp changed.
+
+Each changed-view validation still walks the root/internal index and all logical
+mappings. It checks allocation and hash routing for every referenced entry,
+complete coverage, unique physical/logical references, collision continuations
+and duplicate names across the whole directory. The name set uses hashed
+membership instead of sorting all names again. Reused leaves bypass data reads,
+record decoding, checksum work and ext4 name-hash computation only; global
+invariants remain checked. Unchanged-view whole-directory successes retain the
+existing cache. Certificate eviction or an undersized cache falls back to fresh
+validation. Certificates are pinned during a walk so eviction cannot invalidate
+its name pointers; temporary walk storage remains bounded by the existing block
+and name limits in addition to the retained-cache budget.
+
+This is incremental leaf validation, not constant-time graph validation. Each
+fresh C producer starts from a full baseline; subsequent mutations within that
+producer reuse certificates. Reader suspension/base refresh also forces a new
+baseline. There is no persisted certificate trusted across recovery or process
+restart, and no claim to have removed every scan from mounted single-operation
+transactions. In the 70,000-name test, insertion required four fresh leaf reads
+instead of roughly 2,400; the remaining leaves were reused while global checks
+still ran. The constrained 2 KiB cache test validates the same operations and
+corruption with almost all leaves reread.
+
+`namespace_link` now converts a supported linear directory when an insertion
+reports insufficient space and the volume already has dir_index enabled. It
+validates every source block/record, dot entries, inode/block allocation and
+name uniqueness before staging conversion. Both existing multi-block directories
+and newly growing directories are handled. Entries are packed in hash order,
+with collision continuation markers, into a depth-zero or depth-one HTree using
+the volume's legacy/half-MD4/TEA and signed/unsigned policy. libext2fs continues to
+handle allocation, subsequent insertion/splitting and directory checksums.
+Surplus old blocks are reclaimed; indexed deletion still does not repack trees.
+
+Conversion retains the directory inode/generation, ownership, mode, link count,
+ACL/xattrs and existing inode capabilities. Open directory snapshots retain their
+original contents until rewind; cwd and relative operations retain inode identity.
+The conversion, triggering insertion and any other batch operations share one
+existing staged/redo/recovery boundary. Failed conversion never publishes a
+partial tree or silently falls back to linear growth. Volumes without dir_index
+retain linear growth; this code does not enable a volume feature implicitly.
+Depth-two/large_dir, casefold and existing transaction resource limits remain.
+A conversion that exceeds the staged-page budget fails atomically.
+
+`test-directory-indexing.py` exercises all twelve filesystem profiles and all
+six supported hash policies, pre-existing multi-block and fresh conversions,
+attributes and held handles, immutable stream snapshots, later-batch rollback,
+staged-write failures and an actual half-page interrupted replay. The compact
+conversion unit verifies reclamation and multiple failed-write boundaries with
+an independently checked output. Native macFUSE/Linux mount tests retain cwd and
+open directory/file descriptors through automatic conversion, rename and writes.
+`test-index-incremental.py` uses a 70,000-name fixture, counts leaf reads/reuse,
+rejects repaired-checksum duplicate corruption and allocation changes, and checks
+rollback/refresh invalidation and a deliberately tiny cache. CI runs both suites
+with address/undefined sanitizers and independent e2fsck checks.
