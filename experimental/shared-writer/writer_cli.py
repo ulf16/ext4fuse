@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -203,6 +204,56 @@ def initialize(args):
         print('Writable image: ' + str(root / 'chain' / 'image.img') + ' (source unchanged)')
 
 
+def cleanup_socket(root):
+    path = root / 'control.sock'
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
+        raise ValueError('control.sock is not an owned socket; retained for inspection')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+        probe.settimeout(.2)
+        try:
+            probe.connect(str(path))
+        except OSError as error:
+            if error.errno not in (errno.ECONNREFUSED, errno.ENOENT):
+                raise
+        else:
+            raise OSError(errno.EBUSY, 'control socket still has a live listener')
+    current = os.lstat(path)
+    if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+        raise ValueError('control socket changed during stale socket cleanup')
+    path.unlink()
+    directory(root)
+
+
+def allocate(args):
+    root = root_path(args.state)
+    data = manifest(root)
+    if data['phase'] != 'mounting' or not data['mountpoint'] or not attached(data['mountpoint']):
+        raise ValueError('allocation requires an active writer mount')
+    if not args.path.startswith('/') or '\0' in args.path or len(os.fsencode(args.path)) > 4096:
+        raise ValueError('path must be absolute inside the mounted filesystem')
+    if not 0 <= args.offset < 2**63 or not 0 < args.length <= 2**63 - 1 - args.offset:
+        raise ValueError('invalid allocation range')
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(120)
+        client.connect(str(root / 'control.sock'))
+        client.sendall(json.dumps(dict(operation=args.mode, path=args.path,
+                        offset=args.offset, length=args.length)).encode() + b'\n')
+        with client.makefile('rb') as stream:
+            raw = stream.readline(4097)
+        if len(raw) > 4096 or not raw.endswith(b'\n'):
+            raise ValueError('invalid allocation reply')
+        reply = json.loads(raw)
+        if not isinstance(reply, dict) or type(reply.get('error')) is not int:
+            raise ValueError('invalid allocation result')
+        if reply['error']:
+            raise OSError(reply['error'], reply.get('message', 'allocation failed'))
+        print(json.dumps(reply, sort_keys=True))
+
+
 def operate(args, mounting):
     work, config = runtime()
     root = root_path(args.state)
@@ -221,6 +272,9 @@ def operate(args, mounting):
             if attached(requested):
                 raise OSError(errno.EBUSY, 'mountpoint is already attached')
             _, work, mountpoint = broker.validate_mount(root, work, args.mountpoint)
+        cleanup_socket(root)
+        if mounting and len(os.fsencode(root / 'control.sock')) >= (104 if sys.platform == 'darwin' else 108):
+            raise ValueError('state path is too long for a control socket; use a shorter durable state path')
         data = seal(root, data, 'mounting' if mounting else 'recovering', mountpoint)
         try:
             run_session(root, data, args, work, broker, mountpoint)
@@ -313,6 +367,12 @@ def parser():
     stop = sub.add_parser('unmount', help='unmount normally and wait for checked clean publication')
     stop.add_argument('state', type=Path)
     stop.add_argument('--timeout', type=float, default=120)
+    allocation = sub.add_parser('allocate', help='allocate or punch a mounted file through authenticated control')
+    allocation.add_argument('state', type=Path)
+    allocation.add_argument('path', help='absolute path within the ext4 filesystem')
+    allocation.add_argument('offset', type=int)
+    allocation.add_argument('length', type=int)
+    allocation.add_argument('--mode', choices=('allocate', 'keep-size', 'punch'), default='allocate')
     sub.add_parser('doctor', help='report installed runtime and dependency paths')
     return p
 
@@ -338,6 +398,8 @@ def main():
             if not 0 < args.timeout <= 3600:
                 raise ValueError('unmount timeout must be 0..3600 seconds')
             unmount(args)
+        elif args.action == 'allocate':
+            allocate(args)
         elif args.action == 'doctor':
             work, config = runtime()
             print(json.dumps(dict(version=config['version'], python=sys.executable, runtime=str(work),

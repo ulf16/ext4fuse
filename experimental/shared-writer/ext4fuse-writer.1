@@ -22,6 +22,10 @@ ext4fuse-writer \- mount and recover a managed writable ext4 filesystem
 .I STATE
 .RB [ --json ]
 .br
+.B ext4fuse-writer allocate
+.I STATE /VIRTUAL-PATH OFFSET LENGTH
+.RB [ --mode " allocate|keep-size|punch" ]
+.br
 .B ext4fuse-writer doctor
 .SH DESCRIPTION
 The owner-only foreground writer uses a private durable recovery directory.

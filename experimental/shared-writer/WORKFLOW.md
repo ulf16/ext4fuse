@@ -53,6 +53,7 @@ mkdir -p "$HOME/ext4-mount"
 ext4fuse-writer mount "$HOME/ext4-state" "$HOME/ext4-mount"
 ```
 
+State paths must fit the local Unix socket limit (keep them under 90 bytes on macOS).
 Mount runs in the foreground. In a second terminal:
 
 ```sh
@@ -69,6 +70,18 @@ For an initially dirty Linux journal, explicitly add `--recover-journal` to `ini
 Only the supported internal JBD2 profiles are replayed; general damage is refused.
 The retained image is available for copying or use elsewhere after clean shutdown.
 Never edit it with another writer while this state directory remains in use.
+
+The authenticated allocation command also works where macOS cannot forward native
+hole-punch arguments. Paths are absolute **within ext4**, not host mount paths:
+
+```sh
+ext4fuse-writer allocate "$HOME/ext4-state" /large-file 0 1048576 --mode keep-size
+ext4fuse-writer allocate "$HOME/ext4-state" /large-file 4096 4096 --mode punch
+```
+
+These operations flush/invalidate the mounted file cache and enforce normal writer
+permissions. Recovery removes only an owned stale control socket with no listener;
+unknown files at that path are retained and reported.
 
 ## Device workflow
 

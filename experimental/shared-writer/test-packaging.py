@@ -120,6 +120,11 @@ lockfile = state / 'writer-lock'
 lockfile.rename(state / 'saved-lock'); lockfile.symlink_to(state / 'saved-lock')
 run([cli, 'recover', state], expected=1)
 lockfile.unlink(); (state / 'saved-lock').rename(lockfile)
+(state / 'control.sock').write_text('unrelated file')
+run([cli, 'recover', state], expected=1)
+check((state / 'control.sock').read_text() == 'unrelated file')
+(state / 'control.sock').unlink()
+run([cli, 'recover', state])
 manifest = (state / 'writer-state').read_text()
 wrong = json.loads(manifest); wrong['version'] = 999
 (state / 'writer-state').write_text(json.dumps(wrong))
@@ -142,6 +147,11 @@ if a.mount:
         fd = os.open(mount / 'written', os.O_RDWR)
         try: os.fsync(fd)
         finally: os.close(fd)
+        run([cli, 'allocate', state, '/written', '8192', '4096', '--mode', 'keep-size'])
+        run([cli, 'allocate', state, '/written', '0', '1', '--mode', 'punch'])
+        check((mount / 'written').read_bytes().startswith(b'\0nstalled writer'))
+        run([cli, 'allocate', state, '/written', '-1', '1'], expected=1)
+        (mount / 'written').write_bytes(b'installed writer\0durable\n')
         (mount / 'directory').mkdir(); (mount / 'directory' / 'nested').write_bytes(b'nested')
         os.rename(mount / 'written', mount / 'renamed')
         os.symlink('renamed', mount / 'link')
@@ -171,6 +181,17 @@ if a.mount:
         run([cli, 'recover', state])
         check(meta()['phase'] == 'ready')
         run(['e2fsck', '-fn', state / 'chain' / 'image.img'])
+        check(not (state / 'control.sock').exists(), 'stale control socket survived recovery')
+        with logfile.open('ab') as log:
+            process = subprocess.Popen([cli, 'mount', state, mount], stdout=log, stderr=log)
+        deadline = time.monotonic() + 30
+        while not attached(mount):
+            check(process.poll() is None, logfile.read_text())
+            if time.monotonic() >= deadline: raise TimeoutError(logfile.read_text())
+            time.sleep(.1)
+        check((mount / 'before-kill').read_bytes() == b'retained')
+        run([cli, 'unmount', state])
+        check(process.wait(timeout=30) == 0, logfile.read_text())
     finally:
         if attached(mount):
             subprocess.run(['/sbin/umount', str(mount)] if sys.platform == 'darwin' else ['fusermount3', '-u', str(mount)], timeout=30)

@@ -106,6 +106,11 @@ try:
         stream.seek(1080); check(stream.read(2) == b'\x53\xef', 'clean magic not restored')
     check(run(['debugfs', '-R', 'cat /survived', device]) == b'acknowledged before launcher loss')
     run(['e2fsck', '-fn', device])
+    check(not (state / 'control.sock').exists(), 'stale device control socket survived')
+    process = mount_start(state, mount, device, log)
+    check((mount / 'survived').read_bytes() == b'acknowledged before launcher loss')
+    run([cli, 'unmount', state])
+    check(process.wait(timeout=60) == 0, log.read_text()); process = None
     # Sparse token must not silently become a full data shadow.
     check((state / 'device' / 'chain' / 'image.img').stat().st_blocks == 0)
 finally:
