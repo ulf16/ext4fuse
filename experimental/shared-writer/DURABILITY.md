@@ -115,6 +115,22 @@ On macOS omit `sudo`; memory cases run on Linux CI. The JSON report records each
 exhaustion stage, observed failure and recovery outcome. Failed diagnostics remain
 in the work directory; the bounded recovery volume is detached on exit.
 
+## Dependency regression found by this campaign
+
+The zero-free-block case found that Ubuntu's libext2fs 1.47.0 rejects unlinking a
+valid extent occupying the filesystem's final block (`EXT2_ET_BAD_BLOCK_NUM`). The
+upstream fix changes the exclusive upper-bound test in `punch_extent_blocks` from
+`>=` to `>` ([upstream commit](https://github.com/tytso/e2fsprogs/commit/509da98)).
+The transaction overlay rejects the failed deletion without damaging the image,
+but a full disk must still permit deleting files to regain space.
+
+Writer builds now require libext2fs 1.47.4 or newer, the fixed release exercised
+by this campaign, rather than accepting 1.47.0. CI builds a checksum-pinned upstream
+1.47.4 library and tools. It links the library statically so root-launched helper
+processes cannot silently load the distribution's older shared library. Homebrew's
+current e2fsprogs already meets this requirement. No private filesystem geometry
+is changed and no local replacement deallocation algorithm is introduced.
+
 ## Still required for production qualification
 
 - Longer multi-hour and higher-volume workloads, including simultaneous writers

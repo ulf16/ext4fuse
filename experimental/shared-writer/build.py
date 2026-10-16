@@ -20,7 +20,8 @@ work.mkdir(parents=True, exist_ok=True)
 def pkg(*options):
     return shlex.split(subprocess.check_output(['pkg-config', *options, 'fuse3', 'ext2fs'], text=True))
 
-subprocess.run(['pkg-config', '--atleast-version=1.47.0', 'ext2fs'], check=True)
+if subprocess.run(['pkg-config', '--atleast-version=1.47.4', 'ext2fs']).returncode:
+    parser.error('libext2fs 1.47.4 or newer is required; older releases can reject deleting the final filesystem block')
 compiler = shlex.split(os.environ.get('CC', 'cc'))
 flags = ['-O1' if args.sanitize else '-O2', '-g', '-std=gnu99', '-Wall', '-Wextra',
          '-I' + str(here), '-I' + str(repo), '-DFUSE_USE_VERSION=31', '-D_FILE_OFFSET_BITS=64']

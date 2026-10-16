@@ -4,11 +4,13 @@ on:
     paths:
       - 'experimental/shared-writer/**'
       - '.github/workflows/shared-writer.yml'
+      - '.github/actions/writer-e2fsprogs/**'
       - 'super.c'
   pull_request:
     paths:
       - 'experimental/shared-writer/**'
       - '.github/workflows/shared-writer.yml'
+      - '.github/actions/writer-e2fsprogs/**'
       - 'super.c'
   workflow_dispatch:
 permissions:
@@ -21,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -47,6 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -73,6 +77,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -99,6 +104,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -125,6 +131,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -146,6 +153,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -167,6 +175,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build existing reader and experimental overlay with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Check overlay publication, randomized reads and resource limits
@@ -188,6 +197,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build reader and staged writer with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Verify filesystem fixtures and overlay integrity
@@ -207,6 +217,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build reader and directory stream limit helper with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Verify filesystem fixtures and overlay integrity
@@ -226,6 +237,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build metadata engine with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Prepare and validate filesystem profiles
@@ -255,6 +267,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build mounted broker and native reader with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/shared-writer" --sanitize
       - name: Prepare and validate filesystem profiles
@@ -274,6 +287,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install native FUSE mount and filesystem dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require a working FUSE device
         run: sudo modprobe fuse && test -c /dev/fuse && test -x /usr/bin/fusermount3
       - name: Build experimental mounted frontend with sanitizers
@@ -302,6 +316,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install filesystem development dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build policy-enabled reader and writer with sanitizers
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/policy-writer" --sanitize
       - name: Verify ACL decisions and inheritance against an independent oracle
@@ -327,6 +342,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install device and filesystem test dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs util-linux fdisk pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Build isolated device publication test runtime
         run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/device-writer" --sanitize
       - name: Verify guarded replay, torn sectors and rejection paths
@@ -354,6 +370,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install indexed-directory test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build indexed writer and fixtures with sanitizers
@@ -381,6 +398,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install large-file and mounted test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build large-file writer with sanitizers
@@ -416,6 +434,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install low-level mount and filesystem dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build low-level reader and frontend with sanitizers
@@ -443,6 +462,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install device and mounted test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require disposable loop devices and native FUSE
         run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
       - name: Build continuous-device runtime with sanitizers
@@ -469,6 +489,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install allocation and lock test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build allocation runtime with sanitizers
@@ -495,6 +516,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install journal recovery and disposable device dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require disposable loop devices and native FUSE
         run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
       - name: Build journal recovery runtime with sanitizers
@@ -521,6 +543,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install direct device and mounted test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require disposable loop devices and native FUSE
         run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
       - name: Build direct-device runtime with sanitizers
@@ -556,6 +579,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install namespace and mounted test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE and disposable loop devices
         run: sudo modprobe fuse && sudo modprobe loop && test -c /dev/fuse
       - name: Build sanitized namespace runtime
@@ -591,6 +615,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install native mapping test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build sanitized mmap runtime
@@ -617,6 +642,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install native scaling dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build sanitized scaling runtime
@@ -637,6 +663,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install native directory indexing dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build sanitized directory indexing runtime
@@ -663,6 +690,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install package and device test dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require disposable loop devices and FUSE
         run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
       - name: Build just the installed runtime
@@ -691,6 +719,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install endurance and FUSE dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require native FUSE
         run: sudo modprobe fuse && test -c /dev/fuse
       - name: Build endurance runtime with sanitizers
@@ -721,6 +750,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install disposable device dependencies
         run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require disposable loop devices and native FUSE
         run: sudo modprobe loop && sudo modprobe fuse && test -c /dev/fuse
       - name: Build cache-loss runtime with sanitizers
@@ -743,6 +773,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install bounded exhaustion dependencies
         run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
       - name: Require disposable loop devices
         run: sudo modprobe loop
       - name: Build runtime without sanitizer address-space reservations

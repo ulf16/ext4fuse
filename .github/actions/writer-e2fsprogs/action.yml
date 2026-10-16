@@ -1,0 +1,31 @@
+name: Fixed writer e2fsprogs
+description: Build pinned libext2fs and tools with safe final-block deallocation
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      id: e2fs
+      with:
+        path: ${{ runner.temp }}/writer-e2fsprogs
+        key: writer-e2fsprogs-1.47.4-static-${{ runner.os }}-${{ runner.arch }}-v1
+    - name: Build fixed upstream library and tools
+      if: steps.e2fs.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo apt-get install -y uuid-dev libblkid-dev
+        archive="$RUNNER_TEMP/e2fsprogs-1.47.4.tar.gz"
+        curl --fail --location --retry 3 --output "$archive" https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.4/e2fsprogs-1.47.4.tar.gz
+        echo "da274408bebbfd13a5a2fc3cfc66e3ffff17c48534673aa67f88d49b99123b96  $archive" | sha256sum --check
+        tar -xzf "$archive" -C "$RUNNER_TEMP"
+        cd "$RUNNER_TEMP/e2fsprogs-1.47.4"
+        ./configure --prefix="$RUNNER_TEMP/writer-e2fsprogs" --disable-nls --disable-elf-shlibs > configure-ci.log
+        make -j2 > build-ci.log 2>&1 || { tail -80 build-ci.log; exit 1; }
+        make install > install-ci.log 2>&1 || { tail -80 install-ci.log; exit 1; }
+        make install-libs >> install-ci.log 2>&1 || { tail -80 install-ci.log; exit 1; }
+    - name: Use pinned tools and static library
+      shell: bash
+      run: |
+        echo "$RUNNER_TEMP/writer-e2fsprogs/bin" >> "$GITHUB_PATH"
+        echo "$RUNNER_TEMP/writer-e2fsprogs/sbin" >> "$GITHUB_PATH"
+        echo "PKG_CONFIG_PATH=$RUNNER_TEMP/writer-e2fsprogs/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+        "$RUNNER_TEMP/writer-e2fsprogs/sbin/e2fsck" -V

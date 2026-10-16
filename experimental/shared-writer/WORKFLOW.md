@@ -26,7 +26,7 @@ approved or that a particular filesystem is supported.
 
 For a source installation on Linux or macOS, install a C compiler, pkg-config,
 Python 3.11+, libfuse3 development files (macFUSE on macOS), and libext2fs/e2fsprogs
-1.47.0+. Set `PKG_CONFIG_PATH` for keg-only e2fsprogs if needed:
+1.47.4+ (includes fixes for extent deallocation at the end of a full filesystem). Set `PKG_CONFIG_PATH` for keg-only e2fsprogs if needed:
 
 ```sh
 python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-writer-build
