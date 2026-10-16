@@ -53,6 +53,29 @@ FUSE mount, records received acknowledgements externally, kills the broker/front
 process group during subsequent writes, detaches the stale mount, recovers and
 remounts. All acknowledged content and hardlinks must survive every cycle.
 
+`test-resource-exhaustion.py` fills actual bounded storage, rather than injecting
+an error at an I/O call site:
+
+- 1 KiB and 4 KiB ext4 images independently run out of blocks and inodes. Failed
+  multi-operation batches must roll back their names, metadata and bytes; deleting
+  an acknowledged filler must permit new writes.
+- A new 64 MiB HFS+ disk image on macOS, or a size-limited private Linux tmpfs,
+  holds the managed chain. A filler consumes its real free space before a request,
+  during page logging, after redo sealing, after image application and before head
+  publication. No filler is written to the host volume. Sealed transactions must
+  recover after space returns; incomplete transactions must not partly publish.
+- Linux workers exhaust their own address space under hard 96/128 MiB limits,
+  before preparation and at sealed/replay stages. Independent unrestricted parents
+  recover the chain and check acknowledged bytes. These are process-local allocation
+  failures, not system-wide swapping or kernel OOM-killer qualification. Darwin's
+  unreliable `RLIMIT_AS` implementation is explicitly reported as not run; Linux
+  CI is required for this part. Sanitizers reserve large virtual ranges, so this
+  campaign deliberately uses an ordinary runtime build.
+
+Every case resumes successful writes and checkpoints, cold-opens twice, and runs
+independent `e2fsck` and `debugfs` checks. Disposable sources are preserved. Linux's
+bounded log filesystem needs root to mount; no physical disk is selected.
+
 Reproduce from a checkout with the existing development dependencies:
 
 ```sh
@@ -71,10 +94,25 @@ work directory. Failed fixtures are retained. Remove any stale mount before
 manually removing test directories. Production `ext4fuse-writer` strips the test
 crash environment hook; the fault campaigns use development APIs/test workers.
 
+For the bounded resource campaign (use a separate unsanitized build directory):
+
+```sh
+python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-resources
+sudo env PATH="$PATH" python3 experimental/shared-writer/test-resource-exhaustion.py \
+  --work /tmp/ext4-resources
+```
+
+On macOS omit `sudo`; memory cases run on Linux CI. The JSON report records each
+exhaustion stage, observed failure and recovery outcome. Failed diagnostics remain
+in the work directory; the bounded recovery volume is detached on exit.
+
 ## Still required for production qualification
 
-- Longer multi-hour and higher-volume workloads, including actual volume/journal
-  exhaustion, sustained memory pressure and recovery-space pressure.
+- Longer multi-hour and higher-volume workloads, including simultaneous writers
+  during exhaustion, system-wide memory pressure/OOM termination, and exhaustion
+  of the filesystem containing a physical-device recovery log. The bounded managed
+  image campaign covers actual block/inode/log-space exhaustion and process-local
+  allocation failures; it does not establish those wider guarantees.
 - Controlled real power interruption of a disposable target, with several device,
   bridge and sector-size combinations. Repeat loss during recovery.
 - Separate testing of host/recovery-log filesystem power interruption and its
