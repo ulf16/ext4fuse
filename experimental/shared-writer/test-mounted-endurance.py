@@ -46,8 +46,8 @@ if a.worker:
             try:
                 # Split and overwrite across cache/page boundaries before the
                 # application durability barrier. Sparse gaps are actual zeros.
-                for offset in range(0, len(value), 997):
-                    part = memoryview(value)[offset:offset+997]
+                for offset in range(0, len(value), 4093):
+                    part = memoryview(value)[offset:offset+4093]
                     while part:
                         written = os.pwrite(fd, part, offset)
                         assert written > 0
@@ -111,6 +111,20 @@ def kill(child, group=False):
         child.wait(timeout=30)
 
 
+def clean_unmount():
+    # A just-closed macFUSE vnode may still be releasing its last kernel
+    # reference. Retry normal unmount briefly; never force-detach a live mount.
+    deadline = time.monotonic()+5
+    while True:
+        result = subprocess.run([cli, 'unmount', state], capture_output=True, timeout=180)
+        if result.returncode == 0:
+            return
+        busy = b'busy' in result.stderr.lower()
+        if not busy or not attached(mount) or time.monotonic() >= deadline:
+            raise AssertionError((result.stdout, result.stderr))
+        time.sleep(.2)
+
+
 def verify_mounted():
     for ack in acknowledged:
         target = name(**ack)
@@ -162,7 +176,7 @@ try:
             assert model.command(['debugfs', '-R', 'cat /'+target, state/'chain'/'image.img']) == content(**ack), target
         print('PASS mounted endurance cycle', cycle, 'durable acknowledgements', len(acknowledged), flush=True)
     broker = start('final-remount'); verify_mounted()
-    model.command([cli, 'unmount', state]); assert broker.wait(timeout=60) == 0; broker = None
+    clean_unmount(); assert broker.wait(timeout=60) == 0; broker = None
     model.command(['e2fsck', '-fn', state/'chain'/'image.img'])
 finally:
     for child in workers: kill(child); child.stdout.close()
