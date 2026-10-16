@@ -14,8 +14,9 @@ for action in ('init','mount','recover'):
  cmd.add_argument('--journal-bytes',type=int,default=256*1024**2)
  if action=='init':cmd.add_argument('--recover-journal',action='store_true')
  if action=='mount':
-  cmd.add_argument('--mountpoint',type=Path,required=True);cmd.add_argument('--control-socket',type=Path);cmd.add_argument('--checkpoint-every',type=int,default=64)
+  cmd.add_argument('--allow-device-nodes',action='store_true',help='root only: enable host device I/O; trusted images only');cmd.add_argument('--mountpoint',type=Path,required=True);cmd.add_argument('--control-socket',type=Path);cmd.add_argument('--checkpoint-every',type=int,default=64)
 a=p.parse_args()
+if a.action=='mount' and a.allow_device_nodes and (os.getuid()!=0 or os.geteuid()!=0):p.error('--allow-device-nodes requires root')
 if not 4096<=a.check_bytes<=2**40:p.error('metadata scratch budget must be 4 KiB..1 TiB')
 if a.action=='init':print(init(a.device,a.root,a.work,check_bytes=a.check_bytes,recover_journal=a.recover_journal,journal_bytes=a.journal_bytes));raise SystemExit(0)
 work=a.work.resolve()
@@ -26,6 +27,6 @@ if a.action=='mount':
 mask=os.umask(0);os.umask(mask)
 with Controller(a.root,a.device,work,check_bytes=a.check_bytes,journal_bytes=a.journal_bytes) as target:
  with session.Session(target.chain,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),commit_sink=target,checkpoint_every=a.checkpoint_every if a.action=='mount' else 0) as s:
-  if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket)
+  if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket,allow_device_nodes=a.allow_device_nodes)
  target.finish()
 print('Direct device is synchronized, checked and cleanly published.')

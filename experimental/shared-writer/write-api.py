@@ -103,7 +103,7 @@ def encode(operations, credentials=None, *, _at=False):
             offset=0
             if kind=='rename':
                 offset=op.get('flags',0)
-                if type(offset) is not int or offset not in (0,1,2):raise ValueError('invalid rename flags')
+                if type(offset) is not int or offset not in (0,1,2,4,5):raise ValueError('invalid rename flags')
             if kind=='mknod':
                 if type(mode) is not int or mode&~0o170777 or mode&0o170000 not in (0o010000,0o020000,0o060000,0o140000):raise ValueError('invalid special inode type or mode')
                 major=op.get('major',0);minor=op.get('minor',0)

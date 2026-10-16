@@ -22,10 +22,11 @@ def main():
         command.add_argument('--check-bytes',type=int,default=1024**3)
         command.add_argument('--checkpoint-every',type=int,default=64)
         if action=='mount':
-            command.add_argument('--mountpoint',type=Path,required=True)
+            command.add_argument('--allow-device-nodes',action='store_true',help='root only: enable host device I/O; trusted images only');command.add_argument('--mountpoint',type=Path,required=True)
             command.add_argument('--control-socket',type=Path)
     for command in (initial,*[sub.choices[n] for n in ('mount','recover')]):command.add_argument('--journal-bytes',type=int,default=256*1024**2)
     a=p.parse_args()
+    if a.action=='mount' and a.allow_device_nodes and (os.getuid()!=0 or os.geteuid()!=0):p.error('--allow-device-nodes requires root')
     direct_mode=(a.action=='init' and a.storage=='direct') or (a.action!='init' and (a.root/'direct-state').exists())
     if (a.root/'direct-state').exists() and (a.root/'live-state').exists():p.error('ambiguous device storage format')
     if a.action=='init':
@@ -49,7 +50,7 @@ def main():
     with controller as target:
         with session.Session(target.chain,work/'mutation-producer',work/'reader-server',
                 Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=a.checkpoint_every,commit_sink=target,recover_journal=a.recover_journal and not direct_mode) as s:
-            if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket)
+            if a.action=='mount':broker.run_mount(s,work,mount,a.control_socket,allow_device_nodes=a.allow_device_nodes)
         target.finish()
     print('Continuous device is synchronized, checked and cleanly published.')
 

@@ -770,7 +770,7 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
   if (!op ||
       (op->kind != MUT_MKNOD &&
        (op->kind < MUT_LINK || op->kind > MUT_SYMLINK)) ||
-      (op->kind == MUT_RENAME ? op->offset > 2
+      (op->kind == MUT_RENAME ? (op->offset > 5 || op->offset == 3)
                               : op->kind != MUT_MKNOD && op->offset))
     return EINVAL;
   int creating =
@@ -784,6 +784,8 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
                   memchr(op->data, 0, op->length))
                : op->length))
     return EINVAL;
+  if (op->kind == MUT_RENAME && (op->offset & 4) && c && c->uid)
+    return EPERM;
   if (c && policy_credentials(c))
     return EINVAL;
   if (c && creating && (op->uid != c->uid || op->gid != c->gid))
@@ -869,7 +871,7 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
     }
     if (!e && victim && op->kind == MUT_LINK)
       e = EEXIST;
-    if (!e && op->kind == MUT_RENAME && op->offset == 1 && victim)
+    if (!e && op->kind == MUT_RENAME && (op->offset & 1) && victim)
       e = EEXIST;
     if (!e && op->kind == MUT_RENAME && op->offset == 2 && !victim)
       e = ENOENT;
@@ -913,6 +915,12 @@ errcode_t namespace_apply(ext2_filsys fs, const struct mutation *op,
       e = link_name(fs, to, newname, ino, filetype);
     if (!e && op->kind == MUT_RENAME)
       e = unlink_name(fs, from, name, ino);
+    if (!e && op->kind == MUT_RENAME && (op->offset & 4)) {
+      struct mutation whiteout = {.mode = LINUX_S_IFCHR,
+                                  .uid = c ? c->uid : 0,
+                                  .gid = c ? c->gid : 0};
+      e = create_special(fs, from, name, &whiteout, c);
+    }
     if (!e && op->kind == MUT_RENAME && type == LINUX_S_IFDIR && from != to) {
       e = directory_check(fs, ino, from, 0, to);
       if (!e)

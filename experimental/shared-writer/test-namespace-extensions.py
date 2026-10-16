@@ -25,6 +25,7 @@ def atomic(s,call,code):
  check(fixture.sha(s.root/'image.img')==before and s.state['head']==head)
 
 def fault_ops(kind):
+ if kind=='whiteout':return [dict(kind='rename',path='/a',target='/b',flags=4)]
  if kind=='exchange':return [dict(kind='rename',path='/a',target='/b',flags=2)]
  return [dict(kind='mknod',path='/device',mode=stat.S_IFCHR|0o640,major=259,minor=70001)]
 if a.worker:
@@ -64,6 +65,23 @@ with tempfile.TemporaryDirectory(prefix='namespace-extensions-',dir=a.work) as t
    check(read(s,'/left/other/child')==b'child' and read(s,'/right/file/second')==b'second')
    atomic(s,lambda:s.rename('/left','/left/other',flags=2),errno.EINVAL)
    s.symlink('missing','/link');s.rename('/link','/a',flags=2);check(s.readlink('/a')==b'missing' and read(s,'/link')==b'B')
+   put(s,'/white-source',b'whiteout source');put(s,'/white-target',b'old target')
+   original_inode=fields(s,'/white-source')[0]
+   with s.open('/white-source') as held, s.open('/white-target') as replaced:
+    s.rename('/white-source','/white-target',flags=4)
+    marker=fields(s,'/white-source');check(stat.S_ISCHR(marker[1]) and marker[7]==0 and marker[1]&0o777==0 and marker[2]==1)
+    check(fields(s,'/white-target')[0]==original_inode and held.read()==b'whiteout source' and replaced.read()==b'old target')
+   atomic(s,lambda:s.rename('/white-target','/white-source',flags=5),errno.EEXIST)
+   s.rename('/white-target','/white-new',flags=5);check(read(s,'/white-new')==b'whiteout source' and stat.S_ISCHR(fields(s,'/white-target')[1]))
+   s.link('/white-new','/white-alias');s.rename('/white-new','/white-alias',flags=4);check(fields(s,'/white-new')[0]==original_inode and fields(s,'/white-alias')[2]==2)
+   for invalid in (6,7,8):atomic(s,lambda:s.rename('/white-new','/invalid',flags=invalid),ValueError)
+   s.mkdir('/white-dir');put(s,'/white-dir/child',b'child')
+   before_parent=fields(s,'/')[2];right_parent=fields(s,'/right')[2]
+   with s.opendir('/white-dir') as held:
+    s.rename('/white-dir','/right/white-dir',flags=4);check(held.listdir()==['child'])
+   check(stat.S_ISCHR(fields(s,'/white-dir')[1]) and fields(s,'/')[2]==before_parent-1 and fields(s,'/right')[2]==right_parent+1)
+   atomic(s,lambda:s.applyat([dict(kind='rename',path='/white-new',target='/white-rollback',flags=4),dict(kind='mkdir',path='/left')]),errno.EEXIST)
+   check(read(s,'/white-new')==b'whiteout source')
    s._mount_nodes()
    for name,kind,major,minor in [('fifo',stat.S_IFIFO,0,0),('socket',stat.S_IFSOCK,0,0),('char',stat.S_IFCHR,259,70001),('block',stat.S_IFBLK,4095,1048575)]:
     path='/'+name;s.mknod(path,kind|0o640,major=major,minor=minor)
@@ -96,9 +114,10 @@ with tempfile.TemporaryDirectory(prefix='namespace-extensions-',dir=a.work) as t
   s.mknodat(None,'/public/user',stat.S_IFIFO|0o666);check(fields(s,'/public/user')[3:5]==(12345,23456));check(bool(s.getxattr('/public/user','system.posix_acl_access')))
   atomic(s,lambda:s.mknod('/public/denied',stat.S_IFCHR|0o600,major=1,minor=3),errno.EPERM)
   s.mknod('/public/own',stat.S_IFSOCK|0o600)
+  atomic(s,lambda:s.rename('/public/own','/public/whiteout-denied',flags=4),errno.EPERM)
   atomic(s,lambda:s.rename('/public/own','/sticky/root',flags=2),errno.EPERM)
  fixture.run(['e2fsck','-fn',root/'image.img'])
- for kind in ('exchange','mknod'):
+ for kind in ('exchange','mknod','whiteout'):
   for number,phase in enumerate(('record','prepared','started','half:0:0','synced','head-published')):
    root=tmp/f'fault-{kind}-{number}';chain.clone(sources[0],root)
    with opened(root) as s:put(s,'/a',b'A');put(s,'/b',b'B')
@@ -106,6 +125,9 @@ with tempfile.TemporaryDirectory(prefix='namespace-extensions-',dir=a.work) as t
    check(result.returncode==77,(kind,phase,result.stdout,result.stderr))
    with opened(root) as s:
     if kind=='exchange':check((read(s,'/a'),read(s,'/b'))==((b'A',b'B') if phase=='record' else (b'B',b'A')))
+    elif kind=='whiteout':
+     if phase=='record':check((read(s,'/a'),read(s,'/b'))==(b'A',b'B'))
+     else:check(stat.S_ISCHR(fields(s,'/a')[1]) and fields(s,'/a')[7]==0 and read(s,'/b')==b'A')
     elif phase=='record':atomic(s,lambda:s.statat(None,'/device'),errno.ENOENT)
     else:check(fields(s,'/device')[7]==259<<32|70001)
    fixture.run(['e2fsck','-fn',root/'image.img'])

@@ -570,6 +570,8 @@ jobs:
         run: python3 experimental/shared-writer/test-mounted-namespace-extensions.py --work "$RUNNER_TEMP/namespace-extensions"
       - name: Verify privileged device-node creation on nodev mounts
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-mounted-namespace-extensions.py --work "$RUNNER_TEMP/namespace-extensions" --limit 2 --result-name mounted-namespace-root-results.json
+      - name: Verify explicit root host-device I/O using only null device
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-mounted-namespace-extensions.py --work "$RUNNER_TEMP/namespace-extensions" --limit 2 --allow-device-nodes --result-name mounted-namespace-device-results.json
       - name: Save namespace extension validation
         if: always()
         uses: actions/upload-artifact@v4
@@ -580,3 +582,4 @@ jobs:
             ${{ runner.temp }}/namespace-extensions/namespace-extension-storage-results.json
             ${{ runner.temp }}/namespace-extensions/mounted-namespace-extensions-results.json
             ${{ runner.temp }}/namespace-extensions/mounted-namespace-root-results.json
+            ${{ runner.temp }}/namespace-extensions/mounted-namespace-device-results.json

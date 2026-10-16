@@ -23,11 +23,14 @@ with tempfile.TemporaryDirectory(prefix='namespace-storage-',dir=a.work) as tmp:
    s.mknod('/fifo',stat.S_IFIFO|0o640);s.rename('/opaque-device','/fifo',flags=2)
    assert stat.S_ISCHR(s.statat(None,'/fifo')['mode']);checks+=1
    s.rename('/opaque-device','/new-name',flags=1);s.link('/fifo','/device-link');s.unlink('/device-link')
+   s.rename('/new-name','/whiteout-fifo',flags=4);assert stat.S_ISFIFO(s.statat(None,'/whiteout-fifo')['mode']);checks+=1
+   assert stat.S_ISCHR(s.statat(None,'/new-name')['mode']);checks+=1
   fixture.run(['e2fsck','-fn',root/'image.img']);checks+=1
   snapshot=tmp/f'check-{number}.img'
   fixture.run([a.work/'metadata-snapshot',root/'image.img',snapshot,32*1024**2]);fixture.run(['e2fsck','-fn',snapshot]);checks+=1
   # The all-ones rdev encoding must never be treated as a physical block number.
   assert b'Device major/minor number: 4095:1048575' in fixture.run(['debugfs','-R','stat /fifo',snapshot]);checks+=1
+  assert b'Device major/minor number: 00:00' in fixture.run(['debugfs','-R','stat /new-name',snapshot]);checks+=1
   print('PASS indexed special storage',source.name,flush=True)
 (a.work/'namespace-extension-storage-results.json').write_text(json.dumps(dict(result='passed',checks=checks,profiles=number+1),indent=2)+'\n')
 print('PASS',checks,'indexed namespace and special metadata snapshot checks',flush=True)

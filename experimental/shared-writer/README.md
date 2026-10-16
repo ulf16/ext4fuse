@@ -964,7 +964,8 @@ potentially broader group list. Linux requires kernel POSIX ACL support and enab
 kernel-managed FIFO/socket I/O enforces modes and named-user/group ACLs too.
 The backend still validates ACL updates, mode synchronization and inheritance.
 macOS uses default_permissions plus extended_security for native kernel checks.
-Both retain broker authorization; nodev/nosuid are fixed.
+Both retain broker authorization; nosuid is fixed and nodev is the default.
+Root can explicitly enable host-device I/O as described below.
 Lifecycle-only handle release/flush/fsync and kernel metadata requests can use the
 mount owner's context; they grant no new data or namespace access. This is not a
 multi-user mount or a replacement for the stable native macOS ACL reader.
@@ -1480,7 +1481,7 @@ hdiutil/loop devices are supported for testing; ordinary files are never admitte
 as production device targets. The same whole-drive/sibling, off-device journal,
 geometry, exclusive descriptor and macOS Disk Arbitration checks used by the
 offline publisher apply. The FUSE mount remains private to its launching owner,
-with nodev/nosuid and no writeback caching. Unmount normally to finish publication.
+with nodev/nosuid by default and no writeback caching. Unmount normally to finish publication.
 
 The target's primary ext4 magic stays disabled throughout the active mount.
 Durable guard phases cover activation and restoration, and per-generation redo
@@ -1799,8 +1800,12 @@ sanitizers on macOS and Linux CI. Hardware power-loss behavior remains uncertifi
 The experimental session and FUSE mount support **no-replace** and **exchange**
 renames. `Session.rename` and `renameat` take keyword `flags=1` (destination must
 not exist) or `flags=2` (both existing names are atomically exchanged). Zero retains
-ordinary replacement. Combined/unknown flags are rejected; whiteout creation is
-not implemented. The frontend translates Linux `renameat2` and Darwin
+ordinary replacement. `flags=4` performs a whiteout rename: it atomically moves
+the source and creates a mode-000 character device with number `{0,0}` at the old
+name. `flags=5` combines whiteout with no-replace. Other combinations/unknown
+flags are rejected; whiteout requires numeric root device-creation authority.
+Both source and overwritten-target pins survive, and any error or crash is
+handled by the same atomic recovery engine. Same-inode renames remain no-ops. The frontend translates Linux `renameat2` and Darwin
 `renamex_np` flag values and negotiates macFUSE extended-rename support.
 
 No-replace checks destination existence before the same-inode shortcut. Exchange
@@ -1827,15 +1832,29 @@ nodes support namespace changes, hard links, attributes and inode identity pins.
 An unlinked pinned special inode retains metadata until its final pin is dropped;
 reclamation clears its opaque device fields and frees attributes without treating
 device identifiers as file-block pointers. They never receive ordinary file-data
-grants. The mount remains **nodev,nosuid**: storing a device node does not grant
-access to a host device. Device I/O and emulating a remote device are outside this
-feature.
+grants. The mount defaults to **nodev,nosuid**: storing a device node does not
+normally grant access to a host device. `mount-broker.py`, `direct-device.py mount`
+and `live-device.py mount` accept root-only `--allow-device-nodes` to request
+`dev` while retaining `nosuid`, private-mount ownership and mode/ACL checks.
+Both the Python entry points and native frontend independently refuse this
+option for non-root callers before starting a mount. Use only trusted images:
+the numbers select **host** kernel devices, not Linux devices emulated in userspace,
+and opening such a node bypasses image transactions. Linux and macOS device
+numbers generally refer to different drivers. The tests open only a node copied
+from the host's `/dev/null`; no physical disk is opened by these tests.
+Host-kernel special-vnode support remains necessary, especially on macOS.
 
 FIFO/socket data transport belongs to the host kernel, not ext4 image data.
 Linux tests require real FIFO and UNIX socket traffic. On the tested macOS
 Sequoia/macFUSE 5.4.0 mount, FIFO creation/stat/metadata/link/unlink work, but FIFO
 open returns EPERM before reaching the broker; native FIFO I/O is reported as a
-separate platform limitation. UNIX socket binding and traffic are tested.
+separate platform limitation. The [published macFUSE kernel source](https://github.com/osxfuse/kext/blob/master/osxfuse/fuse_vnops.c) explicitly
+returns EPERM in `fuse_vnop_open` when `M_OSXFUSE_ENABLE_FIFOFS` is disabled;
+this happens before userspace open callbacks and is not corrected by file modes,
+ACLs or broker FIFO buffers. Enabling this needs host kernel/backend support,
+not a change to stored ext4 FIFO inodes. UNIX socket binding and traffic are tested.
+The root-only test option `--probe-host-io` records native FIFO and host-null
+I/O capability separately rather than asserting a successful transport on macOS.
 
 `test-namespace-extensions.py` checks all twelve profiles, no-replace collisions,
 file/directory and nonempty directory exchanges, retained cwd/open identities,
@@ -1844,4 +1863,8 @@ and interrupted sealed replay. `test-namespace-extension-storage.py` checks
 independently indexed directories and fsck-clean metadata snapshots containing
 maximum device numbers. `test-mounted-namespace-extensions.py` exercises actual
 platform rename syscalls, special-file metadata/lifetime, local IPC and nodev
-refusal. CI additionally runs privileged Linux device-node creation.
+refusal, whiteout syscalls and non-root device-option rejection. CI additionally
+runs privileged Linux device-node creation under nodev and actual host-null I/O
+with the explicit dev opt-in. Backend tests cover whiteout replacement, hard-link
+same-inode no-ops, cross-parent directories, pinned overwritten targets, atomic
+batch rollback, indexed markers and every sealed-replay crash boundary.

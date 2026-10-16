@@ -5,7 +5,7 @@ import argparse,ctypes,errno,json,os,shutil,socket,stat,struct,subprocess,sys,te
 from pathlib import Path
 import chain,session,journal_fixtures as fixture
 from credentials import Credentials
-p=argparse.ArgumentParser();p.add_argument('--work',type=Path,required=True);p.add_argument('--limit',type=int);p.add_argument('--result-name',default='mounted-namespace-extensions-results.json');a=p.parse_args();here=Path(__file__).resolve().parent;checks=0;fifo_io=True
+p=argparse.ArgumentParser();p.add_argument('--work',type=Path,required=True);p.add_argument('--limit',type=int);p.add_argument('--allow-device-nodes',action='store_true');p.add_argument('--probe-host-io',action='store_true');p.add_argument('--result-name',default='mounted-namespace-extensions-results.json');a=p.parse_args();here=Path(__file__).resolve().parent;checks=0;fifo_io=True;fifo_errno=None;device_errno=None;device_io=None
 libc=ctypes.CDLL(None,use_errno=True)
 if sys.platform=='darwin':
  native=libc.renamex_np;native.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_uint]
@@ -29,7 +29,16 @@ def denied(call,errors):
 def unmount(m):fixture.run(['/sbin/umount',m] if sys.platform=='darwin' else ['fusermount3','-u',m])
 sources=sorted(p for p in (a.work/'fixtures').glob('*-csum*.img') if '-output' not in p.name)
 if a.limit:sources=sources[:a.limit]
-check(bool(sources));tmp=Path(tempfile.mkdtemp(prefix='mounted-namespace-extensions-',dir=a.work));short=Path(tempfile.mkdtemp(prefix='e4ns-',dir='/private/tmp' if sys.platform=='darwin' else '/tmp'));ok=False
+if a.allow_device_nodes and os.getuid()!=0:raise PermissionError('--allow-device-nodes tests require root')
+check(bool(sources))
+if os.getuid()!=0:
+ for command in [
+  [a.work/'mount-frontend','/missing-mountpoint','--allow-device-nodes'],
+  [sys.executable,here/'mount-broker.py','--root','/missing-root','--work',a.work,'--mountpoint','/missing-mountpoint','--allow-device-nodes'],
+  [sys.executable,here/'direct-device.py','mount','/missing-device','/missing-root','--work',a.work,'--mountpoint','/missing-mountpoint','--allow-device-nodes'],
+  [sys.executable,here/'live-device.py','mount','/missing-device','/missing-root','--work',a.work,'--mountpoint','/missing-mountpoint','--allow-device-nodes']]:
+  result=subprocess.run(list(map(str,command)),capture_output=True,timeout=20);check(result.returncode!=0 and b'requires root' in result.stderr,result.stderr)
+tmp=Path(tempfile.mkdtemp(prefix='mounted-namespace-extensions-',dir=a.work));short=Path(tempfile.mkdtemp(prefix='e4ns-',dir='/private/tmp' if sys.platform=='darwin' else '/tmp'));ok=False
 try:
  for index,source in enumerate(sources):
   root=tmp/f'chain-{index}';chain.clone(source,root)
@@ -43,7 +52,7 @@ try:
   mount=short/f'm{index}';mount.mkdir();logpath=tmp/f'mount-{index}.log';proc=None;active=False
   try:
    with logpath.open('wb') as log:
-    proc=subprocess.Popen([sys.executable,here/'mount-broker.py','--root',root,'--work',a.work,'--mountpoint',mount],stdout=log,stderr=log)
+    proc=subprocess.Popen([sys.executable,here/'mount-broker.py','--root',root,'--work',a.work,'--mountpoint',mount]+(['--allow-device-nodes'] if a.allow_device_nodes else []),stdout=log,stderr=log)
     for unused in range(200):
      if os.path.ismount(mount):active=True;break
      if proc.poll() is not None:break
@@ -75,7 +84,7 @@ try:
     try:rd=os.open(mount/'fifo',os.O_RDONLY|os.O_NONBLOCK)
     except OSError as e:
      if sys.platform!='darwin' or e.errno!=errno.EPERM:raise
-     fifo_io=False;check(True);rd=None
+     fifo_io=False;fifo_errno=e.errno;check(True);rd=None
     try:
      if rd is not None:
       wr=os.open(mount/'fifo',os.O_WRONLY|os.O_NONBLOCK)
@@ -97,10 +106,30 @@ try:
       client.settimeout(5);client.connect(str(mount/'sock'));peer,_=listener.accept()
       with peer:client.sendall(b'unix socket');check(peer.recv(20)==b'unix socket')
      os.rename(mount/'sock',mount/'socket-moved');os.unlink(mount/'socket-moved')
+    if sys.platform=='linux':
+     white_source=mount/'white-source';white_target=mount/'white-target';white_source.write_bytes(b'white-source');white_target.write_bytes(b'old')
+     if os.getuid():denied(lambda:rename(white_source,white_target,4),errno.EPERM)
+     else:
+      with white_source.open('rb') as held:
+       rename(white_source,white_target,4);check(held.read()==b'white-source' and white_target.read_bytes()==b'white-source')
+      marker=white_source.stat();check(stat.S_ISCHR(marker.st_mode) and marker.st_rdev==0 and stat.S_IMODE(marker.st_mode)==0)
+      denied(lambda:rename(white_target,white_source,5),errno.EEXIST)
+      rename(white_target,mount/'white-new',5);check(stat.S_ISCHR(white_target.stat().st_mode) and (mount/'white-new').read_bytes()==b'white-source')
+      denied(lambda:rename(white_target,white_source,6),errno.EINVAL)
+    if a.allow_device_nodes:
+     null=os.stat('/dev/null');os.mknod(mount/'host-null',stat.S_IFCHR|0o600,null.st_rdev)
+     try:fd=os.open(mount/'host-null',os.O_RDWR)
+     except OSError as e:
+      if not a.probe_host_io or sys.platform!='darwin':raise
+      device_io=False;device_errno=e.errno;check(True)
+     else:
+      try:check(os.read(fd,8)==b'');check(os.write(fd,b'host null')==9);device_io=True
+      finally:os.close(fd)
+     os.unlink(mount/'host-null')
     for path,kind,major,minor in [('char-seed',stat.S_IFCHR,1,3),('block-seed',stat.S_IFBLK,8,1)]:
      info=(mount/path).stat();check(stat.S_IFMT(info.st_mode)==kind);check((os.major(info.st_rdev),os.minor(info.st_rdev))==(major,minor))
      # Device nodes are stored and movable, but nodev forbids hardware access.
-     denied(lambda:os.open(mount/path,os.O_RDONLY),(errno.EACCES,errno.EPERM,errno.ENXIO,errno.ENODEV,errno.EOPNOTSUPP))
+     if not a.allow_device_nodes:denied(lambda:os.open(mount/path,os.O_RDONLY),(errno.EACCES,errno.EPERM,errno.ENXIO,errno.ENODEV,errno.EOPNOTSUPP))
      os.link(mount/path,mount/(path+'-link'));os.unlink(mount/path);check((mount/(path+'-link')).stat().st_nlink==1);os.unlink(mount/(path+'-link'))
     if os.getuid()==0:
      os.mknod(mount/'native-char',stat.S_IFCHR|0o600,os.makedev(1,3));check(stat.S_ISCHR((mount/'native-char').stat().st_mode));check(os.minor((mount/'native-char').stat().st_rdev)==3);os.unlink(mount/'native-char')
@@ -110,7 +139,7 @@ try:
    if active and os.path.ismount(mount):unmount(mount)
    if proc and proc.poll() is None:proc.terminate();proc.wait(timeout=15)
   fixture.run(['e2fsck','-fn',root/'image.img']);print('PASS mounted namespace extensions',source.name,flush=True)
- (a.work/a.result_name).write_text(json.dumps(dict(result='passed',checks=checks,profiles=len(sources),platform=sys.platform,uid=os.getuid(),native_fifo_io=fifo_io),indent=2)+'\n');ok=True
+ (a.work/a.result_name).write_text(json.dumps(dict(result='passed',checks=checks,profiles=len(sources),platform=sys.platform,uid=os.getuid(),allow_device_nodes=a.allow_device_nodes,native_fifo_io=fifo_io,native_fifo_errno=fifo_errno,native_device_io=device_io,native_device_errno=device_errno),indent=2)+'\n');ok=True
  print('PASS',checks,'mounted namespace extension checks',flush=True)
 finally:
  if ok:shutil.rmtree(tmp);shutil.rmtree(short)

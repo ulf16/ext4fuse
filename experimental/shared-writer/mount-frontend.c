@@ -499,6 +499,11 @@ static void rename_cb(fuse_req_t req, fuse_ino_t parent, const char *name,
     wire = 1;
   else if (flags == RENAME_EXCHANGE)
     wire = 2;
+#ifndef __APPLE__
+  else if (flags == RENAME_WHITEOUT ||
+           flags == (RENAME_WHITEOUT | RENAME_NOREPLACE))
+    wire = flags;
+#endif
   else if (flags) {
     error(req, -EINVAL);
     return;
@@ -874,6 +879,14 @@ static const struct fuse_lowlevel_ops operations = {
     .listxattr = listxattr_cb,
     .removexattr = removexattr_cb};
 int main(int argc, char **argv) {
+  int allow_devices = argc > 1 && !strcmp(argv[argc - 1], "--allow-device-nodes");
+  if (allow_devices) {
+    argc--;
+    if (getuid() || geteuid()) {
+      fprintf(stderr, "--allow-device-nodes requires root\n");
+      return 2;
+    }
+  }
   if ((argc != 2 && argc != 4) || getuid() != geteuid()) {
     fprintf(
         stderr,
@@ -892,7 +905,9 @@ int main(int argc, char **argv) {
                    argv[1],
                    "-f",
                    "-s",
-                   "-onodev,nosuid,default_permissions,fsname=ext4fuse-experimental"
+                   allow_devices
+                       ? "-odev,nosuid,default_permissions,fsname=ext4fuse-experimental"
+                       : "-onodev,nosuid,default_permissions,fsname=ext4fuse-experimental"
 #ifdef __APPLE__
                    ,
                    "-oextended_security"

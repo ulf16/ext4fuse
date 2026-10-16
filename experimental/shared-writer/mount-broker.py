@@ -146,7 +146,7 @@ class Broker:
         elif op==13:
             self.s.unlinkat(None,path);self.hidden.pop(path,None)
         elif op==14:
-            if arg not in (0,1,2):raise OSError(errno.EINVAL,'invalid rename flags')
+            if arg not in (0,1,2,4,5):raise OSError(errno.EINVAL,'invalid rename flags')
             candidate=None
             original=self.s.statat(None,path,follow_symlinks=False)
             try:destination=self.s.statat(None,data,follow_symlinks=False)
@@ -394,7 +394,7 @@ class LowBroker(Broker):
             else:self.s.mknodat(h,path,arg,major=major,minor=minor)
             return self.finish_entry(self.remember(h,path))
         if op==116:
-            if offset not in (0,1,2):raise OSError(errno.EINVAL,'invalid rename flags')
+            if offset not in (0,1,2,4,5):raise OSError(errno.EINVAL,'invalid rename flags')
             self.component(path);self.component(data)
             self.s.renameat(h,path,self.node(arg)['handle'],data,flags=offset);return 0,b''
         if op==117:
@@ -499,19 +499,20 @@ def validate_mount(root,work,mount):
     return root,work,mount
 
 
-def run_mount(s,work,mount,control_socket=None):
+def run_mount(s,work,mount,control_socket=None,*,allow_device_nodes=False):
+    if allow_device_nodes and (os.getuid()!=0 or os.geteuid()!=0):raise PermissionError(errno.EPERM,'--allow-device-nodes requires root')
     if control_socket is not None:
         socket_path=Path(control_socket).absolute()
         if socket_path.resolve().is_relative_to(mount):raise ValueError('control socket must be outside mountpoint')
-    return _run_mount(s,work,mount,control_socket)
+    return _run_mount(s,work,mount,control_socket,allow_device_nodes)
 
-def _run_mount(s,work,mount,control_socket):
+def _run_mount(s,work,mount,control_socket,allow_device_nodes):
     from mount_control import control
     import select
     broker=LowBroker(s)
     notify_read,notify_write=os.pipe();ack_read,ack_write=os.pipe()
     try:
-        frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount),str(notify_read),str(ack_write)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,pass_fds=(notify_read,ack_write))
+        frontend=subprocess.Popen([str(work/'mount-frontend'),str(mount),str(notify_read),str(ack_write)]+(['--allow-device-nodes'] if allow_device_nodes else []),stdin=subprocess.PIPE,stdout=subprocess.PIPE,pass_fds=(notify_read,ack_write))
     except BaseException:
         for fd in (notify_read,notify_write,ack_read,ack_write):os.close(fd)
         raise
@@ -550,10 +551,12 @@ def main():
     parser.add_argument('--recover-journal',action='store_true',help='recover an internal native journal on the managed image before mounting')
     parser.add_argument('--control-socket',type=Path,help='optional socket in a private owned directory outside mountpoint')
     parser.add_argument('--checkpoint-every',type=int,default=64,help='retire completed generations after this many commits; zero disables')
+    parser.add_argument('--allow-device-nodes',action='store_true',help='root only: enable host device I/O for stored device numbers; trusted images only')
     args=parser.parse_args()
+    if args.allow_device_nodes and (os.getuid()!=0 or os.geteuid()!=0):parser.error('--allow-device-nodes requires root')
     root,work,mount=validate_mount(args.root,args.work,args.mountpoint)
     mask=os.umask(0);os.umask(mask)
     with session.Session(root,work/'mutation-producer',work/'reader-server',Credentials(os.getuid(),os.getgid(),(),mask),checkpoint_every=args.checkpoint_every,recover_journal=args.recover_journal) as s:
-        run_mount(s,work,mount,args.control_socket)
+        run_mount(s,work,mount,args.control_socket,allow_device_nodes=args.allow_device_nodes)
     print('Experimental mount stopped; managed image and recovery logs retained.',file=sys.stderr)
 if __name__=='__main__':main()
