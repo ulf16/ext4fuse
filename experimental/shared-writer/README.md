@@ -2082,7 +2082,10 @@ qualification explicitly.
 
 `merkle_store.py` stores oversized trees in an unlinked temporary file with a
 bounded LRU of 64 KiB hash pages. Dirty eviction completes partial writes, reports
-I/O failures and retains a failed eviction's dirty cache entry. The file is never
+I/O failures and retains a failed eviction's dirty cache entry. Pages are
+authenticated by recursively paged checksum tables terminating in RAM; corrupt
+node or checksum pages must be rejected before they influence a new root. The
+main cache has a 256 MiB budget with small bounded checksum overhead. The file is never
 trusted after restart; cold verification rebuilds every hash from image bytes.
 The root format, chunk size, sealed redo and old managed states remain compatible.
 

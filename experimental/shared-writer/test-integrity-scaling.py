@@ -89,6 +89,22 @@ with patch.object(os,'pwrite',side_effect=lambda fd,data,offset:original(fd,data
 check(nodes.get(1)==b'A'*32)
 nodes.close()
 
+# Persisted temporary pages must be authenticated, including recursively paged
+# checksum metadata. Neither data corruption nor corruption of its stored tag
+# may turn a trusted cached root into a false future root.
+bad=Nodes(8*HASH_PAGE,HASH_PAGE)
+bad.set(1,b'A'*32);bad.set(2*HASH_PAGE//32,b'B'*32)
+os.pwrite(bad.file.fileno(),b'X',32)
+refused(lambda:bad.get(1));bad.close()
+recursive=Nodes(512*1024**2,HASH_PAGE)
+check(isinstance(recursive.tags,Nodes))
+recursive.set(1,b'A'*32)
+recursive.set(4096*HASH_PAGE//32,b'B'*32)
+recursive.set(4097*HASH_PAGE//32,b'C'*32)
+# Page zero's checksum page has now been evicted into its own temporary file.
+os.pwrite(recursive.tags.file.fileno(),b'X',0)
+refused(lambda:recursive.get(1));recursive.close()
+
 source=a.work/'fixtures/4096-extents-csum1.img'
 assert source.exists(), 'prepare run-matrix fixtures first'
 root=base/'chain';chain.clone(source,root)

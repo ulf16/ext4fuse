@@ -2,6 +2,8 @@
 """Ephemeral paged hash nodes; never a trusted persistent recovery index."""
 from collections import OrderedDict
 import errno
+import hashlib
+import struct
 import os
 import tempfile
 
@@ -16,12 +18,31 @@ class Nodes:
         if type(budget) is not int or budget < PAGE:
             raise ValueError('hash page budget must hold at least one page')
         self.size = size
-        self.capacity = max(1, budget // PAGE)
+        # Reserve a page for checksum metadata. Large checksum tables recurse,
+        # so no capacity-proportional checksum array grows without bound.
+        self.capacity = max(1, budget // PAGE - 1)
         self.pages = OrderedDict()
         self.file = tempfile.TemporaryFile(prefix='ext4-hash-nodes-')
-        try: self.file.truncate(size)
+        self.tags = None
+        try:
+            self.file.truncate(size)
+            tag_bytes = ((size+PAGE-1)//PAGE)*NODE
+            self.tags = bytearray(tag_bytes) if tag_bytes <= PAGE else Nodes(tag_bytes, PAGE)
         except BaseException:
             self.close(); raise
+
+    @staticmethod
+    def _digest(index, data):
+        return hashlib.sha256(b'E4HASH-PAGE01'+struct.pack('<QQ',index,len(data))+data).digest()
+
+    def _tag(self, index, value=None):
+        if isinstance(self.tags, Nodes):
+            if value is None: return self.tags.get(index)
+            self.tags.set(index, value)
+        elif value is None:
+            return bytes(self.tags[index*NODE:(index+1)*NODE])
+        else:
+            self.tags[index*NODE:(index+1)*NODE] = value
 
     def _write(self, index, data):
         offset = index*PAGE
@@ -31,6 +52,7 @@ class Nodes:
             except InterruptedError: continue
             if n <= 0: raise OSError(errno.EIO, 'short temporary hash-page write')
             remaining = remaining[n:]; offset += n
+        self._tag(index, self._digest(index,data))
 
     def _page(self, index):
         if self.file is None: raise ValueError('closed hash storage')
@@ -49,6 +71,9 @@ class Nodes:
             except InterruptedError: continue
             if not chunk: raise OSError(errno.EIO, 'short temporary hash-page read')
             data.extend(chunk)
+        expected = self._tag(index)
+        if (expected == bytes(NODE) and any(data)) or (expected != bytes(NODE) and self._digest(index,data) != expected):
+            raise ValueError('temporary hash-page integrity mismatch')
         entry = [data, False]
         self.pages[index] = entry
         return entry
@@ -73,6 +98,8 @@ class Nodes:
         if file is not None:
             self.file = None
             self.pages.clear()
+            if isinstance(self.tags, Nodes): self.tags.close()
+            self.tags = None
             file.close()
 
     def __del__(self):

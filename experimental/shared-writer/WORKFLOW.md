@@ -168,7 +168,9 @@ power-loss qualification. Software test success alone is not power-loss certific
 ## Integrity-tree storage and scan costs
 
 The old 4 TiB hash-cache ceiling is removed. Oversized trees use a private,
-unlinked temporary node file with a bounded 256 MiB page cache. The existing hash
+unlinked temporary node file with a bounded 256 MiB main page cache and small
+bounded authentication metadata. Evicted hash pages are checked against recursive
+checksum tables anchored in RAM, including checks of the checksum pages themselves. The existing hash
 format and recovery logs are unchanged. Hash-node storage is about 64–128 bytes
 per MiB of volume capacity (8 TiB needs a 512 MiB node file); temporary storage,
 filesystem geometry, transaction and OS limits still apply. Set `TMPDIR` before
