@@ -1847,6 +1847,10 @@ Linux. On macOS Sequoia with macFUSE 5.4.0, a native uid-0 probe with the explic
 `dev` opt-in still returned ENXIO (errno 6) opening a character node copied from
 host `/dev/null`; the option does not currently provide working macOS device I/O.
 This does not affect storing, moving or reading metadata for device nodes.
+The [macOS investigation](MACOS-SPECIAL-IO.md) traces ENXIO to our special-inode
+open rejection and records the additional kernel-side read/write barrier found
+by an isolated accepted-open experiment; the root probe alone did not localize
+that error to macFUSE.
 
 FIFO/socket data transport belongs to the host kernel, not ext4 image data.
 Linux tests require real FIFO and UNIX socket traffic. On the tested macOS
