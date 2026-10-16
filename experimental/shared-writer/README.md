@@ -1842,7 +1842,11 @@ the numbers select **host** kernel devices, not Linux devices emulated in usersp
 and opening such a node bypasses image transactions. Linux and macOS device
 numbers generally refer to different drivers. The tests open only a node copied
 from the host's `/dev/null`; no physical disk is opened by these tests.
-Host-kernel special-vnode support remains necessary, especially on macOS.
+Host-kernel special-vnode support remains necessary. Device I/O is verified on
+Linux. On macOS Sequoia with macFUSE 5.4.0, a native uid-0 probe with the explicit
+`dev` opt-in still returned ENXIO (errno 6) opening a character node copied from
+host `/dev/null`; the option does not currently provide working macOS device I/O.
+This does not affect storing, moving or reading metadata for device nodes.
 
 FIFO/socket data transport belongs to the host kernel, not ext4 image data.
 Linux tests require real FIFO and UNIX socket traffic. On the tested macOS
@@ -1855,6 +1859,11 @@ ACLs or broker FIFO buffers. Enabling this needs host kernel/backend support,
 not a change to stored ext4 FIFO inodes. UNIX socket binding and traffic are tested.
 The root-only test option `--probe-host-io` records native FIFO and host-null
 I/O capability separately rather than asserting a successful transport on macOS.
+The uid-0 Sequoia/macFUSE 5.4.0 probe completed all 28 checks and cleanly unmounted,
+but recorded `native_fifo_io=false` with EPERM (errno 1) and
+`native_device_io=false` with ENXIO (errno 6). Root and the `dev` mount request did
+not resolve either transport limit. A passed probe means its checks completed;
+the separate capability fields, rather than `result`, describe working I/O.
 
 `test-namespace-extensions.py` checks all twelve profiles, no-replace collisions,
 file/directory and nonempty directory exchanges, retained cwd/open identities,
