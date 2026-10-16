@@ -225,8 +225,7 @@ int main(int argc, char **argv) {
   if (!e && broker)
     e = namespace_reap(fs, pins, pin_count);
   if (!e) {
-    e = ext2fs_close(fs);
-    fs = NULL;
+    e = ext2fs_close_free(&fs);
   }
   if (!e)
     e = overlay_publish(overlay);

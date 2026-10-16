@@ -2053,7 +2053,7 @@ A conversion that exceeds the staged-page budget fails atomically.
 
 `test-directory-indexing.py` exercises all twelve filesystem profiles and all
 six supported hash policies, pre-existing multi-block and fresh conversions,
-attributes and held handles, immutable stream snapshots, later-batch rollback,
+conversion triggered by mkdir/link/symlink/rename/FIFO insertion, attributes and held handles, immutable stream snapshots, later-batch rollback,
 staged-write failures and an actual half-page interrupted replay. The compact
 conversion unit verifies reclamation and multiple failed-write boundaries with
 an independently checked output. Native macFUSE/Linux mount tests retain cwd and

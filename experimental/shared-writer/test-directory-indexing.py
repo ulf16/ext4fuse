@@ -69,6 +69,20 @@ with tempfile.TemporaryDirectory(prefix='directory-indexing-',dir=a.work) as tmp
    for key in ('inode','generation','mode','uid','gid','links'):check(after[key]==before[key],key)
    check(fresh.readdir()['entries']==[]);fresh.rewind();check(len(fresh.listdir())==650);fresh.close()
    check(s.getxattr('/fresh','user.conversion')==b'new')
+   # Every insertion path must retain the newly indexed parent, including mkdir's link update.
+   block=int(source.name.split('-')[0]);tail=12 if 'csum1' in source.name else 0
+   rec=(8+len(name(0).encode())+3)&~3;fill=(block-24-tail)//rec
+   for kind in ('mkdir','link','symlink','rename','fifo'):
+    parent='/by-'+kind;s.mkdir(parent);batch(s,[dict(kind='create',path=parent+'/'+name(j),data_hex='') for j in range(fill)])
+    check(not rawstat(root/'image.img',parent)[0]&0x1000);original=stat(s,parent);target=parent+'/'+name(999)
+    if kind=='mkdir':s.mkdir(target)
+    elif kind=='link':s.link('/legacy/'+name(0),target)
+    elif kind=='symlink':s.symlink('/legacy/'+name(0),target)
+    elif kind=='rename':s.rename('/legacy/'+name(1),target)
+    else:s.mknod(target,0o010600)
+    check(rawstat(root/'image.img',parent)[0]&0x1000);current=stat(s,parent)
+    check(all(current[key]==original[key] for key in ('inode','generation','uid','gid','mode')))
+    check(current['links']==original['links']+int(kind=='mkdir'))
    s.mkdir('/rollback');image=root/'image.img';digest=sha(image);head=s.state['head']
    denied(lambda:s.apply([dict(kind='create',path='/rollback/'+name(i),data_hex='') for i in range(32)]+[dict(kind='unlink',path='/missing')]),errno.ENOENT)
    check(sha(image)==digest and s.state['head']==head);check(not rawstat(image,'/rollback')[0]&0x1000)

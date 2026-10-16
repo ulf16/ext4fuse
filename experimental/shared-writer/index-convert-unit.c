@@ -25,8 +25,7 @@ int main(int argc, char **argv) {
     overlay_fail_writes(active_overlay, boundaries[i]);
     errcode_t e = namespace_index_convert(fs, ino);
     if (!e) {
-      e = ext2fs_close(fs);
-      fs = NULL;
+      e = ext2fs_close_free(&fs);
     }
     if (!e) {
       assert(!overlay_publish(active_overlay));
