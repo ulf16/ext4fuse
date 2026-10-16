@@ -82,7 +82,7 @@ def io_fault(root, target, action, code, persistent=False):
         nonlocal calls
         if selected(fd):
             calls += 1
-            if action == 'short':
+            if action == 'short' and (persistent or not hits):
                 hits.append('short'); return original_pwrite(fd, data[:min(113, len(data))], offset)
             if persistent or not hits:
                 hits.append('pwrite')

@@ -96,9 +96,19 @@ def start(label):
     return child
 
 
-def kill(child):
+def kill(child, group=False):
     if child is not None and child.poll() is None:
-        os.killpg(child.pid, signal.SIGKILL); child.wait(timeout=30)
+        try:
+            if group:
+                try: os.killpg(child.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError): child.kill()
+            else:
+                # Workers have no children. Target the Popen child directly; a
+                # just-exited group may already be gone while poll raced exit.
+                child.kill()
+        except ProcessLookupError:
+            pass
+        child.wait(timeout=30)
 
 
 def verify_mounted():
@@ -125,21 +135,21 @@ try:
                     '--seed', str(a.seed), '--worker', str(mount), str(cycle), str(writer)],
                     stdout=subprocess.PIPE, stderr=log, start_new_session=True)
                 log.close(); workers.append(child); poll.register(child.stdout, selectors.EVENT_READ)
-            count = 0; deadline = time.monotonic()+240
-            while count < a.acks:
+            count = 0; seen = set(); deadline = time.monotonic()+240
+            while count < a.acks or len(seen) < 2:
                 if time.monotonic() >= deadline: raise TimeoutError('mounted writers stalled: '+str(base))
                 for key, unused in poll.select(1):
                     raw = key.fileobj.readline(4097)
                     if not raw: raise AssertionError('mounted worker exited: '+str(base))
                     ack = json.loads(raw)
-                    acknowledged.append(ack)
+                    acknowledged.append(ack); seen.add(ack['writer'])
                     recorded.write(raw); durable.sync(recorded.fileno())
                     count += 1
-                    if count >= a.acks: break
+                    if count >= a.acks and len(seen) == 2: break
         # Crash while both writers may have the next unacknowledged operation
         # in flight. Kill workers too, so their open descriptors cannot hold the
         # stale attachment during normal unmount.
-        kill(broker); broker = None
+        kill(broker, group=True); broker = None
         for child in workers: kill(child); child.stdout.close()
         workers = []
         detached = subprocess.run([cli, 'unmount', state], capture_output=True, timeout=120)
@@ -156,7 +166,7 @@ try:
     model.command(['e2fsck', '-fn', state/'chain'/'image.img'])
 finally:
     for child in workers: kill(child); child.stdout.close()
-    kill(broker)
+    kill(broker, group=True)
     if attached(mount):
         subprocess.run([cli, 'unmount', state], timeout=120)
 
