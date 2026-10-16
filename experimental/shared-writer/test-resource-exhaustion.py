@@ -18,8 +18,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from unittest.mock import patch
 import chain
+import direct_device as direct
+import time
 import durable
 import inplace
 import session
@@ -28,14 +31,15 @@ import endurance_model as model
 
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--work', type=Path, required=True)
-p.add_argument('--phase', choices=('all', 'volume', 'log', 'memory'), default='all')
+p.add_argument('--phase', choices=('all', 'volume', 'log', 'direct-log', 'memory'), default='all')
 p.add_argument('--memory-worker', type=Path, help=argparse.SUPPRESS)
 a = p.parse_args()
 MiB = 1024**2
 
 
-def opened(root):
-    return session.Session(root, a.work/'mutation-producer', a.work/'reader-server', Credentials(0, 0))
+def opened(root, target=None):
+    return session.Session(root, a.work/'mutation-producer', a.work/'reader-server',
+                           Credentials(0, 0), commit_sink=target)
 
 
 def checked(image):
@@ -131,11 +135,11 @@ def volume(base, block_size):
 
 
 @contextlib.contextmanager
-def bounded_volume(base):
-    mount = base/'log-volume'; mount.mkdir()
+def bounded_volume(base, sparse=False):
+    mount = base/'log-volume'; mount.mkdir(exist_ok=True)
     if sys.platform == 'darwin':
-        image = base/'bounded-log.dmg'
-        model.command(['hdiutil', 'create', '-size', '64m', '-fs', 'HFS+', '-volname',
+        image = base/('bounded-log-'+uuid.uuid4().hex+'.dmg')
+        model.command(['hdiutil', 'create', '-size', '128m' if sparse else '64m', '-fs', 'APFS' if sparse else 'HFS+', '-volname',
                        'ext4-exhaustion-test', image])
         info = plistlib.loads(model.command(['hdiutil', 'attach', '-nobrowse', '-mountpoint', mount, '-plist', image]))
         device = next(e['dev-entry'] for e in info['system-entities'] if e.get('mount-point') == str(mount))
@@ -159,7 +163,7 @@ def fill(path):
                 n = f.write(chunk)
                 assert n > 0
                 written += n
-                assert written <= 80*MiB, 'bounded volume exceeded safety ceiling'
+                assert written <= 144*MiB, 'bounded volume exceeded safety ceiling'
             except OSError as e:
                 assert e.errno == errno.ENOSPC, e
                 # Consume any smaller tail left after a large write was refused.
@@ -194,6 +198,10 @@ def logs(base):
                     assert hits, ('boundary missed', stage)
                     # No space is released until the failed session closes.
                     failed_closed = s._failed
+                    if failed_closed:
+                        try: s.read('/ack')
+                        except OSError as e: assert e.errno == errno.EIO
+                        else: raise AssertionError('failed session served a stale reader')
             finally:
                 filler.unlink(missing_ok=True)
                 durable.directory(mount)
@@ -207,6 +215,7 @@ def logs(base):
                     assert read_all(s, '/candidate', 2*MiB) == b'C'*(2*MiB)
                     assert s.statat(None, '/candidate')['inode'] == s.statat(None, '/candidate-alias')['inode']
                     committed = True
+                if stage in ('before-request', 'record'): assert not committed
                 if stage in ('prepared', 'applied', 'head-ready'):
                     assert committed, 'sealed redo was lost'
                     assert failed_closed, 'blocked replay must fail closed'
@@ -219,6 +228,87 @@ def logs(base):
     return rows
 
 
+def admit(call):
+    deadline = time.monotonic()+15
+    while True:
+        try: return call()
+        except OSError as e:
+            if sys.platform != 'linux' or e.errno not in (errno.EAGAIN, errno.EBUSY) or time.monotonic() >= deadline: raise
+            time.sleep(.2)
+
+
+@contextlib.contextmanager
+def direct_target(root, device):
+    target = admit(lambda: direct.Controller(root, device, a.work).__enter__())
+    try: yield target
+    finally: target.__exit__()
+
+
+def direct_logs(base):
+    backing = base/'device.img'; seed(backing)
+    if sys.platform == 'darwin':
+        info = plistlib.loads(model.command(['hdiutil', 'attach', '-nomount', '-imagekey',
+                                            'diskimage-class=CRawDiskImage', '-plist', backing]))
+        device = min((e['dev-entry'] for e in info['system-entities'] if 'dev-entry' in e), key=len)
+    else:
+        device = model.command(['losetup', '--find', '--show', backing]).decode().strip()
+        if shutil.which('udevadm'): model.command(['udevadm', 'settle', '--timeout=15'])
+    rows = []
+    try:
+        with bounded_volume(base, sparse=True) as mount:
+            root = mount/'direct'
+            admit(lambda: direct.init(device, root, a.work))
+            with direct_target(root, device) as target:
+                # Admission must identify exactly our newly created backing image.
+                assert target.target.identity['kind'] in ('disk-image', 'loop')
+                assert Path(target.target.identity['backing']['path']).resolve() == backing.resolve()
+                with opened(target.chain, target) as s:
+                    s.applyat([dict(kind='create', path='/ack', data_hex=b'device acknowledged'.hex())])
+                    s.checkpoint()
+                target.finish()
+            for number, stage in enumerate(('record', 'prepared', 'applied', 'head-ready', 'direct:closing')):
+                filler = mount/'space-filler'; hits = []
+                original = inplace.boundary
+                def boundary(name):
+                    original(name)
+                    if name == stage and not hits: hits.append(fill(filler))
+                candidate = f'/candidate-{number}'
+                try:
+                    with direct_target(root, device) as target:
+                        with patch.object(inplace, 'boundary', boundary), patch.object(direct, 'boundary', boundary):
+                            try:
+                                with opened(target.chain, target) as s:
+                                    s.applyat([dict(kind='create', path=candidate, data_hex=(bytes([number+1])*MiB).hex())])
+                                target.finish()
+                            except (OSError, ValueError) as e: failure = type(e).__name__+': '+str(e)
+                            else: raise AssertionError(('direct log exhaustion did not fail', stage))
+                        assert hits, ('direct boundary missed', stage)
+                finally:
+                    filler.unlink(missing_ok=True); durable.directory(mount)
+                with direct_target(root, device) as target:
+                    with opened(target.chain, target) as s:
+                        assert s.read('/ack') == b'device acknowledged'
+                        if stage == 'record': absent(s, candidate)
+                        else: assert s.read(candidate) == bytes([number+1])*MiB
+                        # Every earlier successfully acknowledged close-stage file remains.
+                        for prior in rows:
+                            if prior['committed']:
+                                assert s.read(prior['path']) == bytes([prior['number']+1])*MiB
+                        for prior_number in range(number):
+                            assert s.read(f'/resumed-{prior_number}') == b'resumed'
+                        s.applyat([dict(kind='create', path=f'/resumed-{number}', data_hex=b'resumed'.hex())])
+                        s.checkpoint()
+                    target.finish()
+                checked(backing)
+                assert (root/'chain/image.img').stat().st_blocks == 0
+                rows.append(dict(stage=stage, number=number, path=candidate, committed=stage!='record',
+                                 bytes_filled=hits[0], error=failure))
+                print('PASS actual off-device recovery-log exhaustion', stage, flush=True)
+    finally:
+        model.command(['hdiutil', 'detach', device] if sys.platform == 'darwin' else ['losetup', '--detach', device])
+    return rows
+
+
 def memory_worker(request):
     cfg = json.loads(request.read_text()); root = Path(cfg['root'])
     # RLIMIT_AS is not implemented reliably by Darwin. Linux gives a hard,
@@ -226,11 +316,16 @@ def memory_worker(request):
     with opened(root) as s:
         ops = [dict(kind='create', path='/candidate', data_hex=(b'M'*(2*MiB)).hex())]
         resource.setrlimit(resource.RLIMIT_AS, (cfg['limit'], cfg['limit']))
-        held = []; failure = None; hits = []
+        held = []; failure = None; hits = []; allocated = 0
         def exhaust():
+            nonlocal allocated
             hits.append(True)
             try:
-                while True: held.append(bytearray(64*1024))
+                while True:
+                    chunk = bytearray(64*1024)
+                    # Touch each page so retained allocations consume resident memory.
+                    chunk[::4096] = b'M'*16
+                    held.append(chunk); allocated += len(chunk)
             except MemoryError: pass
         original = inplace.boundary
         def boundary(name):
@@ -242,10 +337,11 @@ def memory_worker(request):
         except (MemoryError, OSError, ValueError) as e:
             failure = type(e).__name__
         finally: held.clear()
-        assert hits and failure, 'memory budget did not reject transaction'
+        assert hits and failure and allocated > 8*MiB, 'memory budget did not reject transaction'
         failed_closed = s._failed
     request.with_suffix('.result').write_text(json.dumps(dict(limit=cfg['limit'], stage=cfg['stage'],
-                                               failure=failure, failed_closed=failed_closed)))
+                                               failure=failure, failed_closed=failed_closed, resident_kib=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+                                               touched_bytes=allocated)))
 
 
 
@@ -285,8 +381,12 @@ report = dict(result='running', diagnostics=str(base), platform=sys.platform)
 try:
     if a.phase in ('all', 'volume'): report['volume'] = volume(base, 1024)+volume(base, 4096)
     if a.phase in ('all', 'log'): report['log'] = logs(base)
+    if a.phase in ('all', 'direct-log'): report['direct_log'] = direct_logs(base)
     if a.phase in ('all', 'memory'): report['memory'] = memory(base)
     report['result'] = 'passed'
+except BaseException as e:
+    report['result'] = 'failed'; report['error'] = type(e).__name__+': '+str(e)
+    raise
 finally:
     (a.work/('resource-exhaustion-results.json' if a.phase == 'all' else f'resource-exhaustion-{a.phase}-results.json')).write_text(json.dumps(report, indent=2)+'\n')
 print(json.dumps(report, sort_keys=True), flush=True)

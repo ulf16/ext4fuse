@@ -64,8 +64,15 @@ an error at an I/O call site:
   during page logging, after redo sealing, after image application and before head
   publication. No filler is written to the host volume. Sealed transactions must
   recover after space returns; incomplete transactions must not partly publish.
+- A separate virtual ext4 device repeats logging, sealing, application and head
+  publication failures with its recovery log on a different bounded volume. It
+  also fills that volume during clean device publication. The identity token must
+  remain sparse, acknowledged bytes must survive, and recovery must restore a
+  clean independently checked device. On macOS this uses a 128 MiB APFS log image;
+  HFS+ cannot satisfy the sparse-token requirement. No physical disk is used.
 - Linux workers exhaust their own address space under hard 96/128 MiB limits,
-  before preparation and at sealed/replay stages. Independent unrestricted parents
+  before preparation and at sealed/replay stages. Each retained page is touched
+  to consume resident memory; the report records the allocation and peak RSS. Independent unrestricted parents
   recover the chain and check acknowledged bytes. These are process-local allocation
   failures, not system-wide swapping or kernel OOM-killer qualification. Darwin's
   unreliable `RLIMIT_AS` implementation is explicitly reported as not run; Linux
@@ -110,8 +117,8 @@ in the work directory; the bounded recovery volume is detached on exit.
 
 - Longer multi-hour and higher-volume workloads, including simultaneous writers
   during exhaustion, system-wide memory pressure/OOM termination, and exhaustion
-  of the filesystem containing a physical-device recovery log. The bounded managed
-  image campaign covers actual block/inode/log-space exhaustion and process-local
+  on representative real devices. The bounded managed-image and virtual-device
+  campaigns cover actual block/inode/log-space exhaustion and process-local
   allocation failures; it does not establish those wider guarantees.
 - Controlled real power interruption of a disposable target, with several device,
   bridge and sector-size combinations. Repeat loss during recovery.

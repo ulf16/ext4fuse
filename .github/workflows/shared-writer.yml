@@ -742,7 +742,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install bounded exhaustion dependencies
-        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - name: Require disposable loop devices
+        run: sudo modprobe loop
       - name: Build runtime without sanitizer address-space reservations
         run: python3 experimental/shared-writer/build.py --runtime-only --work "$RUNNER_TEMP/exhaustion"
       - name: Fill disposable ext4 and recovery volumes and exhaust child memory
