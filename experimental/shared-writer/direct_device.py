@@ -201,8 +201,10 @@ class Controller:
    if self.integrity is not None:
     self.integrity.stamp=merkle.fingerprint(os.stat(self.chain/'image.img'))
    return self
-  except BaseException:self.stack.close();raise
- def __exit__(self,*unused):self.stack.close()
+  except BaseException:self.stack.close();self.integrity=None;raise
+ def __exit__(self,*unused):
+  try:self.stack.close()
+  finally:self.integrity=None
  def initial_integrity(self,current):
   if self.integrity is None:return None
   self.require_guard()
@@ -244,7 +246,9 @@ class Controller:
  def finish(self):
   if self.failed:refuse('failed direct session must keep device guarded')
   with chain.locked(self.chain):
-   # Preserve a full close audit, but reuse its tree for all following checks.
+   # The session is closed and chain-lock held: release the old index before
+   # allocating the one full close audit's tree.
+   self.integrity=None
    current,tree=chain.recover_integrity_locked(self.chain);self.recover_integrity(current,tree)
    uuid,_=checked(self.chain/'image.img',self.target,self.work,self.root,self.check_bytes)
    if uuid!=self.state['uuid']:refuse('direct filesystem identity changed')

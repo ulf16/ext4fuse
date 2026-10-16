@@ -730,6 +730,7 @@ class Session:
                     self._process.stdout.close()
             finally:
                 self._lock.__exit__(None, None, None)
+                self._integrity = None
             if cleanup_error is not None:
                 raise cleanup_error
 

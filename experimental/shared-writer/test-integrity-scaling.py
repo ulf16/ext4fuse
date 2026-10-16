@@ -190,6 +190,8 @@ with patch.object(merkle,'MAX_CACHE',4096),patch.object(merkle_store,'PAGE',1024
             s.checkpoint();check(s.read('/scale')==value)
             check(len(s._integrity.nodes.pages)<=4)
         s.scrub();check(s.read('/scale')==value)
+        scratch=s._integrity.nodes.file
+    check(scratch.closed)
     proc=subprocess.run([sys.executable,'-c',worker,str(Path(__file__).parent),str(paged_root),str(a.work)],capture_output=True,timeout=120)
     check(proc.returncode==77)
     with session.Session(paged_root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
