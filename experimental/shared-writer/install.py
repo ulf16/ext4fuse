@@ -67,6 +67,7 @@ def main():
     doc = target / 'share' / 'doc' / 'ext4fuse-writer'
     doc.mkdir(parents=True, exist_ok=True)
     shutil.copy2(HERE / 'WORKFLOW.md', doc / 'WORKFLOW.md')
+    shutil.copy2(HERE / 'DURABILITY.md', doc / 'DURABILITY.md')
     shutil.copy2(HERE / 'README.md', doc / 'ENGINE.md')
     shutil.copy2(HERE.parents[1] / 'COPYING', doc / 'COPYING')
     man = target / 'share' / 'man' / 'man1'

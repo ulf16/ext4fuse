@@ -157,3 +157,10 @@ mapped writes require `msync(MS_SYNC)` followed by `fsync()` to observe write er
 Native macOS hole-punch argument forwarding, contiguous preallocation and FIFO/
 device-node I/O remain limited/deferred. The packaged command does not enable host
 device-node I/O or multi-user mounts. It exposes no arbitrary FUSE option passthrough.
+
+## Durability qualification
+
+The installed [DURABILITY.md](DURABILITY.md) describes the mixed-workload,
+I/O-error, concurrent mounted-writer and simulated device-cache-loss campaigns,
+their acceptance rules, reproducible commands and the remaining hardware/host
+power-loss qualification. Software test success alone is not power-loss certification.

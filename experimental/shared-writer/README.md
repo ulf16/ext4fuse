@@ -2066,3 +2066,12 @@ open directory/file descriptors through automatic conversion, rename and writes.
 rejects repaired-checksum duplicate corruption and allocation changes, and checks
 rollback/refresh invalidation and a deliberately tiny cache. CI runs both suites
 with address/undefined sanitizers and independent e2fsck checks.
+
+
+### Durability and endurance qualification
+
+See [DURABILITY.md](DURABILITY.md) for the seeded transaction oracle, retained
+acknowledgement checks, reported-storage-error matrix, simulated unflushed-sector
+loss/tears and concurrent mounted-writer crash/recovery campaign. The guide states
+the model's assumptions and the outstanding real hardware/recovery-log power-loss
+qualification explicitly.
