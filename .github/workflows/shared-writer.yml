@@ -583,3 +583,29 @@ jobs:
             ${{ runner.temp }}/namespace-extensions/mounted-namespace-extensions-results.json
             ${{ runner.temp }}/namespace-extensions/mounted-namespace-root-results.json
             ${{ runner.temp }}/namespace-extensions/mounted-namespace-device-results.json
+
+  mapped-io:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native mapping test dependencies
+        run: sudo apt-get update && sudo apt-get install -y fuse3 libfuse3-dev libext2fs-dev e2fsprogs pkg-config
+      - name: Require native FUSE
+        run: sudo modprobe fuse && test -c /dev/fuse
+      - name: Build sanitized mmap runtime
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/mapped-io" --sanitize
+      - name: Prepare checked filesystem profiles
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/mapped-io"
+      - name: Verify native mappings, shared cache, truncation and inode lifetime
+        run: python3 experimental/shared-writer/test-mounted-mmap.py --work "$RUNNER_TEMP/mapped-io"
+      - name: Verify page writeback errors and retry
+        run: python3 experimental/shared-writer/test-mmap-writeback-errors.py --work "$RUNNER_TEMP/mapped-io"
+      - name: Save mmap validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapped-io-validation
+          path: |
+            ${{ runner.temp }}/mapped-io/mounted-mmap-results.json
+            ${{ runner.temp }}/mapped-io/mmap-writeback-errors-results.json

@@ -419,6 +419,21 @@ class Session:
                 self._failed=True;raise OSError(errno.EIO,'inode open grant mismatch')
             return self._opened(reply)
 
+    def _mount_writeback(self, handle, offset, data):
+        """Kernel page write using existing open rights and a positional offset.
+
+        O_APPEND affects write(2), not MAP_SHARED page offsets. The trusted
+        broker may derive a positional grant; inode append-only and immutable
+        checks still run in the writer. No grant comes from the mounted caller.
+        """
+        with self._mutex:
+            _,grant=self._rpc(11,self._file(handle))
+            inode,generation,access,flags=struct.unpack('<IIII',grant)
+            if flags not in (0,1) or not access&2:raise OSError(errno.EBADF,'writeback requires a writable file')
+            grant=struct.pack('<IIII',inode,generation,access,0)
+            self._apply_request(write_api.encode_grant(self.credentials,grant,'write',offset,data))
+            return len(data)
+
     def _mount_metadata_batch(self, operations, handles):
         with self._mutex:
             grants=[self._rpc(36,self._file(h))[1] for h in handles]

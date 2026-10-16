@@ -974,8 +974,10 @@ File/dir inode handles survive rename and the broker preserves their open-time
 rights. Every acknowledged write/namespace mutation is durably committed through
 the existing recovery engine; flush does not close a handle shared by dup/fork,
 and fsync checks the still-live handle/session after already committed writes.
-Regular-file direct I/O, zero attribute/entry/negative timeouts and disabled
-writeback/directory caching avoid serving stale kernel data after commits.
+Regular files use the shared kernel page cache for coherent mmap and ordinary
+I/O. Attribute/entry/negative timeouts remain zero, directory caching and optional
+FUSE writeback-cache negotiation remain disabled, and private control mutations
+explicitly flush/invalidate data as described in the mmap section below.
 Mounted stat reports actual write bits, Linux uid/gid, inode/link counts, logical
 size, allocated 512-byte sectors and validated timestamps. Space/inode counts are
 reported from current libext2fs metadata without the read-only flag.
@@ -1015,8 +1017,9 @@ older frontend are retained for explicit owner inspection.
 
 Setattr and native ACL editing use atomic inode-grant batches, including combined
 truncate/ownership/mode/timestamp changes. Namespace, data and metadata transactions
-still commit durably before acknowledgement. Regular-file direct I/O and zero entry/
-attribute timeouts remain; there is no writeback cache, NFS export or multi-user mount.
+still commit durably before acknowledgement. Shared regular-file caching and zero entry/attribute timeouts are described in
+the mmap section below; there is no optional FUSE writeback-cache mode, NFS export
+or multi-user mount.
 A disconnected macFUSE mount may require explicit `umount -f MOUNTPOINT` before
 reusing its mountpoint. This does not replace managed-image transaction recovery.
 
@@ -1881,3 +1884,58 @@ runs privileged Linux device-node creation under nodev and actual host-null I/O
 with the explicit dev opt-in. Backend tests cover whiteout replacement, hard-link
 same-inode no-ops, cross-parent directories, pinned overwritten targets, atomic
 batch rollback, indexed markers and every sealed-replay crash boundary.
+
+
+## Writable mappings and cache coherence
+
+Regular-file create/open replies now retain the shared kernel data cache instead
+of forcing direct I/O. This enables MAP_SHARED writable mappings and MAP_PRIVATE
+copies on native macFUSE and Linux FUSE mounts. Ordinary reads/writes and mappings
+use the same cached pages; reopening must not purge dirty mapped bytes. Optional
+FUSE_WRITEBACK_CACHE stays disabled. Automatic mtime-based data invalidation is
+also disabled, because all ordinary data changes pass through this same private
+mount. Zero metadata/entry timeouts and inode generation validation remain.
+
+Mapped stores are not a transaction acknowledgement. Applications must synchronize
+them: use msync(MS_SYNC), followed by fsync for durable completion and error
+reporting. Once the kernel sends a write callback, the existing transaction engine
+still seals, commits and checks it before replying. A mapping can produce several
+such transactions; an entire mapped range is not one atomic transaction.
+
+Kernel paging reads/writes without ordinary caller context use only an existing
+inode-bound data handle. They do not turn lookup pins into read/write grants.
+Private page-write operation 130 derives a positional write from an authenticated
+writable handle, ignoring descriptor O_APPEND for page offsets; ordinary write
+callbacks preserve append behavior. The writer still rejects immutable and
+append-only inode violations. Read-only handles cannot obtain writeback grants.
+Mappings and kernel-held open references preserve inode lifetime after user fds
+close and after rename/hard-link/unlink. Permission changes do not retroactively
+revoke already authorized open/mapped rights.
+
+Write errors are recorded on the live inode with a sequence observed separately
+by each existing open handle. Flush/fsync reports an unseen failure even if another
+paging handle issued the write, or a later retry succeeded. Newly opened handles
+start at the current sequence. Bad-handle/shape/permission admission errors do not
+poison unrelated valid handles. On tested macOS, msync can return success despite
+a FUSE write error; the subsequent fsync is necessary to observe the recorded
+EIO or ENOSPC. Linux tests also exercise native error propagation. No successful
+munmap or close alone is claimed to guarantee mapped durability.
+
+The private allocation/punch control channel retains its authorized inode handle,
+flushes and invalidates kernel pages before mutation, performs the transaction,
+then invalidates again before acknowledgement. Notification waits hold neither
+the session mutex nor the foreground FUSE transport mutex, so paging callbacks can
+finish. A newly observed flush write error refuses the control mutation. Concurrent
+application stores versus hole punching still require application synchronization;
+the private command does not lock user memory against concurrent writers.
+
+`test-mounted-mmap.py` checks all twelve filesystem profiles: cross-page/partial-EOF
+writes, reopening and cross-process coherence, shared/private and read-only maps,
+fd-close/unlink lifetime, permission revocation, append mappings, dirty truncation
+and growth, dirty-page hole punching, and write-only unaligned ordinary I/O.
+Independent debugfs reads and post-unmount fsck verify committed bytes and layout.
+SIGBUS after truncation was verified natively on macOS; repeated crash-producing
+workers are now confined to Linux CI. `test-mmap-writeback-errors.py` injects EIO
+and ENOSPC, requires synchronization to report each error, retries the dirty data
+and independently verifies the committed result. Low-level broker tests exercise
+writeback binding/rights and independent per-handle error observation.

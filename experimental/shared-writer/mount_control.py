@@ -48,10 +48,17 @@ def control(s,path,notify):
       # directory admits only the launching owner; normal write policy applies.
       with s._mutex:
        s._mount_context(Credentials(os.getuid(),os.getgid(),tuple(os.getgroups()),0o077))
-       with s.openat(None,name,'w') as h:
-        inode=int.from_bytes(s._mount_stat(handle=h)[:8],'little')
+       h=s.openat(None,name,'w')
+       inode=int.from_bytes(s._mount_stat(handle=h)[:8],'little')
+      # Hold the authorized inode pin, not the session mutex, while kernel
+      # dirty-page flushes call back into the ordinary mounted writer.
+      try:
+       notify(inode)
+       with s._mutex:
+        s._mount_context(Credentials(os.getuid(),os.getgid(),tuple(os.getgroups()),0o077))
         state=h.allocate(offset,length,mode)
-      notify(inode)
+       notify(inode)
+      finally:h.close()
       reply=dict(error=0,head=state['head'])
      except (ValueError,TypeError,KeyError,RecursionError,json.JSONDecodeError) as e:reply=dict(error=errno.EINVAL,message=str(e))
      except OSError as e:reply=dict(error=e.errno or errno.EIO,message=str(e))

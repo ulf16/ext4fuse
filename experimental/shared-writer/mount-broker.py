@@ -232,7 +232,7 @@ class LowBroker(Broker):
     NODE_LIMIT=4096
     def __init__(self,s):
         super().__init__(s)
-        self.nodes={};self.native_nodes={};self.bindings={};self.last_node=1
+        self.nodes={};self.native_nodes={};self.bindings={};self.error_seen={};self.last_node=1
 
     def node(self,number):
         if number not in self.nodes:raise OSError(errno.ESTALE,'forgotten kernel node')
@@ -255,7 +255,7 @@ class LowBroker(Broker):
             if root:number=1
             else:
                 self.last_node+=1;number=self.last_node
-            self.nodes[number]=dict(handle=handle,inode=ino,generation=generation,lookups=0,opens=0)
+            self.nodes[number]=dict(handle=handle,inode=ino,generation=generation,lookups=0,opens=0,error_seq=0,error_errno=0)
             self.native_nodes[handle._token]=number
         node=self.node(number)
         if not root:
@@ -280,7 +280,7 @@ class LowBroker(Broker):
         except BaseException:
             try:
                 if fh is not None:
-                    del self.handles[fh];del self.bindings[fh]
+                    del self.handles[fh];del self.bindings[fh];self.error_seen.pop(fh,None)
                     self.node(number)['opens']-=1
                     opened.close()
             finally:self.forget(number,1)
@@ -302,7 +302,20 @@ class LowBroker(Broker):
     def opened(self,number,h):
         self.handles[h._token]=h;self.bindings[h._token]=number
         self.node(number)['opens']+=1
+        self.error_seen[h._token]=self.node(number)['error_seq']
         return h._token
+
+    def record_write_error(self,node,error):
+        # Keep one bounded error record per live inode. Each handle observes
+        # errors after its open independently, including another paging handle's
+        # error on macOS. A successful retry must not erase an unseen failure.
+        if error.errno in (errno.EBADF,errno.EINVAL,errno.ESTALE,errno.EACCES):return
+        node['error_seq']+=1;node['error_errno']=error.errno or errno.EIO
+
+    def report_write_error(self,fh,node):
+        if self.error_seen[fh]!=node['error_seq']:
+            self.error_seen[fh]=node['error_seq']
+            raise OSError(node['error_errno'],'earlier cached file write failed')
 
     def flags(self,flags,*,create=False,directory=False):
         allowed=os.O_ACCMODE|(0o100000 if sys.platform=='linux' else 0)
@@ -330,10 +343,10 @@ class LowBroker(Broker):
             return 0,b''
         if not self.initialized:raise OSError(errno.EBUSY,'mount handshake required')
         named={101,105,113,114,115,116,117,118,129}
-        payload={106,107,108,116,118,124,125,126,128,129}
+        payload={106,107,108,116,118,124,125,126,128,129,130}
         if (bool(path)!=(op in named) or (data and op not in payload) or
             (op==106 and len(data)!=8) or (op==108 and len(data)!=64) or
-            (op not in (103,106,107,108,109,111,112,116,121,122,128) and offset)):
+            (op not in (103,106,107,108,109,111,112,116,121,122,128,130) and offset)):
             raise OSError(errno.EINVAL,'invalid low-level operation shape')
         if op==102:
             if path or data or offset:raise OSError(errno.EINVAL,'invalid forget request')
@@ -367,14 +380,24 @@ class LowBroker(Broker):
             try:number=self.remember(h,path)
             except BaseException:opened.close();raise
             return self.finish_entry(number,opened)
+        if op==130:
+            opened=self.bound(offset,token)
+            if arg>2**63-1-len(data):raise OSError(errno.EFBIG,'writeback offset overflow')
+            try:return self.s._mount_writeback(opened,arg,data),b''
+            except OSError as e:self.record_write_error(node,e);raise
         if op in (106,107,111,121,122):
             fh=offset
             opened=self.bound(fh,token)
             original={106:4,107:5,111:9,121:19,122:20}[op]
-            return super().dispatch(original,b'',b'' if op==106 else data,uid,gid,umask,groups,fh,arg,struct.unpack('<Q',data)[0] if op==106 and len(data)==8 else 0)
+            try:result=super().dispatch(original,b'',b'' if op==106 else data,uid,gid,umask,groups,fh,arg,struct.unpack('<Q',data)[0] if op==106 and len(data)==8 else 0)
+            except OSError as e:
+                if op==107:self.record_write_error(node,e)
+                raise
+            if op in (121,122):self.report_write_error(fh,node)
+            return result
         if op in (109,112):
             opened=self.bound(offset,token)
-            del self.handles[offset];del self.bindings[offset]
+            del self.handles[offset];del self.bindings[offset];self.error_seen.pop(offset,None)
             node['opens']-=1;opened.close();self.drop(token);return 0,b''
         if op in (113,118):
             self.capacity();self.component(path)
@@ -518,9 +541,9 @@ def _run_mount(s,work,mount,control_socket,allow_device_nodes):
         raise
     os.close(notify_read);os.close(ack_write)
     def notify(inode):
-        with s._mutex:numbers=[number for number,node in broker.nodes.items() if node['inode']==inode]
+        with s._mutex:numbers=[(number,node['error_seq']) for number,node in broker.nodes.items() if node['inode']==inode]
         try:
-            for number in numbers:
+            for number,previous_error in numbers:
                 os.write(notify_write,struct.pack('<Q',number))
                 if not select.select([ack_read],[],[],10)[0]:raise OSError(errno.EIO,'kernel invalidation timed out')
                 raw=os.read(ack_read,8)
@@ -530,6 +553,12 @@ def _run_mount(s,work,mount,control_socket,allow_device_nodes):
         except BaseException:
             with s._mutex:s._failed=True
             raise
+
+        with s._mutex:
+            for number,previous_error in numbers:
+                node=broker.nodes.get(number)
+                if node is not None and node['error_seq']!=previous_error:
+                    raise OSError(node['error_errno'],'cache flush failed before control operation')
 
     try:
         with control(s,control_socket,notify):serve(broker,frontend)

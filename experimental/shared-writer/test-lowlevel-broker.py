@@ -59,6 +59,25 @@ with tempfile.TemporaryDirectory(prefix='lowlevel-broker-',dir=a.work) as tmp:
    call(108,node,data=payload,fh=fh);check(struct.unpack_from('<Q',call(103,node,fh=fh)[1],8)[0]&0o777==0o640)
    call(109,node,fh=fh);check(node not in b.nodes);denied(lambda:call(103,node),errno.ESTALE)
    check(s._rpc(12)[0]==0)
+   # Page writeback retains existing rights but never applies O_APPEND.
+   wn,we=call(105,path=b'writeback',arg=(0o600<<32)|os.O_RDWR|os.O_CREAT|os.O_APPEND)
+   wf=struct.unpack_from('<Q',we)[0];call(107,wn,data=b'abcdef',fh=wf)
+   check(call(130,wn,data=b'XY',fh=wf,arg=1)==(2,b''))
+   check(call(106,wn,data=struct.pack('<Q',20),fh=wf)[1]==b'aXYdef')
+   call(107,wn,data=b'!',fh=wf,arg=0);check(call(106,wn,data=struct.pack('<Q',20),fh=wf)[1]==b'aXYdef!')
+   rf,_=call(104,wn,arg=os.O_RDONLY)
+   denied(lambda:call(130,wn,data=b'bad',fh=rf),errno.EBADF)
+   denied(lambda:call(130,1,data=b'bad',fh=wf),errno.ESTALE)
+   denied(lambda:call(130,wn,data=b'bad',fh=wf,uid=os.getuid()+1),errno.EACCES)
+   denied(lambda:call(130,wn,data=b'bad',fh=wf,arg=2**63-1),errno.EFBIG)
+   second,_=call(104,wn,arg=os.O_RDWR)
+   with patch.object(s,'_mount_writeback',side_effect=OSError(errno.EIO,'page write failed')):
+    denied(lambda:call(130,wn,data=b'bad',fh=wf),errno.EIO)
+   call(130,wn,data=b'OK',fh=wf,arg=0) # Retry cannot erase an unseen error.
+   denied(lambda:call(122,wn,fh=wf),errno.EIO);check(call(122,wn,fh=wf)==(0,b''))
+   denied(lambda:call(122,wn,fh=second),errno.EIO);check(call(122,wn,fh=second)==(0,b''))
+   call(109,wn,fh=second)
+   call(109,wn,fh=rf);call(109,wn,fh=wf);call(115,path=b'writeback');call(102,wn,arg=1)
    # Metadata-only pins must never confer file-data rights.
    n,entry=call(105,path=b'closed',arg=(0o600<<32)|os.O_RDWR|os.O_CREAT);f=struct.unpack_from('<Q',entry)[0];call(109,n,fh=f)
    denied(lambda:s._rpc(8,s._file(b.node(n)['handle']),0,1),errno.EBADF)

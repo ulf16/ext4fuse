@@ -110,7 +110,7 @@ static int rpc(fuse_req_t req, unsigned op, const char *path,
   const struct fuse_ctx *ctx = req ? fuse_req_ctx(req) : NULL;
   int internal = !req || op == 102 || op == 109 || op == 112 || op == 121 ||
                  op == 122 ||
-                 (ctx && !ctx->pid && !ctx->uid && (op == 103 || op == 120));
+                 (ctx && !ctx->pid && !ctx->uid && (op == 103 || op == 120 || op == 106 || op == 130));
   if (internal)
     ctx = NULL;
   uid_t uid = ctx ? ctx->uid : owner;
@@ -263,8 +263,8 @@ static void entry_reply(fuse_req_t req, unsigned op, fuse_ino_t ino,
     else
       e = entry_data(number, raw + 8, bytes - 8, &entry);
     fi->fh = fh;
-    fi->direct_io = 1;
-    fi->keep_cache = 0;
+    fi->direct_io = 0;
+    fi->keep_cache = 1;
   } else if (!e)
     e = entry_data(number, raw, bytes, &entry);
   free(raw);
@@ -335,8 +335,8 @@ static void open_common(fuse_req_t req, fuse_ino_t ino,
     return;
   }
   fi->fh = fh;
-  fi->direct_io = op == 110 ? 0 : 1;
-  fi->keep_cache = 0;
+  fi->direct_io = 0;
+  fi->keep_cache = 1;
   fi->cache_readdir = 0;
   if (fuse_reply_open(req, fi))
     empty(NULL, op == 110 ? 112 : 109, NULL, NULL, 0, ino, fh, 0);
@@ -383,7 +383,8 @@ static void write_cb(fuse_req_t req, fuse_ino_t ino, const char *buf, size_t n,
   unsigned char *raw = NULL;
   size_t bytes;
   uint64_t value;
-  int e = rpc(req, 107, NULL, buf, n, ino, fi->fh, off, &value, &raw, &bytes);
+  int e = rpc(fi->writepage ? NULL : req, fi->writepage ? 130 : 107, NULL, buf, n,
+          ino, fi->fh, off, &value, &raw, &bytes);
   free(raw);
   if (!e && (bytes || value != n))
     e = -EIO;
@@ -799,6 +800,12 @@ static void removexattr_cb(fuse_req_t req, fuse_ino_t ino, const char *name) {
 static void init_cb(void *unused, struct fuse_conn_info *info) {
   (void)unused;
   info->want &= ~FUSE_CAP_WRITEBACK_CACHE;
+#ifdef FUSE_CAP_AUTO_INVAL_DATA
+  /* All normal data changes use the shared kernel cache. Automatic mtime-based
+   * invalidation can discard or flush dirty mappings during our own commits.
+   * Out-of-band allocation uses the explicit, separate notification channel. */
+  info->want &= ~FUSE_CAP_AUTO_INVAL_DATA;
+#endif
 #ifdef FUSE_DARWIN_CAP_RENAME_EXT
   fuse_darwin_set_feature_flag(info, FUSE_DARWIN_CAP_RENAME_EXT);
 #endif
