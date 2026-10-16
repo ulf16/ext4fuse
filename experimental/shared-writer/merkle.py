@@ -7,6 +7,7 @@ on-disk hash index needs its own crash protocol. The cache is trusted only while
 chain-lock is held and the image's identity/mtime/ctime fingerprint is unchanged.
 """
 import image_io
+from merkle_store import Nodes
 import fcntl
 import hashlib
 import json
@@ -62,23 +63,27 @@ def identity(image, state):
 
 class Tree:
     def __init__(self, size):
-        if size <= 0 or size % PAGE:
+        if type(size) is not int or size <= 0 or size % PAGE or size > 2**63-1:
             raise ValueError('invalid Merkle image size')
         self.size = size
         self.count = (size + CHUNK - 1) // CHUNK
         self.width = 1 << (self.count - 1).bit_length()
-        if self.width * 64 > MAX_CACHE:
-            raise ValueError('Merkle cache exceeds 256 MiB budget')
-        self.nodes = bytearray(self.width * 64)
+        self.nodes = (bytearray(self.width * 64) if self.width * 64 <= MAX_CACHE
+                      else Nodes(self.width * 64, MAX_CACHE))
         self.stamp = None
         for i in range(self.count, self.width):
             self.set(self.width + i, leaf(i, b''))
 
     def get(self, node):
+        if isinstance(self.nodes, Nodes): return self.nodes.get(node)
         return bytes(self.nodes[node * 32:(node + 1) * 32])
 
     def set(self, node, value):
-        self.nodes[node * 32:(node + 1) * 32] = value
+        if isinstance(self.nodes, Nodes): self.nodes.set(node, value)
+        else: self.nodes[node * 32:(node + 1) * 32] = value
+
+    def close(self):
+        if isinstance(self.nodes, Nodes): self.nodes.close()
 
     def finish(self):
         for node in range(self.width - 1, 0, -1):
@@ -111,16 +116,19 @@ class Tree:
         return info
 
 
-def scan(image, state):
+def scan(image, state, *, legacy=False):
     before = fingerprint(identity(image, state))
     tree = Tree(state['size'])
+    whole = hashlib.sha256() if legacy else None
     image.seek(0)
     for index in range(tree.count):
         data = image.read(min(CHUNK, tree.size - index * CHUNK))
         if len(data) != min(CHUNK, tree.size - index * CHUNK):
             raise ValueError('short image during Merkle scan')
+        if whole is not None: whole.update(data)
         tree.set(tree.width + index, leaf(index, data))
     tree.finish()
+    tree.legacy_sha256 = whole.hexdigest() if whole is not None else None
     tree.stamp = fingerprint(identity(image, state))
     if tree.stamp != before:
         raise ValueError('image changed during Merkle scan')
@@ -130,18 +138,14 @@ def scan(image, state):
 def activate(root, state):
     import inplace
     with regular(root / 'image.img') as image:
-        tree = scan(image, state)
+        tree = scan(image, state, legacy=state['version'] == 1)
     if state['version'] == 2:
         if tree.root() != state['sha256']:
             raise ValueError('chain Merkle root mismatch')
     else:
-        # Caller has already verified the legacy whole-image digest. Check it
-        # again across migration so neither format trusts an unchecked image.
-        with regular(root / 'image.img') as image:
-            tree.check(image, dict(state, sha256=tree.root()))
-            if digest(image) != state['sha256']:
-                raise ValueError('legacy image changed during hash migration')
-            tree.check(image, dict(state, sha256=tree.root()))
+        # Legacy digest and Merkle leaves are checked in the same image pass.
+        if tree.legacy_sha256 != state['sha256']:
+            raise ValueError('legacy image changed during hash migration')
         state = dict(state, version=2, algorithm=ALGORITHM, sha256=tree.root())
         inplace.seal(root, 'chain-state', state)
     return state, tree
@@ -261,7 +265,7 @@ def plan(image, log, count, tree, actual, cold=False):
     return tree.updates(leaves)
 
 
-def recover(root, state, tree=None, *, validate_only=False):
+def recover(root, state, tree=None, *, validate_only=False, cache_out=None):
     # Dry validation permits direct import to authenticate all old/new pages
     # before touching the device guard. It neither starts nor publishes replay.
     import inplace
@@ -273,6 +277,7 @@ def recover(root, state, tree=None, *, validate_only=False):
                     raise ValueError('chain image edited outside a transaction')
             else:
                 tree.check(image, state)
+        if cache_out is not None: cache_out.append(tree)
         return state
     generation = root / f"g-{state['pending']:08d}"
     if not (generation / 'transaction').exists():
@@ -369,4 +374,5 @@ def recover(root, state, tree=None, *, validate_only=False):
     boundary('head-ready')
     inplace.seal(root, 'chain-state', result)
     boundary('head-published')
+    if cache_out is not None: cache_out.append(tree)
     return result

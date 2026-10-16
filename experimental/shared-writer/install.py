@@ -15,7 +15,7 @@ BINARIES = ('mutation-producer', 'reader-server', 'mount-frontend', 'journal-can
 MODULES = ('writer_cli.py', 'block-log.py', 'chain.py', 'credentials.py', 'device_admission.py',
            'device-writer.py', 'direct_device.py', 'direct-journal-producer.py', 'durable.py',
            'image_io.py', 'inplace.py', 'journal-producer.py', 'journal_candidate.py',
-           'journal_recovery.py', 'live_device.py', 'merkle.py', 'mount-broker.py',
+           'journal_recovery.py', 'live_device.py', 'merkle.py', 'merkle_store.py', 'mount-broker.py',
            'mount_control.py', 'mount_state.py', 'native_acl.py', 'session.py', 'write-api.py')
 
 

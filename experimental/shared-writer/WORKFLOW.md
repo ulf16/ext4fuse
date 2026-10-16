@@ -32,7 +32,7 @@ Python 3.11+, libfuse3 development files (macFUSE on macOS), and libext2fs/e2fsp
 python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-writer-build
 python3 experimental/shared-writer/install.py --prefix "$HOME/.local" \
   --build-dir /tmp/ext4-writer-build --python "$(command -v python3)" \
-  --version 0.3.0-beta.3
+  --version 0.3.0-beta.4
 "$HOME/.local/bin/ext4fuse-writer" doctor
 ```
 
@@ -164,3 +164,36 @@ The installed [DURABILITY.md](DURABILITY.md) describes the mixed-workload,
 I/O-error, concurrent mounted-writer and simulated device-cache-loss campaigns,
 their acceptance rules, reproducible commands and the remaining hardware/host
 power-loss qualification. Software test success alone is not power-loss certification.
+
+## Integrity-tree storage and scan costs
+
+The old 4 TiB hash-cache ceiling is removed. Oversized trees use a private,
+unlinked temporary node file with a bounded 256 MiB page cache. The existing hash
+format and recovery logs are unchanged. Hash-node storage is about 64–128 bytes
+per MiB of volume capacity (8 TiB needs a 512 MiB node file); temporary storage,
+filesystem geometry, transaction and OS limits still apply. Set `TMPDIR` before
+launching to select temporary storage. These files are disposable hashes, not a
+persistent recovery index or a full-size data shadow. Preserve the recovery state,
+not the temporary hashes. Running out of scratch space must fail the operation;
+recovery can rebuild the tree after space returns.
+
+Ordinary managed-image startup builds and validates one tree in one image pass,
+including legacy digest migration. Dirty recovery retains its verified replay
+tree instead of scanning the image again. Direct-mode clean admission likewise
+shares its verified tree with the session. Live checkpoints validate the current
+head, identity, fingerprint, root and guarded device publication without rereading
+the whole volume. They retire history; they are **not full media scrubs**.
+
+Cold recovery, standalone administrative checkpoints, and packaged clean close
+still perform a full integrity audit. A direct clean close uses one such pass
+plus metadata validation and exact readback of the changed guard sector. The
+`Session.scrub()` development API performs an explicit full audit while open;
+for the installed command, unmount then `recover STATE` (with `--device` in direct
+mode) performs cold verification. Silent corruption outside chunks read during a
+warm session is detected by these full audits, not by every live checkpoint.
+
+The scaling campaign compares complete synthetic paged and RAM trees, tests node
+offsets for 8 TiB geometry, and measures real 32 MiB image/virtual-device scans.
+It does not claim a complete multi-terabyte filesystem or physical-device test.
+Cold verification remains proportional to capacity; a durable authenticated index
+with verified reads would be a separate integrity design.

@@ -298,6 +298,15 @@ class Controller:
         verified=scan(self.target)
         if verified.root()!=self.state['sha256']:refuse('continuous checkpoint found untouched corruption')
         self.tree=verified;boundary('live:checkpoint-verified')
+    def checkpoint_integrity(self,current,integrity):
+        if self.failed:refuse('failed continuous device session requires recovery')
+        self._check_shadow(current);self._require_guard()
+        with regular(self.chain/'image.img') as image:integrity.check(image,current)
+        if (current['head'],current['sha256'])!=(self.state['head'],self.state['sha256']) or (self.root/'live-pending').exists():
+            refuse('continuous checkpoint has outstanding publication')
+        if self.tree is None or self.tree.root()!=current['sha256']:
+            refuse('continuous checkpoint lacks an authenticated device tree')
+        boundary('live:checkpoint-verified')
     def _complete_close(self):
         if (self.root/'live-pending').exists() or (self.root/'live-started').exists():refuse('close has outstanding redo')
         verified=scan(self.target)

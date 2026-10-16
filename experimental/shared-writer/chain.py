@@ -60,17 +60,24 @@ def read_state(root, name='chain-state'):
     return value
 
 
-def check_image(root, state, check_hash=True):
+def check_image(root, state, check_hash=True, cache=None, cache_out=None):
     with regular(root / 'image.img') as image:
         info = os.fstat(image.fileno())
         if info.st_uid != os.getuid() or info.st_nlink != 1 or (info.st_dev, info.st_ino, info.st_size) != (state['device'], state['inode'], state['size']):
             raise ValueError('chain image identity changed')
-        actual = (merkle.scan(image, state).root() if state['version'] == 2 else digest(image)) if check_hash else None
+        actual = None
+        if check_hash:
+            if state['version'] == 2:
+                tree = cache if cache is not None else merkle.scan(image, state)
+                if cache is not None: tree.check(image, state)
+                actual = tree.root()
+                if cache_out is not None: cache_out.append(tree)
+            else: actual = digest(image)
         if check_hash and actual != state['sha256']:
             raise ValueError('chain image edited outside a transaction')
 
 
-def recover_locked(root, cache=None):
+def recover_locked(root, cache=None, *, cache_out=None):
     if not (root / 'chain-state').exists() and (root / 'checkpoint').exists():
         saved = read_state(root, 'checkpoint')
         if saved['pending'] is not None:
@@ -88,7 +95,7 @@ def recover_locked(root, cache=None):
         inplace.seal(root, 'chain-state', state)
     state = read_state(root)
     if state['version'] == 2:
-        result = merkle.recover(root, state, cache)
+        result = merkle.recover(root, state, cache, cache_out=cache_out)
         if result is not None:
             return result
     check_image(root, state, check_hash=state['pending'] is None)
@@ -108,7 +115,7 @@ def recover_locked(root, cache=None):
             state['head'] = state['pending']
             state['sha256'] = metadata['image_sha256']
         else:
-            check_image(root, state)
+            check_image(root, state, cache_out=cache_out)
             if generation.exists() or generation.is_symlink():
                 if not stat.S_ISDIR(os.lstat(generation).st_mode):
                     raise ValueError('invalid incomplete generation')
@@ -119,8 +126,20 @@ def recover_locked(root, cache=None):
         inplace.seal(root, 'chain-state', state)
         boundary('head-published')
     if pending:
-        check_image(root, state)
+        verified = cache_out[-1] if cache_out else None
+        check_image(root, state, cache=verified)
     return state
+
+
+def recover_integrity_locked(root, cache=None):
+    """Recover and retain the actual verified tree under the caller's chain lock."""
+    if (root/'chain-state').exists():
+        saved = read_state(root)
+        if saved['version'] == 1 and saved['pending'] is None:
+            return merkle.activate(root, saved)
+    trees = []
+    state = recover_locked(root, cache, cache_out=trees)
+    return (state, trees[-1]) if trees else merkle.activate(root, state)
 
 
 def clone(source, root):
@@ -227,13 +246,13 @@ def checkpoint(root):
         return checkpoint_locked(root)
 
 
-def checkpoint_locked(root):
+def checkpoint_locked(root, cache=None):
     # Caller owns chain-lock; preserve durable validation/retirement protocol.
     # Do not implicitly commit a pending transaction as part of cleanup.
     state = read_state(root)
     if state['pending'] is not None:
         raise ValueError('recover pending generation before checkpointing')
-    check_image(root, state)
+    check_image(root, state, cache=cache)
     if (root / 'checkpoint').exists() or (root / 'checkpoint').is_symlink():
         previous = read_state(root, 'checkpoint')
         if previous['pending'] is not None or previous['head'] > state['head']:

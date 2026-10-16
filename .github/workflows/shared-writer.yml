@@ -729,7 +729,7 @@ jobs:
       - name: Verify sustained mixed transactions and storage failures on all profiles
         run: python3 experimental/shared-writer/test-endurance.py --work "$RUNNER_TEMP/endurance" --rounds 240 --seed 918273
       - name: Install mounted endurance runtime
-        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.3
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.4
       - name: Verify concurrent mounted acknowledgements across repeated process loss
         run: python3 experimental/shared-writer/test-mounted-endurance.py --work "$RUNNER_TEMP/endurance" --prefix "$RUNNER_TEMP/endurance-prefix" --cycles 3 --acks 32
       - name: Save endurance qualification
@@ -786,3 +786,30 @@ jobs:
         with:
           name: resource-exhaustion-validation
           path: ${{ runner.temp }}/exhaustion/resource-exhaustion-results.json
+
+  integrity-scaling:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install integrity and virtual-device dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse3-dev libext2fs-dev e2fsprogs util-linux pkg-config
+      - uses: ./.github/actions/writer-e2fsprogs
+      - name: Require disposable loop devices
+        run: sudo modprobe loop
+      - name: Build independently checked native helpers
+        run: python3 experimental/shared-writer/build.py --work "$RUNNER_TEMP/integrity" --sanitize
+      - name: Prepare independently checked filesystem fixtures
+        run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/integrity"
+      - name: Verify paged hash storage, large offsets, scan reuse and corruption checks
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-integrity-scaling.py --work "$RUNNER_TEMP/integrity" --devices
+      - name: Verify legacy roots and every Merkle recovery boundary
+        run: python3 experimental/shared-writer/test-merkle.py --work "$RUNNER_TEMP/integrity"
+      - name: Save integrity qualification
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrity-scaling-validation
+          path: |
+            ${{ runner.temp }}/integrity/integrity-scaling-results.json
+            ${{ runner.temp }}/integrity/merkle-results.json

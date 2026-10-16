@@ -227,7 +227,9 @@ with tempfile.TemporaryDirectory(prefix='merkle-', dir=a.work) as temporary:
     # Cache allocation and format errors fail before a huge allocation.
     denied(lambda: merkle.Tree(0))
     denied(lambda: merkle.Tree(4097))
-    denied(lambda: merkle.Tree(8*1024**4))
+    large = merkle.Tree(8*1024**4)
+    check(large.size == 8*1024**4 and hasattr(large.nodes, 'file'))
+    large.close()
     check(full(source) == pristine)
 (a.work/'merkle-results.json').write_text(json.dumps(dict(result='passed',checks=checks),indent=2)+'\n')
 print('PASS',checks,'Merkle integrity checks',flush=True)

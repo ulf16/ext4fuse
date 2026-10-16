@@ -150,3 +150,18 @@ Hardware testing needs dedicated expendable storage and a reviewed power-cut pla
 No user disk is used or power-cycled by these software campaigns. Passing them
 strengthens the evidence for the supported profiles; it does not add unsupported
 ext4 features or remove the documented interface/resource limits.
+
+## Integrity scaling and verification cadence
+
+The beta.4 scaling campaign also requires paged/RAM hash equivalence, bounded
+resident hash pages, scratch I/O error handling, >4 TiB node geometry and measured
+scan reuse on real disposable images and virtual devices. Hash geometry coverage
+is not a full multi-terabyte filesystem qualification. See WORKFLOW.md for storage
+requirements and the explicit remaining cold-scan cost.
+
+Live session checkpoints now retire history against the verified in-process tree;
+they no longer perform an independent whole-volume audit. Ordinary external edits
+still invalidate the fingerprint. Same-metadata latent corruption in an untouched
+chunk is found by cold recovery, standalone administrative checkpoint, clean close
+or an explicit `Session.scrub()`. Cold replay still reads every chunk. The tests
+must distinguish this cadence change from disabling corruption detection.

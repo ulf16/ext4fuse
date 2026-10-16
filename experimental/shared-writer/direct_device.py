@@ -157,7 +157,7 @@ def init(device,root,work,*,check_bytes=1024**3,recover_journal=False,journal_by
 class Controller:
  def __init__(self,root,device,work,*,check_bytes=1024**3,journal_bytes=256*1024**2):
   budget_check(check_bytes);journal_candidate.budget(journal_bytes);self.journal_bytes=journal_bytes
-  self.root=Path(root);self.path=device;self.work=Path(work);self.check_bytes=check_bytes;self.failed=False;self.head=None
+  self.root=Path(root);self.path=device;self.work=Path(work);self.check_bytes=check_bytes;self.failed=False;self.head=None;self.integrity=None
  def seal(self,**changes):
   self.state=dict(self.state,**changes);inplace.seal(self.root,'direct-state',self.state)
  def require_guard(self):
@@ -191,18 +191,32 @@ class Controller:
    elif s['phase']!='active':
     if current['pending'] is not None:refuse('pending direct transaction without active guard')
     if s['phase']=='clean' and live_device.magic(self.target)!=b'\x53\xef':refuse('clean direct device was changed')
-    if live_device.scan(self.target).root()!=current['sha256']:refuse('direct device changed outside recovery')
+    self.integrity=live_device.scan(self.target)
+    if self.integrity.root()!=current['sha256']:refuse('direct device changed outside recovery')
     view=live_device.DeviceView(self.target);view.seek(0);sb=view.read(4096)[1024:2048]
     if sb[104:120].hex()!=s['uuid'] or int.from_bytes(sb[58:60],'little')!=1 or int.from_bytes(sb[96:100],'little')&4:refuse('direct source identity or clean state changed')
     self.seal(phase='arming');boundary('direct:arming')
     live_device.guard(self.target);self.seal(phase='active');boundary('direct:active')
    self.require_guard()
+   if self.integrity is not None:
+    self.integrity.stamp=merkle.fingerprint(os.stat(self.chain/'image.img'))
    return self
   except BaseException:self.stack.close();raise
  def __exit__(self,*unused):self.stack.close()
+ def initial_integrity(self,current):
+  if self.integrity is None:return None
+  self.require_guard()
+  with regular(self.chain/'image.img') as image:self.integrity.check(image,current)
+  return self.integrity
  def recover(self,current):
   self.require_guard()
-  if live_device.scan(self.target).root()!=current['sha256']:refuse('recovered direct device differs from chain')
+  # Standalone callers have no verified session tree: perform a cold scan.
+  with regular(self.chain/'image.img') as image: tree=merkle.scan(image,current)
+  return self.recover_integrity(current,tree)
+ def recover_integrity(self,current,tree):
+  self.require_guard()
+  with regular(self.chain/'image.img') as image: tree.check(image,current)
+  self.integrity=tree
   header=journal_recovery.inspect(self.chain/'image.img')
   if header['needed'] or header['uuid']!=self.state['uuid']:refuse('direct device needs native journal recovery or changed identity')
   self.head=(current['head'],current['sha256']);boundary('direct:recovered')
@@ -216,19 +230,28 @@ class Controller:
    self.head=(current['head'],current['sha256']);boundary('direct:acknowledge-ready')
   except BaseException:self.failed=True;raise
  def checkpoint(self,current):
+  self.require_guard()
+  with regular(self.chain/'image.img') as image: tree=merkle.scan(image,current)
+  return self.checkpoint_integrity(current,tree)
+ def checkpoint_integrity(self,current,tree):
   if self.failed:refuse('failed direct session requires recovery')
   self.require_guard()
-  if chain.read_state(self.chain)!=current or current['pending'] is not None or live_device.scan(self.target).root()!=current['sha256']:refuse('direct checkpoint changed or outstanding transaction')
+  if chain.read_state(self.chain)!=current or current['pending'] is not None:refuse('direct checkpoint changed or outstanding transaction')
+  with regular(self.chain/'image.img') as image:tree.check(image,current)
+  self.integrity=tree
   boundary('direct:checkpoint-verified')
  def abort(self):self.failed=True
  def finish(self):
   if self.failed:refuse('failed direct session must keep device guarded')
   with chain.locked(self.chain):
-   current=chain.recover_locked(self.chain);self.recover(current)
+   # Preserve a full close audit, but reuse its tree for all following checks.
+   current,tree=chain.recover_integrity_locked(self.chain);self.recover_integrity(current,tree)
    uuid,_=checked(self.chain/'image.img',self.target,self.work,self.root,self.check_bytes)
    if uuid!=self.state['uuid']:refuse('direct filesystem identity changed')
-   self.checkpoint(current);self.seal(phase='closing');boundary('direct:closing')
+   self.checkpoint_integrity(current,tree);self.seal(phase='closing');boundary('direct:closing')
    start=live_device.MAGIC//self.target.sector*self.target.sector;data=bytearray(old.read_at(self.target.fd,self.target.sector,start));at=live_device.MAGIC-start;data[at:at+2]=b'\x53\xef'
    old.write_at(self.target.fd,data,start);self.target.flush();boundary('direct:magic-restored')
-   if live_device.magic(self.target)!=b'\x53\xef' or live_device.scan(self.target).root()!=current['sha256']:refuse('direct clean publication changed')
+   # Only this sector changed after the full close audit. Read it back exactly.
+   if old.read_at(self.target.fd,self.target.sector,start)!=data:refuse('direct clean publication changed')
+   self.target.check()
    self.seal(phase='clean');boundary('direct:closed')

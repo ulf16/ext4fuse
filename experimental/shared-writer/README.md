@@ -8,9 +8,9 @@ This experimental backend retains the native reader and uses libext2fs for
 filesystem mutations. It includes a private FUSE 3 frontend for managed image copies,
 guarded offline device publication, and continuous device write-through via a
 private disk-backed shadow or the direct storage mode described at the end.
-Production Homebrew packaging and general-purpose
-write support remain outside this prototype. See the final continuous-device
-sections for commands, storage requirements and recovery limits.
+Homebrew writer beta packaging is available as described in WORKFLOW.md. General
+production qualification remains incomplete. Later sections supersede the early
+experimental restrictions below; WORKFLOW.md describes the installed behavior.
 
 The source image is opened read-only and must be a regular file. A custom
 libext2fs I/O manager stages writes in bounded 4 KiB copy-on-write pages. A test-only
@@ -1390,10 +1390,10 @@ after recovering pending legacy work and checking the legacy whole-image hash.
 The in-memory tree authenticates 1 MiB chunks, including the partial final chunk;
 leaf hashes bind their index and length, node hashes bind child ordering, and the
 root binds image size and chunk size. Empty padding leaves are distinct from data
-leaves. The tree uses a packed bytearray with a 256 MiB allocation budget: about
-64–128 bytes per MiB of image capacity, supporting images up to 4 TiB. Larger
-managed images fail closed before allocation; this is separate from sparse file
-mapping limits. Only roots and complete page undo/redo logs are persisted. No
+leaves. The tree uses about 64–128 bytes per MiB of image capacity. Small trees use a
+packed bytearray; trees exceeding the 256 MiB RAM budget use paged temporary
+node storage, removing the previous 4 TiB ceiling. Host scratch-file and
+filesystem geometry limits still apply; this is separate from file mapping limits. Only roots and complete page undo/redo logs are persisted. No
 on-disk tree or hash-index update needs a separate crash recovery protocol.
 
 A live session holds chain-lock and caches the tree from a full scan. Capture and
@@ -1406,7 +1406,9 @@ the cache and are rejected before intent publication. This remains a private,
 cooperating-process design; timestamps are a cache-validity guard, not a
 cryptographic guarantee against concurrent hostile modification.
 
-Opening a session, cold recovery and checkpoints fully scan the image. Cold
+Opening a session and cold recovery fully scan the image once and retain the
+verified tree. Standalone administrative checkpoints and explicit scrubs also
+scan fully; live session checkpoints reuse the trusted tree. Cold
 recovery substitutes logged preimages while hashing **all** chunks, verifies both
 base and prospective roots, then replays a sealed transaction. This detects clean
 corruption outside the transaction even after a torn page write. Latent media
@@ -1414,8 +1416,8 @@ corruption in an untouched chunk with no metadata change can remain undetected
 during warm transactions until a full scan; ordinary reads are not Merkle-verified.
 This explicitly changes verification cadence rather than claiming untouched bytes
 can be authenticated without reading them. The default mounted checkpoint every
-64 transactions still performs a full scan, so its amortized scan cost remains
-proportional to image size. Offline physical-device publication keeps its existing
+64 transactions no longer performs a full scan. Live retirement therefore does
+not provide the full-media audit previously performed at that boundary. Offline physical-device publication keeps its existing
 whole-device SHA256, guard, flush and recovery protocol.
 
 `Session.checkpoint()` retires completed history under the existing session lock
@@ -1776,7 +1778,7 @@ fast-commit, MMP, unsupported features, journal errors and non-journal damage
 remain refused. New writes still use our external recovery log, rather than
 creating Linux-replayable JBD2 transactions. Full-device scans at admission,
 cold recovery, checkpoints and close remain. Existing feature, permission,
-handle, transaction and 4 TiB Merkle limits still apply.
+handle, transaction and temporary hash-storage limits still apply.
 
 `test-journal-candidate.py` compares bounded replay with independent full-copy
 test oracles across all twelve profiles and journal formats, and checks budget,
@@ -2075,3 +2077,36 @@ acknowledgement checks, reported-storage-error matrix, simulated unflushed-secto
 loss/tears and concurrent mounted-writer crash/recovery campaign. The guide states
 the model's assumptions and the outstanding real hardware/recovery-log power-loss
 qualification explicitly.
+
+## Paged integrity trees and scan reuse
+
+`merkle_store.py` stores oversized trees in an unlinked temporary file with a
+bounded LRU of 64 KiB hash pages. Dirty eviction completes partial writes, reports
+I/O failures and retains a failed eviction's dirty cache entry. The file is never
+trusted after restart; cold verification rebuilds every hash from image bytes.
+The root format, chunk size, sealed redo and old managed states remain compatible.
+
+`chain.recover_integrity_locked` returns the very tree used to verify recovery.
+`Session` reuses it for startup, warm transactions and checkpoint retirement.
+Legacy whole-image SHA256 and Merkle leaves are computed in one pass during
+migration. Dirty replay still validates every clean chunk and reads back touched
+chunks, then hands its resulting tree to the session. Direct clean admission
+passes its already verified device tree through the registered view; warm device
+checkpoints check publication, head, guard, identity and the current authenticated
+root. Standalone checkpoint APIs retain their full-audit behavior.
+
+Direct close retains one full scan, metadata snapshot/fsck and exact guard-sector
+readback, eliminating the prior repeated full passes. This still assumes exclusive
+device claims and honest durable flushes. Latent changes outside touched chunks
+need a cold/full audit; session checkpoints are now history retirement, not a
+periodic full scrub. `Session.scrub()` explicitly performs that audit and fails the
+session closed on mismatch. No persistent hash cache is silently trusted.
+
+`test-integrity-scaling.py` compares a complete synthetic 128 GiB-geometry tree
+against an independent RAM tree using only a 256 KiB hash page cache. It exercises
+scratch ENOSPC, partial writes, node offsets across 4 TiB and at the end of 8 TiB
+geometry, and cleanup. These are hash-geometry tests, not an actual 8 TiB mount.
+Real disposable image and direct-device tests measure one startup pass, zero live
+checkpoint passes, and one direct close pass, plus cold recovery, external-edit
+refusal and silent-corruption detection by full audits. Existing Merkle crash,
+corruption, durability and exhaustion campaigns remain required.

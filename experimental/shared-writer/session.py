@@ -53,13 +53,15 @@ class Session:
         self.root = self._lock.__enter__()
         self.producer = Path(producer).absolute()
         try:
-            self.state = chain.recover_locked(self.root)
+            initial = getattr(self._commit_sink, 'initial_integrity', None)
+            cache = initial(chain.read_state(self.root)) if initial is not None else None
+            self.state, self._integrity = chain.recover_integrity_locked(self.root, cache)
             if recover_journal:
                 from journal_recovery import managed_locked
                 self.state=managed_locked(self.root,self.state)
-            self.state, self._integrity = merkle.activate(self.root, self.state)
+                self.state, self._integrity = merkle.activate(self.root, self.state)
             if self._commit_sink is not None:
-                self._commit_sink.recover(self.state)
+                self._recover_sink()
             self._checkpoint_head = self.state['head']
             self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
                                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -596,10 +598,9 @@ class Session:
                 # error after sealing may require completing a committed batch.
                 # Resume only once recovery and reader refresh both succeed.
                 try:
-                    self.state = chain.recover_locked(self.root)
-                    self.state, self._integrity = merkle.activate(self.root, self.state)
+                    self.state, self._integrity = chain.recover_integrity_locked(self.root)
                     if self._commit_sink is not None:
-                        self._commit_sink.recover(self.state)
+                        self._recover_sink()
                     self._rpc(4)
                 except BaseException:
                     self._failed = True
@@ -612,6 +613,13 @@ class Session:
             if not defer_checkpoint:
                 self._maybe_checkpoint()
             return dict(self.state)
+
+    def _recover_sink(self):
+        # Only direct mode shares this exact image/device view. Shadow backends
+        # still validate their separate physical target independently.
+        bind = getattr(self._commit_sink, 'recover_integrity', None)
+        if bind is not None: bind(self.state, self._integrity)
+        else: self._commit_sink.recover(self.state)
 
     def _maybe_checkpoint(self):
         if self._checkpoint_every and self.state['head'] - self._checkpoint_head >= self._checkpoint_every:
@@ -626,9 +634,30 @@ class Session:
                 if state != self.state or state['pending'] is not None:
                     raise ValueError('session generation changed before checkpoint')
                 if self._commit_sink is not None:
-                    self._commit_sink.checkpoint(self.state)
-                self.state = chain.checkpoint_locked(self.root)
+                    checkpoint = getattr(self._commit_sink, 'checkpoint_integrity', None)
+                    if checkpoint is not None: checkpoint(self.state, self._integrity)
+                    else: self._commit_sink.checkpoint(self.state)
+                self.state = chain.checkpoint_locked(self.root, self._integrity)
                 self._checkpoint_head = self.state['head']
+            except BaseException:
+                self._failed = True
+                raise
+            return dict(self.state)
+
+    def scrub(self):
+        """Explicit full image audit; checkpoint retirement uses the live tree."""
+        with self._mutex:
+            self._ready()
+            try:
+                if chain.read_state(self.root) != self.state or self.state['pending'] is not None:
+                    raise ValueError('session generation changed before scrub')
+                with regular(self.root/'image.img') as image:
+                    self._integrity.check(image, self.state)
+                    verified = merkle.scan(image, self.state)
+                if verified.root() != self.state['sha256']:
+                    raise ValueError('full scrub found untouched corruption')
+                self._integrity = verified
+                if self._commit_sink is not None: self._recover_sink()
             except BaseException:
                 self._failed = True
                 raise
