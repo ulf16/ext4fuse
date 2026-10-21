@@ -167,6 +167,12 @@ with patch.object(merkle,'scan',side_effect=AssertionError('fast reopen read who
 with patch.object(merkle,'scan',side_effect=AssertionError('successor index missing')):
     with session.Session(native,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),**options) as s:
         check(s.read('/indexed')==b'next!')
+# Missing chain-state still uses established checkpoint restoration, not a cache.
+(native/'chain-state').unlink()
+with patch.object(merkle,'scan',wraps=merkle.scan) as scans:
+    with session.Session(native,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),**options) as s:
+        check(s.read('/indexed')==b'next!')
+    check(scans.call_count==1)
 with (native/index.NAME).open('r+b') as f:f.seek(index.HEADER);f.write(b'X'*32)
 with patch.object(merkle,'scan',wraps=merkle.scan) as scans:
     with session.Session(native,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0),**options) as s:

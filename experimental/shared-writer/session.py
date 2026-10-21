@@ -61,7 +61,8 @@ class Session:
         try:
             initial = getattr(self._commit_sink, 'initial_integrity', None)
             cache = initial(chain.read_state(self.root)) if initial is not None else None
-            if cache is None and persistent_index and image_io.lookup(self.root / 'image.img') is None:
+            if (cache is None and persistent_index and (self.root / 'chain-state').exists()
+                    and image_io.lookup(self.root / 'image.img') is None):
                 import integrity_index
                 cache = integrity_index.load(self.root, chain.read_state(self.root))
             self.state, self._integrity = chain.recover_integrity_locked(self.root, cache)
