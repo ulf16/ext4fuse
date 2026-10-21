@@ -16,6 +16,11 @@
 #include <unistd.h>
 #define PAGE 4096
 #define BUCKETS 1024
+#define VERIFIED_PAGES 64
+struct verified_page {
+  uint64_t index, age;
+  unsigned char data[PAGE];
+};
 struct page {
   uint64_t idx, epoch;
   unsigned char data[PAGE];
@@ -29,6 +34,8 @@ struct overlay {
   size_t used, limit;
   long fail_writes;
   int published, poisoned;
+  struct verified_page *verified_pages;
+  uint64_t verified_age;
   struct page *pages[BUCKETS];
 };
 struct overlay *active_overlay;
@@ -150,11 +157,61 @@ static int verified_view(struct overlay *t, const struct stat *token) {
 #endif
   return 0;
 }
+/* Only authenticated bytes enter this bounded native cache. The parent
+ * checks identity/fingerprint around every reader operation. Suspend, refresh
+ * and rollback discard these bytes before any changed base can be observed. */
+static void verified_clear(struct overlay *t) {
+  t->verified_age = 0;
+  if (t->verified_pages)
+    memset(t->verified_pages, 0, VERIFIED_PAGES * sizeof(*t->verified_pages));
+}
+static int verified_cached(struct overlay *t, void *buffer, size_t length,
+                           uint64_t offset) {
+  if (!length)
+    return 0;
+  if (!t->verified_pages) {
+    t->verified_pages = calloc(VERIFIED_PAGES, sizeof(*t->verified_pages));
+    if (!t->verified_pages)
+      return ENOMEM;
+  }
+  while (length) {
+    if (t->verified_age == UINT64_MAX)
+      verified_clear(t);
+    uint64_t index = offset / PAGE;
+    struct verified_page *found = NULL, *oldest = &t->verified_pages[0];
+    for (unsigned i = 0; i < VERIFIED_PAGES; i++) {
+      struct verified_page *page = &t->verified_pages[i];
+      if (page->age && page->index == index) {
+        found = page;
+        break;
+      }
+      if (page->age < oldest->age)
+        oldest = page;
+    }
+    if (!found) {
+      found = oldest;
+      found->age = 0;
+      int error = verified_read(t, found->data, PAGE, index * PAGE);
+      if (error)
+        return error;
+      found->index = index;
+    }
+    found->age = ++t->verified_age;
+    size_t inside = offset % PAGE, take = PAGE - inside;
+    if (take > length)
+      take = length;
+    memcpy(buffer, found->data + inside, take);
+    buffer = (unsigned char *)buffer + take;
+    offset += take;
+    length -= take;
+  }
+  return 0;
+}
 /* Guard normalization is confined to explicitly inherited, read-only device
  * descriptors. Paths alone never opt an ordinary image into device access. */
 static int base_read(struct overlay *t, void *b, size_t n, uint64_t off) {
   if (t->verified_fd >= 0)
-    return verified_read(t, b, n, off);
+    return verified_cached(t, b, n, off);
   if (t->base_fd < 0)
     return exact_read(t->fd, b, n, off);
   uint64_t original = off;
@@ -285,6 +342,7 @@ struct overlay *overlay_open(const char *path, size_t max) {
   return t;
 }
 void overlay_rollback(struct overlay *t) {
+  verified_clear(t);
   changed(t);
   t->baseline = t->epoch;
   for (size_t i = 0; i < BUCKETS; i++)
@@ -307,6 +365,7 @@ void overlay_close(struct overlay *t) {
   if (t->base_fd >= 0)
     close(t->base_fd);
   close(t->fd);
+  free(t->verified_pages);
   free(t->path);
   free(t);
   if (active_overlay == t)
@@ -395,11 +454,13 @@ int overlay_write(struct overlay *t, uint64_t off, size_t n, const void *b) {
   return 0;
 }
 void overlay_suspend(struct overlay *t) {
+  verified_clear(t);
   changed(t);
   t->baseline = t->epoch;
   t->published = 0;
 }
 int overlay_publish(struct overlay *t) {
+  verified_clear(t);
   if (t->poisoned)
     return EIO;
   t->published = 1;

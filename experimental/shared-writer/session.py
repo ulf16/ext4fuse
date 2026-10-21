@@ -132,6 +132,8 @@ class Session:
             before_request = getattr(self._commit_sink, 'before_request', None)
             if before_request is not None:
                 before_request()
+            if self._verified is not None:
+                self._verified.guard()
             deadline = time.monotonic() + 30
             self._send(REQUEST.pack(b'E4RD0001', op, len(path), offset, length) + path, deadline)
             magic, error, reserved, size, count = REPLY.unpack(self._receive(REPLY.size, deadline))
@@ -154,7 +156,7 @@ class Session:
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
             if self._verified is not None:
-                self._verified.check()
+                self._verified.guard()
         except BaseException:
             self._failed = True
             raise
@@ -747,6 +749,8 @@ class Session:
                         self._process.wait(timeout=5)
                     self._process.stdout.close()
             finally:
+                if self._failed and self._commit_sink is not None:
+                    self._commit_sink.abort()
                 if self._verified_context is not None:
                     self._verified_context.__exit__(None, None, None)
                     self._verified_context = None

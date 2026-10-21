@@ -148,6 +148,9 @@ with tempfile.TemporaryDirectory(prefix='verified-', dir=a.work) as tmp:
         try:
             original = s.read('/existing-file',0,64)
             check(len(original) == 64)
+            with patch.object(s._verified,'read',wraps=s._verified.read) as transport:
+                for _ in range(10):check(s.read('/existing-file',0,64)==original)
+                check(transport.call_count<10)
             s.apply([dict(kind='write',path='/existing-file',offset=0,data_hex=b'checked write'.hex())])
             check(s.read('/existing-file',0,13) == b'checked write')
             check(s._verified.generation[1] == s.state['sha256'])
@@ -172,6 +175,10 @@ with tempfile.TemporaryDirectory(prefix='verified-', dir=a.work) as tmp:
                         # recovery branch and bless the damaged image.
                         with patch('chain.recover_integrity_locked', side_effect=AssertionError('corruption rescan')):
                             denied(lambda: s.apply([dict(kind='write',path='/existing-file',offset=0,data_hex='61')]))
+                    elif mode == 'stamp':
+                        # The native data page is already cached. The broker's
+                        # operation guard must still catch ordinary edits.
+                        denied(lambda: s.read('/existing-file',0,1))
                     else:
                         denied(lambda: s._rpc(4))
                 check(s._verified.failed.is_set())

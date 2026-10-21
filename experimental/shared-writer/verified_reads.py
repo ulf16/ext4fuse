@@ -48,6 +48,19 @@ class Reader:
         if self.closed or self.failed.is_set():
             raise OSError(errno.EIO, 'verified image read failed; session requires recovery')
 
+    def guard(self):
+        """Native caches may reuse verified bytes; still audit every operation."""
+        with self.lock:
+            self.check()
+            try:
+                state, tree = self.binding()
+                with image_io.opened(self.path) as image:
+                    tree.check(image, state)
+            except Exception:
+                self.failed.set()
+                self.cache.clear()
+                raise
+
     def read(self, offset, length):
         with self.lock:
             self.check()
