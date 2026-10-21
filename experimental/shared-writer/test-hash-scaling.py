@@ -27,8 +27,13 @@ with tempfile.TemporaryDirectory(prefix='hash-scaling-', dir=a.work) as tmp:
                         '--work', str(a.work), '--source', str(image),
                         '--root', str(tmp/f'root-{size}'), '--output', str(output)], check=True)
         result = json.loads(output.read_text())
-        assert result['image_bytes_read'] <= 5*8*1024**2, result
+        # Native base reads now pass through Python's verifier and appear in
+        # this counter. Keep the old replay budget and separately bound the
+        # new verified reads; neither may grow with the container size.
+        assert result['image_bytes_read'] - result['verified_read_bytes'] <= 5*8*1024**2, result
+        assert 0 < result['verified_read_bytes'] <= 5*8*1024**2, result
         results.append(result)
     assert results[0]['image_bytes_read'] == results[1]['image_bytes_read'], results
+    assert results[0]['verified_read_bytes'] == results[1]['verified_read_bytes'], results
 (a.work/'hash-scaling-results.json').write_text(json.dumps(dict(result='passed', measurements=results), indent=2)+'\n')
 print('PASS image verification bytes are independent of container size', flush=True)

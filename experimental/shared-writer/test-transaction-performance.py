@@ -7,18 +7,29 @@ from unittest.mock import patch
 p=argparse.ArgumentParser();p.add_argument('--code',type=Path);p.add_argument('--work',type=Path,required=True);p.add_argument('--source',type=Path,required=True);p.add_argument('--root',type=Path,required=True);p.add_argument('--output',type=Path,required=True);p.add_argument('--max-passes',type=float);a=p.parse_args()
 if a.code:sys.path.insert(0,str(a.code))
 import chain,inplace,session,durable
+from contextvars import ContextVar
+from verified_reads import Reader
+verified_io=ContextVar("verified_io",default=False)
+verified_read=Reader.read
+def measured_verified(self,*args,**kwargs):
+ token=verified_io.set(True)
+ try:return verified_read(self,*args,**kwargs)
+ finally:verified_io.reset(token)
 from credentials import Credentials
 chain.clone(a.source,a.root)
-counts={'image_bytes_read':0,'image_read_calls':0}
+counts={'image_bytes_read':0,'image_read_calls':0,'verified_read_bytes':0}
+def count(n):
+ counts['image_bytes_read']+=n;counts['image_read_calls']+=1
+ if verified_io.get():counts['verified_read_bytes']+=n
 class Counted:
  def __init__(self,f):self.f=f
  def __getattr__(self,name):return getattr(self.f,name)
  def __enter__(self):return self
  def __exit__(self,*args):return self.f.__exit__(*args)
  def read(self,*args):
-  data=self.f.read(*args);counts['image_bytes_read']+=len(data);counts['image_read_calls']+=1;return data
+  data=self.f.read(*args);count(len(data));return data
  def readinto(self,b):
-  n=self.f.readinto(b);counts['image_bytes_read']+=n;counts['image_read_calls']+=1;return n
+  n=self.f.readinto(b);count(n);return n
 with session.Session(a.root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
  h=s.openat(None,'/performance','rw',create=True);h.close()
  info=os.stat(a.root/'image.img');identity=(info.st_dev,info.st_ino)
@@ -28,7 +39,7 @@ with session.Session(a.root,a.work/'mutation-producer',a.work/'reader-server',Cr
  regular=durable.regular;fdopen=os.fdopen
  def measured_regular(path):return wrap(regular(path))
  def measured_fdopen(*args,**kwargs):return wrap(fdopen(*args,**kwargs))
- with patch.object(chain,'regular',measured_regular),patch.object(inplace,'regular',measured_regular),patch.object(inplace.block,'regular',measured_regular),patch.object(os,'fdopen',measured_fdopen):
+ with patch.object(Reader,'read',measured_verified),patch.object(chain,'regular',measured_regular),patch.object(inplace,'regular',measured_regular),patch.object(inplace.block,'regular',measured_regular),patch.object(os,'fdopen',measured_fdopen):
   start=time.perf_counter()
   for i in range(5):s.apply([dict(kind='write',path='/performance',offset=i*4096,data_hex=(bytes([i+1])*4096).hex())])
   elapsed=time.perf_counter()-start
