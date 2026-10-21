@@ -128,7 +128,7 @@ def credentials():
 
 
 def check_image(root):
-    progress.stage('Checking filesystem metadata; keep the device connected...')
+    progress.stage('Checking filesystem metadata; keep the device connected...', 'metadata-fsck')
     import journal_recovery
     result, output = journal_recovery.command(
         [journal_recovery.tool('e2fsck'), '-fn', root / 'chain' / 'image.img'],
@@ -162,7 +162,7 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
         target = None
         if data['mode'] == 'direct':
             from direct_device import Controller
-            progress.stage('Checking device identity and exclusive access...')
+            progress.stage('Checking device identity and exclusive access...', 'device-admission')
             target = device_admission(lambda: stack.enter_context(Controller(root / 'device', args.device, work,
                 check_bytes=args.check_bytes, journal_bytes=args.journal_bytes, persistent_index=bool(broker))))
             chain_root = target.chain
@@ -176,6 +176,7 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
                 print('Mounting at ' + str(mountpoint) + '; use ext4fuse-writer unmount ' + str(root),
                       file=sys.stderr, flush=True)
                 def ready():
+                    progress.lifecycle('mounted', 'Mounted and ready for file access. Use unmount or eject before disconnecting.')
                     fd = getattr(args, 'ready_fd', None)
                     if fd is not None:
                         args.ready_fd = None
@@ -185,10 +186,13 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
                             pass  # Cancelling the wait must not kill a starting mount.
                         finally:
                             os.close(fd)
-                broker.run_mount(opened, work, mountpoint, root / 'control.sock', ready=ready)
+                try:
+                    broker.run_mount(opened, work, mountpoint, root / 'control.sock', ready=ready)
+                finally:
+                    progress.lifecycle('closing', 'Mount detached or stopped; finishing writes and checking the filesystem. Keep the device connected...')
             if opened._failed:
                 raise OSError(errno.EIO, 'writer session failed; recovery is required')
-        progress.stage('Finishing writes and verifying clean publication; keep the device connected...')
+        progress.stage('Finishing writes and verifying clean publication; keep the device connected...', 'clean-publication')
         if target:
             target.finish()
         else:
@@ -240,7 +244,7 @@ def initialize(args):
     directory(root)
     data = dict(version=FORMAT, mode='image' if args.image else 'direct',
                 phase='initializing', mountpoint=None)
-    with lock(root):
+    with lock(root), progress.operation(root, 'init'):
         inplace.seal(root, 'writer-state', data)
         if args.image:
             progress.stage('Copying source image into private state...')
@@ -261,6 +265,7 @@ def initialize(args):
             # A dirty native journal import is sealed but not yet published by init.
             run_session(root, data, argparse.Namespace(**dict(vars(args), recover_journal=False)), work)
         seal(root, data, 'ready')
+        progress.lifecycle('ready', 'Initialization checked and complete.')
     print('Ready: ' + str(root))
     if args.image:
         print('Writable image: ' + str(root / 'chain' / 'image.img') + ' (source unchanged)')
@@ -340,17 +345,18 @@ def operate(args, mounting):
             raise ValueError('state path is too long for a control socket; use a shorter durable state path')
         data = seal(root, data, 'mounting' if mounting else 'recovering', mountpoint)
         try:
-            run_session(root, data, args, work, broker, mountpoint)
+            with progress.operation(root, 'mount' if mounting else 'recover'):
+                run_session(root, data, args, work, broker, mountpoint)
+                seal(root, data, 'ready')
+                progress.lifecycle('ready', 'Clean publication checked and complete.')
         except BaseException:
             # Preserve mount intent: a remaining attachment must be removed before replay.
             seal(root, data, 'recovery-required', mountpoint)
             raise
-        seal(root, data, 'ready')
     print('Cleanly unmounted and checked.' if mounting else 'Recovered, checked and ready.')
 
 
-def status(args):
-    root = root_path(args.state)
+def snapshot(root):
     # No recovery, image reads, directory creation, or device opens in status.
     try:
         with lock(root):
@@ -360,18 +366,49 @@ def status(args):
         data = manifest(root)
         busy = True
     result = dict(data, state=str(root), busy=busy, checked=False,
-                  mounted=bool(data['mountpoint'] and attached(data['mountpoint'])))
-    result['needs_recovery'] = not busy and (data['phase'] != 'ready' or result['mounted'])
-    if args.json:
-        print(json.dumps(result, sort_keys=True))
-    else:
-        print('State: ' + str(root))
-        print('Mode: ' + data['mode'] + '; phase: ' + data['phase'] + (' (in use)' if busy else ''))
-        if data['mountpoint']:
-            print('Mountpoint: ' + data['mountpoint'] + (' (attached)' if result['mounted'] else ' (detached)'))
-        if result['needs_recovery']:
-            print('Recovery required before mounting. Keep this entire state directory.')
-        print('Metadata status only; recover performs integrity verification.')
+                  mounted=bool(data['mountpoint'] and mounts().get(data['mountpoint'],(None,None))[1]=='ext4fuse-experimental'))
+    # Any attached filesystem still prevents clean/recovery claims, even a foreign mount.
+    attachment=bool(data['mountpoint'] and attached(data['mountpoint']))
+    result['needs_recovery'] = not busy and (data['phase'] != 'ready' or attachment)
+    result['progress'] = progress.read(root)
+    result['progress_current'] = progress.current(result['progress'],result)
+    result['status'] = progress.summary(result)
+    return result
+
+
+def show_status(result, json_output=False):
+    if json_output:
+        print(json.dumps(result, sort_keys=True),flush=True)
+        return
+    print('State: ' + result['state'])
+    print('Status: ' + result['status'] + '; mode: ' + result['mode'])
+    if result['mountpoint']:
+        print('Mountpoint: ' + result['mountpoint'] + (' (attached)' if result['mounted'] else ' (detached)'))
+    event=result['progress']
+    if event and result['progress_current']:
+        print('Progress: ' + event['message'] + f" ({event['elapsed_seconds']:.1f}s at last update)")
+    if result['needs_recovery']:
+        print('Recovery required before mounting. Keep this entire state directory.')
+    print('Metadata status only; this command does not verify integrity or authorize unplugging.',flush=True)
+
+
+def status(args):
+    root = root_path(args.state)
+    interval=getattr(args,'interval',1)
+    if not .2<=interval<=60:raise ValueError('watch interval must be 0.2..60 seconds')
+    previous=None
+    try:
+        while True:
+            result=snapshot(root)
+            encoded=json.dumps(result,sort_keys=True)
+            if encoded!=previous:
+                show_status(result,args.json)
+                previous=encoded
+            if not getattr(args,'watch',False):return
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        # Cancelling a read-only observer never cancels a writer.
+        if not args.json:print('Stopped watching; the writer is unchanged.',flush=True)
 
 
 def unmount(args, announce=True):
@@ -381,6 +418,7 @@ def unmount(args, announce=True):
     if not mountpoint:
         raise ValueError('no recorded mount; use status or recover')
     if attached(mountpoint):
+        progress.stage('Requesting normal unmount; waiting for the operating system to release open files. Keep the device connected...', 'os-unmount')
         fstype, source = mounts()[mountpoint]
         if source != 'ext4fuse-experimental':
             raise ValueError('recorded mountpoint contains another filesystem; refusing to unmount it')
@@ -418,7 +456,8 @@ def unmount(args, announce=True):
         except BlockingIOError:
             now = time.monotonic()
             if now - last_notice >= 5:
-                progress.stage('Mount detached; waiting for writer checks. Keep the device connected. Progress is shown in the mount terminal.')
+                event=progress.read(root)
+                progress.stage('Checking before clean unmount. Keep the device connected. '+(event['message'] if event else 'Waiting for writer checks...'))
                 last_notice = now
             if now >= deadline:
                 raise TimeoutError('mount detached; writer is still finishing checks; inspect status before unplugging')
@@ -451,6 +490,8 @@ def parser():
     inspect = sub.add_parser('status', help='inspect workflow metadata without replay or opening a device')
     inspect.add_argument('state', type=Path)
     inspect.add_argument('--json', action='store_true')
+    inspect.add_argument('--watch', action='store_true', help='observe changing status; Ctrl-C only stops watching')
+    inspect.add_argument('--interval', type=float, default=1, help='watch refresh seconds (0.2..60)')
     stop = sub.add_parser('unmount', help='unmount normally and wait for checked clean publication')
     stop.add_argument('state', type=Path)
     stop.add_argument('--timeout', type=float, default=3600)

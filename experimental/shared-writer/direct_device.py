@@ -74,7 +74,7 @@ def token(path,size):
 def checked(path,target,work,root,budget):
  """Full metadata fsck with sparse scratch; ordinary file contents are omitted."""
  import progress
- progress.stage("Checking device filesystem metadata; keep the device connected...")
+ progress.stage("Preparing filesystem metadata snapshot; keep the device connected...", "metadata-snapshot")
  header=journal_recovery.inspect(path)
  if header['needed']:refuse('direct mode requires native journal recovery before initialization')
  snapshot=root/'metadata-check.img'
@@ -86,6 +86,7 @@ def checked(path,target,work,root,budget):
  with image_io.child_process(path) as options:
   result,output=journal_recovery.command([Path(work)/'metadata-snapshot',path,snapshot,budget],options['env'],pass_fds=options.get('pass_fds',()))
  if result:raise OSError('metadata snapshot failed: '+output.decode(errors='replace')[-2048:])
+ progress.stage('Checking filesystem metadata snapshot; keep the device connected...', 'metadata-fsck')
  result,output=journal_recovery.command([journal_recovery.tool('e2fsck'),'-fn',snapshot],dict(os.environ,LC_ALL='C',E2FSCK_CONFIG='/dev/null'))
  if result:raise OSError('direct filesystem did not pass read-only metadata check: '+output.decode(errors='replace')[-2048:])
  used=os.stat(snapshot).st_blocks*512;snapshot.unlink();directory(root)

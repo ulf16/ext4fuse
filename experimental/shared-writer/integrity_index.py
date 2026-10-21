@@ -42,7 +42,7 @@ def load(root, state):
             count = (state['size'] + merkle.CHUNK - 1) // merkle.CHUNK
             if info.st_size != HEADER + count * 32:
                 return None
-            progress.stage('Loading authenticated integrity index; verifying stored chunk hashes...')
+            progress.stage('Loading authenticated integrity index; verifying stored chunk hashes...', 'integrity-index')
             tree = merkle.Tree(state['size'])
             for start in range(0, count, 2048):
                 amount = min(2048, count - start)

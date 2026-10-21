@@ -162,6 +162,15 @@ process=None
 try:
     process=mount('image')
     check(attached(point) and status(state)['busy'])
+    observed=json.loads(run(volume+['status','image','--json']).stdout)
+    check(observed['status']=='mounted' and observed['progress_current'] and observed['progress']['lifecycle']=='mounted' and not observed['checked'])
+    watcher=subprocess.Popen(list(map(str,volume+['status','image','--json','--watch','--interval','.2'])),stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+    try:
+        check(json.loads(watcher.stdout.readline())['mounted'])
+        watcher.send_signal(signal.SIGINT);_,diagnostics=watcher.communicate(timeout=10)
+        check(watcher.returncode==0 and not diagnostics and attached(point) and status(state)['busy'])
+    finally:
+        if watcher.poll() is None:watcher.kill();watcher.wait()
     rows=json.loads(run(volume+['list','--json']).stdout)
     check(rows[0]['mounted'] and rows[0]['busy'])
     (point/'persisted').write_bytes(b'background writer')
@@ -192,6 +201,8 @@ try:
 finally:
     subprocess.run(list(map(str,volume+['unmount','image','--timeout','10'])),capture_output=True,timeout=20)
 check(status(state)['phase']=='ready')
+observed=json.loads(run(volume+['status','image','--json']).stdout)
+check(not observed['busy'] and not observed['mounted'] and not observed['progress_current'] and not observed['checked'])
 run(volume+['forget','image'])
 check(not record.exists() and (state/'chain/image.img').exists())
 check(json.loads(run(volume+['list','--json']).stdout)==[])

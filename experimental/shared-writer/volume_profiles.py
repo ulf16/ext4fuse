@@ -242,7 +242,12 @@ def background(profile,args,cli,lock_fd):
         print('Starting '+profile['name']+'; progress and diagnostics: '+str(log),flush=True)
         deadline=time.monotonic()+args.timeout
         notified=False
+        last_progress=None
         while True:
+            event=progress.read(root)
+            if event and event['pid']==child.pid and event['updated']!=last_progress:
+                print(event['message'],file=sys.stderr,flush=True)
+                last_progress=event['updated']
             if notified:
                 if (child.poll() is None and mounts().get(profile['mountpoint'],(None,None))[1]=='ext4fuse-experimental'
                         and cli.manifest(root)['phase']=='mounting'):
@@ -361,6 +366,7 @@ def eject(profile,args,cli):
                 return target.node
         # Linux udev can briefly probe a just-closed loop/USB node. Retry only
         # admission/audit, never an OS eject request or a different device.
+        progress.stage('Checking the drive and other device users before eject; keep it connected...', 'eject-audit')
         node=cli.device_admission(preflight)
         # Release our own claims before asking the OS to eject normally. Keep
         # writer-lock throughout, so another cooperating mount cannot start.
@@ -384,6 +390,7 @@ def eject(profile,args,cli):
             alias=Path('/dev/disk/by-partuuid')/uuid
             if alias.resolve(strict=True)!=Path(path):raise ValueError('stable device alias changed')
             command=[tool,'power-off','--block-device',str(alias),'--no-user-interaction']
+        progress.stage('Requesting normal operating-system ejection; keep the device connected until confirmation...', 'os-eject')
         result=subprocess.run(command,stdin=subprocess.DEVNULL,capture_output=True,timeout=60)
         if result.returncode:
             raise OSError(errno.EBUSY,'writer is unmounted, but OS ejection was refused: '+result.stderr.decode(errors='replace')[-2048:])
@@ -401,13 +408,8 @@ def listing(args,cli):
                 name=file.stem
                 if NAME.fullmatch(name) is None:continue
                 try:
-                    profile=load(store,name,cli);root=Path(profile['state']);data=cli.manifest(root)
-                    try:
-                        with cli.lock(root):busy=False
-                    except BlockingIOError:busy=True
-                    row=dict(name=name,state=str(root),mountpoint=profile['mountpoint'],mode=profile['mode'],
-                        phase=data['phase'],busy=busy,mounted=bool(data['mountpoint'] and attached(data['mountpoint'])),checked=False)
-                    row['needs_recovery']=not busy and (row['phase']!='ready' or row['mounted'])
+                    profile=load(store,name,cli);root=Path(profile['state'])
+                    row=dict(cli.snapshot(root),name=name,mountpoint=profile['mountpoint'])
                     if args.connected and profile['mode']=='direct':
                         try:row.update(connected=True,device=resolve(profile))
                         except FileNotFoundError:row['connected']=False
@@ -418,9 +420,10 @@ def listing(args,cli):
     else:
         for row in rows:
             if 'error' in row:print(row['name']+': unavailable: '+row['error']);continue
-            state='mounted' if row['mounted'] else 'starting/checking' if row['busy'] else 'needs recovery' if row['needs_recovery'] else 'ready'
+            state=row['status']
             if row.get('connected') is False:state+='; disconnected'
             print(row['name']+': '+state+'; '+row['mountpoint'])
+            if row['progress_current']:print('  '+row['progress']['message'])
 
 
 def execute(args,cli):
@@ -453,6 +456,8 @@ def execute(args,cli):
                     raise ValueError('volume needs recovery; run volume recover '+args.name)
                 check_mount(profile,cli)
         if args.volume_action=='mount':return background(profile,args,cli,fd)
+        if args.volume_action=='status':
+            return cli.status(argparse.Namespace(state=root,json=args.json,watch=args.watch,interval=args.interval))
         if args.volume_action=='unmount':return stop(profile,args,cli)
         if args.volume_action=='eject':return eject(profile,args,cli)
         if args.volume_action=='recover':
@@ -476,5 +481,8 @@ def parser(sub):
             command.add_argument('--check-bytes',type=int,default=1024**3)
             command.add_argument('--journal-bytes',type=int,default=256*1024**2)
         if name=='mount':command.add_argument('--checkpoint-every',type=int,default=64)
+    inspect=actions.add_parser('status',help='show one volume and its current progress')
+    inspect.add_argument('name');inspect.add_argument('--json',action='store_true')
+    inspect.add_argument('--watch',action='store_true');inspect.add_argument('--interval',type=float,default=1)
     show=actions.add_parser('list',help='show saved volumes and workflow state without opening devices')
     show.add_argument('--json',action='store_true');show.add_argument('--connected',action='store_true',help='also discover matching devices without opening them')

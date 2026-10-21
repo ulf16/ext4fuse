@@ -32,7 +32,7 @@ Python 3.11+, libfuse3 development files (macFUSE on macOS), and libext2fs/e2fsp
 python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-writer-build
 python3 experimental/shared-writer/install.py --prefix "$HOME/.local" \
   --build-dir /tmp/ext4-writer-build --python "$(command -v python3)" \
-  --version 0.3.0-beta.6
+  --version 0.3.0-beta.9
 "$HOME/.local/bin/ext4fuse-writer" doctor
 ```
 
@@ -334,3 +334,59 @@ registry (or explicitly select the same private registry). No automatic sudo,
 permission changes or cross-user mounting is performed. Keep profiles and recovery
 state outside the target mount/drive. Preserve recovery state even after ejection
 or forgetting a profile.
+
+
+## Current progress and watching status
+
+```sh
+ext4fuse-writer volume status linux-usb
+ext4fuse-writer volume status linux-usb --watch
+# Explicit state paths work too:
+ext4fuse-writer status /path/to/state --watch
+```
+
+Status distinguishes starting, mounted, checking before clean unmount, recovering,
+initializing and recovery needed. Named background mount waits now echo the latest
+startup stage directly; normal unmount waits show the writer's current check.
+Full-volume read stages report percentage and throughput; metadata checks do not
+invent a percentage. Progress includes elapsed time at each recorded update.
+`--interval` sets the watch refresh period (0.2..60 seconds, default 1). Only changed
+snapshots are printed. Ctrl-C stops this observer without stopping the writer.
+`--json --watch` emits one complete JSON document per changed snapshot.
+
+The JSON status fields remain available, with additive `status`, `progress` and
+`progress_current` fields. Progress records are bounded, private, atomic,
+best-effort observations, separate from durable recovery state. Missing, malformed,
+old or unwritable progress cannot authorize mounting, recovery or unplugging.
+A finished record is historical; `checked` remains false for status itself. A
+status snapshot can race with a workflow transition. Use successful checked
+unmount/eject, rather than status or a progress percentage, before disconnecting.
+The small `writer-progress` file may be lost without losing recovery authority.
+
+## Representative performance measurements
+
+The source benchmark accepts only a work directory and an installed runtime. It
+creates disposable 512 MiB regular images, never discovers or opens a physical disk:
+
+```sh
+python3 experimental/shared-writer/benchmark-workflows.py \
+  --work /private/tmp/ext4-benchmark --prefix "$(brew --prefix ext4fuse-writer)"
+```
+
+Defaults are three measured rounds per classic 1 KiB and checksum-enabled extent
+4 KiB layout, 32 MiB sequential files, and 128 individually fsynced 4 KiB small
+files per round. Results include one initialization and one admission without an integrity
+index per layout, plus repeated warm indexed mounts, checked unmounts, sequential write+fsync/read, small-file
+creation+fsync, three directory list/stat passes, and rename/read/unlink. Identical
+application file calls on the work directory's host filesystem provide context.
+Each ext4 run independently checks final e2fsck cleanliness and debugfs file bytes,
+and verifies that the seed image was unchanged. Timing has no universal pass bar.
+
+`workflow-benchmarks.json` retains all samples, medians, ranges, stage observations,
+configuration and host details. These are host-cache-warm measurements: no OS cache
+is evicted, and removing an optional index does not simulate cold USB hardware.
+Metadata-check stage times are observations, not a profiler of every engine path.
+Use the same arguments and a quiet host when comparing versions; real USB throughput,
+large populated filesystems and hardware durability require separate measurements.
+CI runs a smaller correctness workload. Failed runs retain state and mounts for
+normal inspection/recovery; the benchmark never force-unmounts or deletes them.

@@ -2180,3 +2180,17 @@ Profiles do not select a disk by label or retain a fragile BSD/loop number.
 Owner-only permissions, exclusive device admission, authenticated reads/indexes,
 checked publication and full-scan recovery remain in force. See WORKFLOW.md for
 registry locations, logs, sudo ownership, OS prerequisites and failure handling.
+
+
+## Observable workflow stages and repeatable performance workloads
+
+Installed status and named `volume status NAME` now expose bounded progress
+observations and a read-only `--watch`. Background startup echoes observed stages;
+final unmount waits show current checks. Authoritative workflow state, writer-lock,
+kernel attachment and actual checked publication retain their existing roles.
+Progress records are optional diagnostics, never recovery or disconnect authority.
+
+`benchmark-workflows.py` measures installed mount/close, sequential and small-file
+operations and directory workloads on two disposable ext4 layouts, with a local
+host-filesystem comparison, raw samples and independent final fsck/debugfs checks.
+See WORKFLOW.md for reproducible arguments and cache/physical-device limitations.

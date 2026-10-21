@@ -108,3 +108,20 @@ Zero on success, 1 on failure, 2 for invalid usage, 130 on keyboard interruption
 .SH SEE ALSO
 The installed share/doc/ext4fuse-writer/WORKFLOW.md describes installation,
 permissions, device admission, recovery and engine/platform limits.
+
+.SH PROGRESS AND BENCHMARKS
+.B status STATE --watch
+and
+.B volume status NAME --watch
+observe changed metadata/progress snapshots; Ctrl-C stops only the observer.
+.B --interval SECONDS
+sets a 0.2..60 second refresh period.
+.B --json --watch
+prints one JSON object per changed snapshot.
+Progress is optional diagnostic data and never authorizes unplugging.
+Wait for successful checked unmount or eject.
+.PP
+The source benchmark-workflows.py measures disposable regular-image mounts,
+file operations and checked closes. It retains samples, medians, ranges and
+independent filesystem checks. Measurements use host caches and do not represent
+physical USB throughput or power-loss qualification. See WORKFLOW.md.
