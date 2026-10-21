@@ -279,3 +279,42 @@ forced paged loading, native successor-root reuse, full-scan torn-write recovery
 zero full scans on virtual-device reopen/close, and invisible raw-device damage
 that must latch the native session failed. Tests use disposable virtual media;
 physical USB unplug/power-loss qualification remains outstanding.
+
+
+## Named-volume lifecycle and OS ejection
+
+Profiles are private, atomically replaced metadata, not redo authority. They bind
+platform, state directory identity, managed image/token and stable device identity,
+and mountpoint identity. Discovery is read-only and must find one exact match;
+controller admission remains mandatory. A global private registry lock serializes
+profile changes. Mount startup acquires writer-lock before releasing registry-lock,
+then passes that same locked open description into the background worker. The child
+validates its descriptor against the current private writer-lock inode. Other
+writers/forget operations cannot enter the transfer gap; listing remains available
+while startup scans run. Native helpers do not inherit the writer lock.
+
+The frontend reports private operation 131 only after mounting its own session
+and starting its notification thread; operation 129 remains special-file creation.
+The broker replies, then signals the parent's private readiness pipe. The parent
+also waits for kernel attachment. It never treats an arbitrary mountpoint, PID
+file or lack of stderr output as successful readiness. Loss/cancellation of the
+waiting parent closes the pipe without aborting the actual writer. Broker death
+retains the established mount intent/device guard and requires ordinary recovery.
+
+Named unmount never forces detachment. Eject waits for checked ready state, holds
+writer-lock, rechecks the saved binding and clean guard, audits the whole drive's
+mounts and canonical device users, flushes and revalidates the exclusive device,
+then releases its own claims before a normal OS eject request. OS-node identity
+and stable identity are checked again; physical macOS requests use the partition
+UUID, Linux power-off uses the stable partuuid alias. The OS may refuse ejection;
+state remains ready/retained and no success is reported on failure. Root can audit
+raw users; insufficient permissions fail closed. This retains the trusted-owner,
+cooperating-process model; it does not sandbox malicious same-UID/root actors or
+certify physical unplug/power-loss behavior.
+
+`test-volume-profiles.py` verifies private/unsafe profiles, wrong identities,
+geometry/ambiguity refusal, sibling/raw-user preflight refusal, concurrent startup
+status, lock-fd/readiness-fd validation, cancelled waits with a surviving writer,
+real background mounts, busy cwd refusal, foreground-API compatibility, broker-loss
+recovery, non-destructive forget, and virtual-device eject/reconnect with data
+verification after rediscovery. The background package adds no resident service.

@@ -12,7 +12,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 BINARIES = ('mutation-producer', 'reader-server', 'mount-frontend', 'journal-candidate', 'metadata-snapshot')
-MODULES = ('writer_cli.py', 'block-log.py', 'chain.py', 'credentials.py', 'device_admission.py',
+MODULES = ('writer_cli.py', 'volume_profiles.py', 'block-log.py', 'chain.py', 'credentials.py', 'device_admission.py',
            'device-writer.py', 'direct_device.py', 'direct-journal-producer.py', 'durable.py',
            'image_io.py', 'integrity_index.py', 'verified_reads.py', 'inplace.py', 'journal-producer.py', 'journal_candidate.py',
            'journal_recovery.py', 'live_device.py', 'merkle.py', 'merkle_store.py', 'mount-broker.py',

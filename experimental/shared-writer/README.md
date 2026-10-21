@@ -2166,3 +2166,17 @@ redo authority and the bounded temporary node cache. Fast unmount does not audit
 untouched media: silent damage is rejected when a chunk is read, or by a full
 scrub. See WORKFLOW.md and DURABILITY.md for publication ordering, fallback,
 external-change handling and qualification limits.
+
+
+## Remembered-volume commands
+
+`ext4fuse-writer volume add NAME --state STATE --mountpoint MOUNTPOINT` remembers
+an already initialized volume. `volume mount NAME` discovers its stable identity
+and starts a checked background writer; `volume unmount NAME` waits for normal
+checked unmount, and `volume eject NAME` also audits the containing drive and asks
+the OS to eject it normally. `volume list`, `volume recover NAME` and
+`volume forget NAME` complete the lifecycle without deleting recovery state.
+Profiles do not select a disk by label or retain a fragile BSD/loop number.
+Owner-only permissions, exclusive device admission, authenticated reads/indexes,
+checked publication and full-scan recovery remain in force. See WORKFLOW.md for
+registry locations, logs, sudo ownership, OS prerequisites and failure handling.

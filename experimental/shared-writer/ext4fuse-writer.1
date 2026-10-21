@@ -27,6 +27,19 @@ ext4fuse-writer \- mount and recover a managed writable ext4 filesystem
 .RB [ --mode " allocate|keep-size|punch" ]
 .br
 .B ext4fuse-writer doctor
+.B ext4fuse-writer volume
+.RB [ --profiles-dir " PATH" ]
+.B add NAME --state STATE --mountpoint MOUNTPOINT
+.br
+.B ext4fuse-writer volume
+.RB [ --profiles-dir " PATH" ]
+.B mount|unmount|eject|recover|forget NAME
+.br
+.B ext4fuse-writer volume
+.RB [ --profiles-dir " PATH" ]
+.B list
+.RB [ --json ]
+.RB [ --connected ]
 .SH DESCRIPTION
 The owner-only foreground writer uses a private durable recovery directory.
 Image initialization clones IMAGE into STATE/chain/image.img; the source is unchanged.
@@ -44,6 +57,19 @@ checks. Read progress at 100% does not mean clean publication is complete.
 Only successful device unmount prints a safe-disconnect confirmation; other
 partitions on the same physical device must also be unused before unplugging.
 Ctrl-C retains state and requires recovery; it never declares the device safe.
+.SH REMEMBERED VOLUMES
+Add binds initialized, clean state and an owned mountpoint; it does not format or
+initialize a device. Mount finds the saved stable identity and returns after its
+background writer has mounted. Progress is in STATE/volume-mount.log. Cancelling
+the readiness wait leaves that writer alive; use volume list/unmount to manage it.
+Unmount waits for clean publication. Eject also checks the whole drive is unused
+and requests ordinary OS ejection, without force. Linux physical power-off needs
+udisksctl. Other partitions must be unused. After interruption use volume recover;
+forget removes only an unmounted profile, preserving state and data.
+Profiles are private and use the same owner as state initialization (including
+sudo where required). There is no login service or automatic privilege escalation.
+Default registry: ~/Library/Application Support/ext4fuse-writer/volumes on macOS,
+~/.config/ext4fuse-writer/volumes on Linux. Keep it outside the target volume.
 .SH INTEGRITY INDEX
 Clean mounts reuse an authenticated chunk-hash index when available. Missing,
 stale or damaged indexes trigger a full-volume scan. Clean unmount checks metadata
@@ -61,7 +87,7 @@ Explicitly replay a supported dirty native Linux journal during initialization
 Retire completed generations after N commits (mount only; default 64; zero disables).
 .TP
 .B --check-bytes N
-Maximum device metadata-check scratch bytes (default 1073741824).
+Maximum metadata-check scratch bytes (default 1073741824).
 .TP
 .B --journal-bytes N
 Native journal import budget (default 268435456).

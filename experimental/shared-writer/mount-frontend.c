@@ -945,6 +945,9 @@ int main(int argc, char **argv) {
       goto done;
     notifying = 1;
   }
+  /* Only this frontend can acknowledge its own successful kernel mount. */
+  if (empty(NULL, 131, NULL, NULL, 0, 0, 0, 0))
+    goto done;
   result = fuse_session_loop(session);
 done:
   __atomic_store_n(&notify_stop, 1, __ATOMIC_RELEASE);

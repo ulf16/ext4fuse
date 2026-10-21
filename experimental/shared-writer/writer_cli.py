@@ -70,15 +70,20 @@ def seal(root, data, phase, mountpoint=None):
 
 
 @contextlib.contextmanager
-def lock(root):
-    fd = os.open(root / 'writer-lock', os.O_RDWR | os.O_NOFOLLOW)
+def lock(root, inherited=None):
+    if inherited is not None and (type(inherited) is not int or inherited < 3):
+        raise ValueError('invalid inherited writer lock')
+    fd = os.open(root / 'writer-lock', os.O_RDWR | os.O_NOFOLLOW) if inherited is None else inherited
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+        path_info = os.lstat(root / 'writer-lock')
+        if ((info.st_dev, info.st_ino) != (path_info.st_dev, path_info.st_ino)
+                or not stat.S_ISREG(path_info.st_mode)
+                or not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or info.st_nlink != 1 or info.st_mode & 0o077):
             raise ValueError('unsafe writer lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        yield
+        yield fd
     finally:
         os.close(fd)
 
@@ -170,7 +175,17 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
             if broker:
                 print('Mounting at ' + str(mountpoint) + '; use ext4fuse-writer unmount ' + str(root),
                       file=sys.stderr, flush=True)
-                broker.run_mount(opened, work, mountpoint, root / 'control.sock')
+                def ready():
+                    fd = getattr(args, 'ready_fd', None)
+                    if fd is not None:
+                        args.ready_fd = None
+                        try:
+                            os.write(fd, b'M')
+                        except BrokenPipeError:
+                            pass  # Cancelling the wait must not kill a starting mount.
+                        finally:
+                            os.close(fd)
+                broker.run_mount(opened, work, mountpoint, root / 'control.sock', ready=ready)
             if opened._failed:
                 raise OSError(errno.EIO, 'writer session failed; recovery is required')
         progress.stage('Finishing writes and verifying clean publication; keep the device connected...')
@@ -304,7 +319,8 @@ def allocate(args):
 def operate(args, mounting):
     work, config = runtime()
     root = root_path(args.state)
-    with lock(root):
+    with lock(root, getattr(args, 'lock_fd', None)):
+        args.lock_fd = None
         data = manifest(root)
         require_device(data, args)
         old_mount = data['mountpoint']
@@ -358,7 +374,7 @@ def status(args):
         print('Metadata status only; recover performs integrity verification.')
 
 
-def unmount(args):
+def unmount(args, announce=True):
     root = root_path(args.state)
     data = manifest(root)
     mountpoint = data['mountpoint']
@@ -395,8 +411,8 @@ def unmount(args):
                     raise ValueError('attachment still recorded; run status and recover before disconnecting')
                 if current['phase'] != 'ready':
                     raise ValueError('mount detached; run recover to verify retained state')
-                print('Unmounted; recovery state is ready.')
-                if current['mode'] == 'direct':
+                if announce:print('Unmounted; recovery state is ready.')
+                if announce and current['mode'] == 'direct':
                     print('Writer finished all checks. Safe to disconnect this volume, provided no other partition on the USB device is in use.')
                 return
         except BlockingIOError:
@@ -426,9 +442,11 @@ def parser():
         command.add_argument('--device', help='required for device state; identity must match initialization')
     mount.add_argument('mountpoint', type=Path, help='existing empty directory owned by launching user')
     mount.add_argument('--checkpoint-every', type=int, default=64)
+    mount.add_argument('--lock-fd', type=int, help=argparse.SUPPRESS)
+    mount.add_argument('--ready-fd', type=int, help=argparse.SUPPRESS)
     for command in (init, mount, recover):
         command.add_argument('--recover-journal', action='store_true', help='explicitly replay a supported dirty Linux journal')
-        command.add_argument('--check-bytes', type=int, default=1024**3, help='device metadata scratch budget (default 1 GiB)')
+        command.add_argument('--check-bytes', type=int, default=1024**3, help='metadata scratch budget (default 1 GiB)')
         command.add_argument('--journal-bytes', type=int, default=256*1024**2, help='native journal import budget (default 256 MiB)')
     inspect = sub.add_parser('status', help='inspect workflow metadata without replay or opening a device')
     inspect.add_argument('state', type=Path)
@@ -442,6 +460,8 @@ def parser():
     allocation.add_argument('offset', type=int)
     allocation.add_argument('length', type=int)
     allocation.add_argument('--mode', choices=('allocate', 'keep-size', 'punch'), default='allocate')
+    import volume_profiles
+    volume_profiles.parser(sub)
     sub.add_parser('doctor', help='report installed runtime and dependency paths')
     return p
 
@@ -453,6 +473,10 @@ def main():
     os.environ.pop('EXT4_TEST_CRASH', None)
     os.environ.pop('EXT4_DEVICE_VIEW', None)
     try:
+        ready_fd = getattr(args, 'ready_fd', None)
+        if ready_fd is not None and (ready_fd < 3 or not stat.S_ISFIFO(os.fstat(ready_fd).st_mode)
+                or fcntl.fcntl(ready_fd, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY):
+            raise ValueError('readiness descriptor must be a private pipe')
         if args.version:
             print('ext4fuse-writer ' + configuration()['version'])
         elif args.action == 'init':
@@ -469,6 +493,9 @@ def main():
             unmount(args)
         elif args.action == 'allocate':
             allocate(args)
+        elif args.action == 'volume':
+            import volume_profiles
+            volume_profiles.execute(args, sys.modules[__name__])
         elif args.action == 'doctor':
             work, config = runtime()
             print(json.dumps(dict(version=config['version'], python=sys.executable, runtime=str(work),

@@ -707,9 +707,11 @@ jobs:
       - name: Test installed foreground mounts and interrupted recovery
         run: python3 experimental/shared-writer/test-packaging.py --work "$RUNNER_TEMP/installed-writer" --mount
       - name: Install the device-test runtime
-        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/writer-prefix" --build-dir "$RUNNER_TEMP/installed-writer" --python "$(command -v python3)" --version 0.3.0-beta.1
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/writer-prefix" --build-dir "$RUNNER_TEMP/installed-writer" --python "$(command -v python3)" --version 0.3.0-beta.8
       - name: Test installed dirty-journal import and direct-device recovery
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-packaging-device.py --work "$RUNNER_TEMP/installed-writer" --prefix "$RUNNER_TEMP/writer-prefix"
+      - name: Verify named volumes, background readiness, busy eject refusal and device rediscovery
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-volume-profiles.py --work "$RUNNER_TEMP/installed-writer" --prefix "$RUNNER_TEMP/writer-prefix" --devices
       - name: Verify progress diagnostics cannot interrupt durable publication
         run: python3 experimental/shared-writer/test-progress.py
       - name: Save installed workflow validation
@@ -720,6 +722,7 @@ jobs:
           path: |
             ${{ runner.temp }}/installed-writer/packaging-results.json
             ${{ runner.temp }}/installed-writer/packaging-device-results.json
+            ${{ runner.temp }}/installed-writer/volume-profiles-results.json
             ${{ runner.temp }}/installed-writer/package-workflow-*/*.log
             ${{ runner.temp }}/installed-writer/packaging-device-mount.log
 
@@ -801,7 +804,7 @@ jobs:
         run: python3 experimental/shared-writer/test-endurance.py --work "$RUNNER_TEMP/endurance" --rounds 240 --seed 918273
       - name: Install mounted endurance runtime
         if: ${{ !inputs.reuse_endurance_run }}
-        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.6
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.8
       - name: Verify prolonged mixed mounted writes across repeated process loss
         if: ${{ !inputs.reuse_endurance_run }}
         env:

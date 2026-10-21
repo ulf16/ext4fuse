@@ -337,6 +337,10 @@ class LowBroker(Broker):
         if uid!=self.owner:raise OSError(errno.EACCES,'private mount owner only')
         if not 0<=umask<=0o777 or len(groups)>64:raise OSError(errno.EINVAL,'invalid mount credentials')
         self.s._mount_context(Credentials(uid,gid,tuple(groups),umask))
+        if op==131:
+            if not self.initialized:raise OSError(errno.EBUSY,'mount handshake required')
+            if path or data or token or offset or arg:raise OSError(errno.EINVAL,'invalid mount readiness frame')
+            return 0,b''
         if op==100:
             super().dispatch(22,b'',b'',uid,gid,umask,groups,0,0,0)
             self.s._mount_nodes();self.remember(None,b'.',root=True)
@@ -501,7 +505,8 @@ class LowBroker(Broker):
                 raise
         raise OSError(errno.ENOSYS,'unsupported low-level operation')
 
-def serve(broker,frontend):
+def serve(broker,frontend,ready=None):
+    notified=False
     while True:
         raw=frontend.stdout.read(HEADER.size)
         if not raw:break
@@ -523,6 +528,9 @@ def serve(broker,frontend):
         frontend.stdin.write(REPLY.pack(b'E4FP0001',error,0,0 if error else size,0 if error else len(result)))
         if not error:frontend.stdin.write(result)
         frontend.stdin.flush()
+        if op==131 and not error and not notified:
+            notified=True
+            if ready is not None:ready()
 
 def validate_mount(root,work,mount):
     mount=mount.absolute()
@@ -537,14 +545,14 @@ def validate_mount(root,work,mount):
     return root,work,mount
 
 
-def run_mount(s,work,mount,control_socket=None,*,allow_device_nodes=False):
+def run_mount(s,work,mount,control_socket=None,*,allow_device_nodes=False,ready=None):
     if allow_device_nodes and (os.getuid()!=0 or os.geteuid()!=0):raise PermissionError(errno.EPERM,'--allow-device-nodes requires root')
     if control_socket is not None:
         socket_path=Path(control_socket).absolute()
         if socket_path.resolve().is_relative_to(mount):raise ValueError('control socket must be outside mountpoint')
-    return _run_mount(s,work,mount,control_socket,allow_device_nodes)
+    return _run_mount(s,work,mount,control_socket,allow_device_nodes,ready)
 
-def _run_mount(s,work,mount,control_socket,allow_device_nodes):
+def _run_mount(s,work,mount,control_socket,allow_device_nodes,ready=None):
     from mount_control import control
     import select
     broker=LowBroker(s)
@@ -576,7 +584,7 @@ def _run_mount(s,work,mount,control_socket,allow_device_nodes):
                     raise OSError(node['error_errno'],'cache flush failed before control operation')
 
     try:
-        with control(s,control_socket,notify):serve(broker,frontend)
+        with control(s,control_socket,notify):serve(broker,frontend,ready)
         result=frontend.wait(timeout=10)
         if result:raise OSError(errno.EIO,f'FUSE frontend exited {result}')
     finally:

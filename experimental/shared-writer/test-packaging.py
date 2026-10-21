@@ -48,7 +48,7 @@ tmp = Path(tempfile.mkdtemp(prefix='package-workflow-', dir=a.work))
 prefix = a.prefix or tmp / 'installed package'
 if not a.prefix:
     run([sys.executable, HERE / 'install.py', '--prefix', prefix, '--build-dir', a.work,
-         '--python', sys.executable, '--version', '0.3.0-beta.1', '--tools-dir', Path(shutil.which('e2fsck')).parent])
+         '--python', sys.executable, '--version', '0.3.0-beta.8', '--tools-dir', Path(shutil.which('e2fsck')).parent])
 cli = prefix / 'bin' / 'ext4fuse-writer'
 lib = prefix / 'libexec' / 'ext4fuse-writer'
 check((lib / 'native' / 'reader-server').is_file())

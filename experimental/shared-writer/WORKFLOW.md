@@ -252,3 +252,85 @@ and run `recover STATE --device DEVICE`. An interrupted initialization may be
 incomplete; inspect status and preserve it as described above. Never delete state
 or use a second filesystem writer to bypass recovery. Avoid repeatedly interrupting
 cleanup. No progress output or cancellation path declares a failed check safe.
+
+
+## Remembered USB volumes and background mounting
+
+Initialize the explicitly selected offline ext4 partition once using `init` as
+above. Then remember its existing recovery state and desired mountpoint:
+
+```sh
+ext4fuse-writer volume add linux-usb --state /path/to/usb-state --mountpoint "$HOME/Volumes/linux-usb"
+ext4fuse-writer volume mount linux-usb
+ext4fuse-writer volume list
+ext4fuse-writer volume eject linux-usb
+```
+
+`add` creates an empty mountpoint if necessary. It never formats, initializes,
+opens or chooses a physical disk. It binds the private state directory, managed
+image/token identity and mountpoint identity. A profile cannot silently be
+rebound to replacement state or an unrelated device. Names are unique without
+case distinctions and contain letters, digits, underscores or hyphens.
+
+`mount` discovers the saved hardware serial plus GPT partition UUID, size and
+sector geometry, not a remembered `/dev/diskN` number or a volume label. Owned
+disk images/loop test devices use their saved backing-file identity. Disconnected,
+ambiguous or changed devices refuse admission. Every discovered device still goes
+through the existing system-disk, offline, off-device-state and exclusive-claim
+checks. It does not unmount other partitions to make admission succeed.
+
+The writer runs in a background process for this explicit command only; no login
+service, automatic drive watcher or privilege helper is installed. The parent
+hands its locked writer descriptor directly to the child. Success requires the
+child frontend's private successful-mount acknowledgement and visible kernel
+attachment, so a competing FUSE mount or a lost startup lock cannot claim
+readiness. Progress and diagnostics are in `STATE/volume-mount.log` (private and
+append-only). `--timeout` limits the readiness wait, not the lifetime of the
+background writer. Cancelling/timing out the wait leaves a starting writer alive;
+inspect `volume list` and the log, then `volume unmount NAME` normally.
+
+Use `volume unmount NAME` to leave the device connected. It waits for normal
+unmount and checked clean publication, including a mount that is still starting.
+Busy open files/cwds refuse unmount; no force-unmount is used. An already clean
+unmounted volume is an idempotent success. `volume eject NAME` performs that
+unmount, waits for all writer checks, reacquires the writer lock and checks the
+saved device binding, clean guard state, all sibling mounts and canonical raw
+device users. It then releases its own device claims and requests ordinary OS
+ejection/power-off, retaining writer-lock throughout. Identity is rechecked before
+the OS request; macOS physical targets use their GPT UUID rather than a cached
+BSD number. No force option is used. Another mounted sibling/raw user, insufficient
+audit permission, wrong device or OS refusal leaves state retained and prints no
+successful-ejection confirmation. Previously clean devices can also be ejected
+without mounting them again. Ejection affects the containing drive, so all other
+partitions must be unused.
+
+macOS uses normal `diskutil eject` (owned test images use `hdiutil detach`). Linux
+physical USB power-off requires `udisksctl` from udisks2 and a matching stable
+`/dev/disk/by-partuuid` link; missing tooling/authorization refuses the request.
+Disposable loop devices use checked normal detach. These virtual-device tests
+are not physical USB unplug or power-loss certification.
+
+After interruption, detach a remaining stale attachment with `volume unmount NAME`
+(which may report that recovery is required), then run:
+
+```sh
+ext4fuse-writer volume recover linux-usb
+ext4fuse-writer volume mount linux-usb
+```
+
+Recovery still scans fully and never accepts a changed device as a new baseline.
+`volume list --json` is a fast metadata snapshot, not an integrity check or device
+open. Add `--connected` for read-only device inventory. `volume forget NAME`
+removes only a clean, unmounted profile; it never deletes recovery state or data.
+Old explicit `mount STATE MOUNTPOINT --device DEVICE`, `unmount STATE` and recovery
+commands remain available.
+
+Profiles live in `~/Library/Application Support/ext4fuse-writer/volumes` on macOS
+and `~/.config/ext4fuse-writer/volumes` on Linux, with owner-only permissions. To
+choose another private registry, put `--profiles-dir PATH` immediately after
+`volume` on every command. Run all commands as the same owner as initialization;
+if raw-device permissions required sudo, use that same privileged owner and its
+registry (or explicitly select the same private registry). No automatic sudo,
+permission changes or cross-user mounting is performed. Keep profiles and recovery
+state outside the target mount/drive. Preserve recovery state even after ejection
+or forgetting a profile.
