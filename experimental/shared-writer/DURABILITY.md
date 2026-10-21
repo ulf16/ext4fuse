@@ -176,7 +176,7 @@ Python overlay-preimage comparisons use the same verifier. Transaction replay
 keeps its existing independent preimage/redo and readback checks: a partially
 published chunk does not yet belong to either completed root.
 
-Each native overlay also retains at most 64 verified pages (256 KiB payload),
+Each native overlay also retains at most 1024 verified pages (4 MiB payload),
 cleared on suspend, publication/refresh and rollback. The broker checks image
 identity and fingerprint before and after every reader operation, including
 operations entirely served by that native cache. No cache hit rereads raw bytes.

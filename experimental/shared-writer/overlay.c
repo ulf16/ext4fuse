@@ -16,10 +16,10 @@
 #include <unistd.h>
 #define PAGE 4096
 #define BUCKETS 1024
-#define VERIFIED_PAGES 64
+#define VERIFIED_PAGES 1024
 struct verified_page {
   uint64_t index, age;
-  unsigned char data[PAGE];
+  unsigned char *data;
 };
 struct page {
   uint64_t idx, epoch;
@@ -163,7 +163,8 @@ static int verified_view(struct overlay *t, const struct stat *token) {
 static void verified_clear(struct overlay *t) {
   t->verified_age = 0;
   if (t->verified_pages)
-    memset(t->verified_pages, 0, VERIFIED_PAGES * sizeof(*t->verified_pages));
+    for (unsigned i = 0; i < VERIFIED_PAGES; i++)
+      t->verified_pages[i].age = 0;
 }
 static int verified_cached(struct overlay *t, void *buffer, size_t length,
                            uint64_t offset) {
@@ -191,6 +192,11 @@ static int verified_cached(struct overlay *t, void *buffer, size_t length,
     if (!found) {
       found = oldest;
       found->age = 0;
+      if (!found->data) {
+        found->data = malloc(PAGE);
+        if (!found->data)
+          return ENOMEM;
+      }
       int error = verified_read(t, found->data, PAGE, index * PAGE);
       if (error)
         return error;
@@ -365,6 +371,9 @@ void overlay_close(struct overlay *t) {
   if (t->base_fd >= 0)
     close(t->base_fd);
   close(t->fd);
+  if (t->verified_pages)
+    for (unsigned i = 0; i < VERIFIED_PAGES; i++)
+      free(t->verified_pages[i].data);
   free(t->verified_pages);
   free(t->path);
   free(t);
