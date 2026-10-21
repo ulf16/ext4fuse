@@ -186,3 +186,11 @@ same job then exercises process-local 96/128 MiB allocation limits and recovery;
 the separate exhaustion job retains actual data-volume and recovery-log ENOSPC
 checks. These are complementary tests, not a claim that the mounted soak ran
 under global host memory pressure or that USB power loss was tested.
+
+The recovery-log exhaustion oracle allows one filesystem-specific outcome at
+final clean publication: APFS may still accept a small metadata marker after
+ordinary data allocation reports ENOSPC. That case must reach the injected full
+volume boundary, durably seal a clean device state, restore the checked device
+magic, and pass the same repeated cold recovery, acknowledged-content and fsck
+checks. Earlier redo-allocation stages must still report failure. Successful
+use of filesystem metadata reserves is not treated as data loss or a missed fill.

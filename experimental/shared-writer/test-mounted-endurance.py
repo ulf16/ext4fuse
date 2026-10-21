@@ -189,6 +189,9 @@ try:
     while cycle < a.cycles or time.monotonic() - started < a.duration:
         broker = start('mount-'+str(cycle))
         verify_mounted()
+        # Directory streams are immutable snapshots. Deliberately collect the
+        # cleanup list before retirement to exercise names that later vanish.
+        leftovers = list(mount.iterdir())
         # Retire previously verified acknowledgements in the durable external
         # oracle BEFORE deleting their files. Keep the on-volume working set
         # bounded during hour-long runs; never silently drop an obligation.
@@ -205,15 +208,16 @@ try:
             finally: os.close(fd)
         # A crash can leave the following unacknowledged scratch names behind.
         # Remove them only after recovery and mounted oracle verification.
-        for path in mount.iterdir():
+        for path in leftovers:
             if re.fullmatch(r'c[0-9]+-w[01]-[0-9]{6}(?:\.alias)?', path.name):
                 # Files published just before launcher loss may never have
                 # reached the acknowledgement ledger. They are not obligations.
-                path.unlink()
+                path.unlink(missing_ok=True)
             elif path.name.startswith('.pending-'):
-                path.unlink()
+                path.unlink(missing_ok=True)
             elif path.name.startswith('.scratch-'):
-                shutil.rmtree(path)
+                try: shutil.rmtree(path)
+                except FileNotFoundError: pass
         with selectors.DefaultSelector() as poll, ledger.open('ab', buffering=0) as recorded:
             workers = []
             for writer in range(2):

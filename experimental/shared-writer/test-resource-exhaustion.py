@@ -285,6 +285,7 @@ def direct_logs(base):
                     original(name)
                     if name == stage and not hits: hits.append(fill(filler))
                 candidate = f'/candidate-{number}'
+                failure = None
                 try:
                     with direct_target(root, device) as target:
                         with patch.object(inplace, 'boundary', boundary), patch.object(direct, 'boundary', boundary):
@@ -293,7 +294,15 @@ def direct_logs(base):
                                     s.applyat([dict(kind='create', path=candidate, data_hex=(bytes([number+1])*MiB).hex())])
                                 target.finish()
                             except (OSError, ValueError) as e: failure = type(e).__name__+': '+str(e)
-                            else: raise AssertionError(('direct log exhaustion did not fail', stage))
+                            else:
+                                # APFS can reserve metadata space after data
+                                # allocation reports ENOSPC. A tiny final clean
+                                # marker may still publish durably. Require the
+                                # exact full-volume boundary and checked clean
+                                # publication; larger redo stages must fail.
+                                assert stage == 'direct:closing' and hits, ('direct log exhaustion did not fail', stage)
+                                assert direct.old.load(root, 'direct-state')['phase'] == 'clean'
+                                assert direct.live_device.magic(target.target) == b'\x53\xef'
                         assert hits, ('direct boundary missed', stage)
                 finally:
                     filler.unlink(missing_ok=True); durable.directory(mount)
