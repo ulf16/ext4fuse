@@ -186,9 +186,15 @@ shares its verified tree with the session. Live checkpoints validate the current
 head, identity, fingerprint, root and guarded device publication without rereading
 the whole volume. They retire history; they are **not full media scrubs**.
 
-Cold recovery, standalone administrative checkpoints, and packaged clean close
-still perform a full integrity audit. A direct clean close uses one such pass
-plus metadata validation and exact readback of the changed guard sector. The
+Packaged mounts reuse a persistent authenticated index after a clean close.
+If it is absent, stale, damaged or interrupted, admission falls back to a full
+integrity scan. Clean unmount reuses the live verified tree, checks filesystem
+metadata through authenticated reads, and publishes a replacement index. Direct
+mode retains exact readback of the changed guard sector. Metadata checks still
+cost time; these changes do not promise constant-time mounting or unmounting.
+
+Initialization, explicit recovery, standalone administrative checkpoints and
+interrupted transaction recovery retain full integrity scans. The
 `Session.scrub()` development API performs an explicit full audit while open;
 for the installed command, unmount then `recover STATE` (with `--device` in direct
 mode) performs cold verification. Silent corruption outside chunks read during a
@@ -197,12 +203,34 @@ warm session is detected by these full audits, not by every live checkpoint.
 The scaling campaign compares complete synthetic paged and RAM trees, tests node
 offsets for 8 TiB geometry, and measures real 32 MiB image/virtual-device scans.
 It does not claim a complete multi-terabyte filesystem or physical-device test.
-Cold verification remains proportional to capacity; a durable authenticated index
-with verified reads would be a separate integrity design.
+The persistent index stores 32 bytes per 1 MiB chunk (about 32 MiB per TiB), plus
+a 4 KiB header, in the off-volume state directory. Loading reads the index and
+rebuilds its entire tree against the independently recorded committed root;
+index checksums or a root claimed by the index itself never grant trust. Old
+index formats and recovery state remain readable through the full-scan fallback.
+Temporary tree storage remains separate, bounded and disposable.
+
+The index is an optional acceleration, not recovery authority: snapshots are
+atomically replaced only at clean heads. A crash during publication leaves an
+old complete snapshot, a new complete snapshot, or a cache miss. Pending writes
+always follow full-scan redo recovery. Index-space exhaustion preserves recovery
+and costs performance; it must not discard redo or accept an incomplete index.
+
+A fast mount/unmount is **not a full media scrub**. Data and metadata consumed by
+native helpers are verified against the committed root. Invisible corruption in
+untouched chunks is detected when read or by explicit recovery/scrub, rather
+than necessarily at every unmount. Run `recover STATE` periodically while
+unmounted (add `--device DEVICE` for device mode) for a complete media audit.
+Ordinary external image edits invalidate the fingerprint. Device fingerprints
+cannot prove no offline edits: authenticated reads enforce the saved root. If
+Linux or another writer changed the volume, the old state does not authorize
+adopting those bytes; recover detects/refuses that mismatch. Reinitialize into
+new off-volume state after a legitimate external change, preserving old state
+until any interrupted writes have been resolved.
 
 ## USB progress, cancellation and disconnecting
 
-Initialization, mount and recovery show full-volume read progress on stderr,
+Initialization, recovery and mounts needing a scan show full-volume read progress on stderr,
 including percentage, bytes read and read throughput. Hash construction and
 metadata checks are separate stages; 100% read does not mean the device is ready
 to disconnect. Progress does not change machine-readable `status --json` output.

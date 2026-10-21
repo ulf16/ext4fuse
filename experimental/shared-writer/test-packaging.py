@@ -207,6 +207,8 @@ if a.mount:
         run([cli, 'unmount', state])
         check(process.wait(timeout=30) == 0, logfile.read_text())
         check(not attached(mount))
+        check('Loading authenticated integrity index' in logfile.read_text())
+        check('full-volume read' not in logfile.read_text(), 'clean mount/close scanned whole image')
         check(meta()['phase'] == 'ready' and not meta()['busy'])
         run(['e2fsck', '-fn', state / 'chain' / 'image.img'])
         check('installed writer' in run(['debugfs', '-R', 'cat /renamed', state / 'chain' / 'image.img']).stdout.decode())

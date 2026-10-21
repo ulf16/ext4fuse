@@ -152,14 +152,14 @@ def device_admission(call):
 
 def run_session(root, data, args, work, broker=None, mountpoint=None):
     chain_root = root / 'chain'
-    options = dict(checkpoint_every=args.checkpoint_every if broker else 0)
+    options = dict(checkpoint_every=args.checkpoint_every if broker else 0, persistent_index=bool(broker))
     with contextlib.ExitStack() as stack:
         target = None
         if data['mode'] == 'direct':
             from direct_device import Controller
             progress.stage('Checking device identity and exclusive access...')
             target = device_admission(lambda: stack.enter_context(Controller(root / 'device', args.device, work,
-                check_bytes=args.check_bytes, journal_bytes=args.journal_bytes)))
+                check_bytes=args.check_bytes, journal_bytes=args.journal_bytes, persistent_index=bool(broker))))
             chain_root = target.chain
             options['commit_sink'] = target
         else:
@@ -177,9 +177,25 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
         if target:
             target.finish()
         else:
-            # Includes orphan cleanup from Session.close; never label an unchecked image ready.
-            check_image(root)
-            chain.checkpoint(chain_root)
+            # Includes orphan cleanup from Session.close. Authenticate metadata
+            # snapshot reads as well as ordinary mounted reads on the fast path.
+            import integrity_index
+            with chain.locked(chain_root):
+                current = chain.read_state(chain_root)
+                cache = integrity_index.load(chain_root, current) if broker else None
+                if broker and cache is not None:
+                    import image_io
+                    from direct_device import checked
+                    from verified_reads import Reader
+                    verifier = Reader(chain_root / 'image.img', lambda: (current, cache))
+                    try:
+                        with image_io.verified(chain_root / 'image.img', verifier):
+                            checked(chain_root / 'image.img', None, work, root, args.check_bytes)
+                    finally:
+                        verifier.close()
+                else:
+                    check_image(root)
+                chain.checkpoint_locked(chain_root, cache)
 
 
 def require_device(data, args):

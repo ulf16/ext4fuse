@@ -31,13 +31,15 @@ class Session:
     serialized inside this object; other cooperating processes are excluded.
     Any unresolvable recovery/reader error leaves the session failed closed.
     """
-    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0, commit_sink=None, recover_journal=False):
+    def __init__(self, root, producer, reader, credentials=None, *, checkpoint_every=0, commit_sink=None, recover_journal=False, persistent_index=False):
         if credentials is not None and not isinstance(credentials, Credentials):
             raise ValueError('expected trusted Credentials')
         if type(checkpoint_every) is not int or not 0 <= checkpoint_every <= 1_000_000:
             raise ValueError('invalid checkpoint interval')
         if type(recover_journal) is not bool:
             raise ValueError('journal recovery option must be boolean')
+        if type(persistent_index) is not bool:
+            raise ValueError('persistent index option must be boolean')
         self._commit_sink = commit_sink
         self._checkpoint_every = checkpoint_every
         self._credentials = credentials
@@ -45,6 +47,7 @@ class Session:
         self._closed = False
         self._failed = False
         self._process = None
+        self._integrity = None
         self._reader_suspended = False
         self._verified = None
         self._verified_context = None
@@ -58,6 +61,9 @@ class Session:
         try:
             initial = getattr(self._commit_sink, 'initial_integrity', None)
             cache = initial(chain.read_state(self.root)) if initial is not None else None
+            if cache is None and persistent_index and image_io.lookup(self.root / 'image.img') is None:
+                import integrity_index
+                cache = integrity_index.load(self.root, chain.read_state(self.root))
             self.state, self._integrity = chain.recover_integrity_locked(self.root, cache)
             if recover_journal:
                 from journal_recovery import managed_locked
@@ -757,6 +763,11 @@ class Session:
                         self._process.kill()
                         self._process.wait(timeout=5)
                     self._process.stdout.close()
+                if (not self._failed and cleanup_error is None and self._integrity is not None
+                        and image_io.lookup(self.root / 'image.img') is None):
+                    import integrity_index
+                    if chain.read_state(self.root) == self.state:
+                        integrity_index.save(self.root, self.state, self._integrity)
             finally:
                 if self._failed and self._commit_sink is not None:
                     self._commit_sink.abort()

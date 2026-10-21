@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-only
-"""Session-local authenticated chunk tree; cold recovery always scans clean bytes.
+"""Authenticated chunk tree; interrupted recovery scans all clean bytes.
 
-Only roots are persisted, alongside complete page preimages/redo. No mutable
-on-disk hash index needs its own crash protocol. The cache is trusted only while
-chain-lock is held and the image's identity/mtime/ctime fingerprint is unchanged.
+Recovery roots and page preimages/redo are authoritative. The optional immutable
+clean-head snapshot in integrity_index is authenticated against this root before
+use; it is never replay authority. Live caches require chain-lock and unchanged
+image identity/fingerprint, with base reads verified against the tree.
 """
 import image_io
 import progress

@@ -162,8 +162,9 @@ requirements and the explicit remaining cold-scan cost.
 Live session checkpoints now retire history against the verified in-process tree;
 they no longer perform an independent whole-volume audit. Ordinary external edits
 still invalidate the fingerprint. Same-metadata latent corruption in a chunk not read through the live verifier
-is found by cold recovery, standalone administrative checkpoint, clean close
-or an explicit `Session.scrub()`. Cold replay still reads every chunk. The tests
+is found by explicit recovery, standalone administrative checkpoint,
+an authenticated read of that chunk or an explicit `Session.scrub()`.
+A fast packaged close is not a full scrub. Cold replay still reads every chunk. The tests
 must distinguish this cadence change from disabling corruption detection.
 
 ## Verified live reads
@@ -196,9 +197,9 @@ a stale reply for a later process. Reads, response sizes, image identity, short
 I/O and socket errors fail closed. This private interface assumes trusted shipped
 helpers and an exclusively claimed volume; it is not a hostile-process sandbox.
 
-Admission, cold recovery and clean-close whole-volume scans remain unchanged,
-as do explicit scrubs and metadata filesystem checks. This is not a persistent
-authenticated index and does not yet reduce startup or unmount scan costs.
+Verified reads permit the persistent-index fast path described below. Explicit
+recovery and scrubs still read the entire volume; filesystem metadata checks
+remain mandatory at packaged close.
 `test-verified-reads.py` checks hidden-metadata corruption, native reader and
 producer refusal, preimage failure latching, generation cache replacement, partial
 last chunks, cross-chunk reads, malformed bounds and short image I/O.
@@ -231,3 +232,50 @@ volume boundary, durably seal a clean device state, restore the checked device
 magic, and pass the same repeated cold recovery, acknowledged-content and fsck
 checks. Earlier redo-allocation stages must still report failure. Successful
 use of filesystem metadata reserves is not treated as data loss or a missed fill.
+
+
+## Persistent authenticated clean-head index
+
+`integrity-index` is a disposable snapshot of the 1 MiB chunk leaf hashes, bound
+to the complete clean chain state and file/token fingerprint. The independently
+persisted chain root remains authoritative. Load reconstructs all internal nodes,
+including canonical padding leaves, and compares the size-bound root before
+returning any tree. Stored internal nodes and a self-reported index checksum
+cannot authenticate themselves. Memory remains bounded by the existing paged
+tree implementation; a 128 GiB synthetic geometry tests forced paged loading.
+
+Packaged mount enables reuse; standalone Session/Controller callers retain their
+conservative default unless they explicitly pass `persistent_index=True`.
+Standalone recovery/checkpoint and `recover STATE` keep full scans. The first
+mount without an index scans. A clean close writes a new snapshot using private
+same-directory temporary storage, full file sync, atomic replacement and parent
+sync. Root/state publication and durable redo precede index publication; no index
+operation acknowledges writes or permits log retirement. Missing, stale, unsafe,
+truncated, malformed or hash-corrupt snapshots are cache misses. Index ENOSPC or
+sync failure leaves recovery state intact and requires a scan on the next open
+if no valid snapshot remains. A process killed before replacement can leave an
+unused `.integrity-index-*` file; it never grants trust or participates in replay.
+
+Pending transactions and non-clean direct-device phases never use an index for
+cold admission. They retain full-scan authentication of old bytes plus replay
+preimage/readback verification. Dirty-journal recovery is unchanged. Clean direct
+admission authenticates the superblock before installing the existing guard;
+identity, exclusive claims and guard-sector readback are unchanged. Fast close
+validates metadata through the verified channel before independent read-only
+fsck of its sparse metadata snapshot. Regular-image packaged fast close uses
+the same authenticated metadata path. A failed read prevents clean publication.
+
+This deliberately changes audit cadence: invisible corruption in chunks never
+read during a fast session can survive fast unmount undetected. They cannot be
+consumed by the native reader or mutation helper without verification. Explicit
+recovery/scrub retains whole-volume coverage, and externally edited volumes are
+never silently accepted as a new baseline. It is not a proof against malicious
+same-UID writers, stale-state rollback by the administrator, physical power-loss
+faults, or unsupported filesystem profiles.
+
+`test-integrity-index.py` exercises malformed/truncated/corrupted/unsafe indexes,
+state binding, index-space failure, eight actual publication process-death cases,
+forced paged loading, native successor-root reuse, full-scan torn-write recovery,
+zero full scans on virtual-device reopen/close, and invisible raw-device damage
+that must latch the native session failed. Tests use disposable virtual media;
+physical USB unplug/power-loss qualification remains outstanding.

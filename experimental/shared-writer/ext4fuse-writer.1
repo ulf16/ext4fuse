@@ -44,6 +44,13 @@ checks. Read progress at 100% does not mean clean publication is complete.
 Only successful device unmount prints a safe-disconnect confirmation; other
 partitions on the same physical device must also be unused before unplugging.
 Ctrl-C retains state and requires recovery; it never declares the device safe.
+.SH INTEGRITY INDEX
+Clean mounts reuse an authenticated chunk-hash index when available. Missing,
+stale or damaged indexes trigger a full-volume scan. Clean unmount checks metadata
+through verified reads and updates the index; it is not a full media scrub.
+Run recover on an unmounted volume periodically for a complete integrity scan.
+Interrupted writes always retain full-scan recovery. Never discard recovery state
+to accept externally changed volume contents. The index costs about 32 MiB per TiB.
 .SH OPTIONS
 .TP
 .B --recover-journal

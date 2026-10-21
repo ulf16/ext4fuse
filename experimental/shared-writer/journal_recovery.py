@@ -87,7 +87,8 @@ def inspect(path,*,replayed=False):
   info=os.fstat(image.fileno())
   if info.st_uid!=os.getuid() or info.st_nlink!=1 or info.st_size<=0 or info.st_size%4096:
    raise ValueError('journal candidate must be owned, singly linked and page aligned')
-  image.seek(1024);sb=image.read(1024)
+  import image_io
+  sb=image_io.verified_bytes(path,image,1024,1024)
   if len(sb)!=1024 or sb[56:58]!=b'\x53\xef':raise ValueError('invalid primary ext4 superblock')
   u16=lambda n:struct.unpack_from('<H',sb,n)[0]
   u32=lambda n:struct.unpack_from('<I',sb,n)[0]

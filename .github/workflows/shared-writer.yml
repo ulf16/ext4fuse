@@ -887,6 +887,8 @@ jobs:
         run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/integrity"
       - name: Verify paged hash storage, large offsets, scan reuse and corruption checks
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-integrity-scaling.py --work "$RUNNER_TEMP/integrity" --devices
+      - name: Verify persistent index authentication, publication crashes and device scan avoidance
+        run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-integrity-index.py --work "$RUNNER_TEMP/integrity" --devices
       - name: Verify authenticated native reads and silent corruption refusal
         run: python3 experimental/shared-writer/test-verified-reads.py --work "$RUNNER_TEMP/integrity"
       - name: Verify legacy roots and every Merkle recovery boundary
@@ -900,3 +902,4 @@ jobs:
             ${{ runner.temp }}/integrity/integrity-scaling-results.json
             ${{ runner.temp }}/integrity/merkle-results.json
             ${{ runner.temp }}/integrity/verified-reads-results.json
+            ${{ runner.temp }}/integrity/integrity-index-results.json

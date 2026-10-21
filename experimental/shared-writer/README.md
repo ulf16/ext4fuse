@@ -2147,3 +2147,22 @@ retired before deletion, bounding storage during twenty-minute CI campaigns and
 optional longer runs. Process-local memory exhaustion follows the mounted run;
 actual volume/log exhaustion remains separately required. See DURABILITY.md for
 scope: this is not global-memory-pressure or physical USB power-loss certification.
+
+
+## Persistent authenticated index for packaged mounts
+
+Packaged clean mounts and closes can now reuse `integrity-index`, an atomic
+clean-head leaf snapshot authenticated by rebuilding its tree against the durable
+chain root. This supersedes earlier mandatory clean-start/close scan descriptions
+above for the packaged fast path. Verified reads and authenticated metadata
+snapshot/fsck checks remain enabled. Missing, stale or damaged indexes fall back
+to a full scan; interrupted transactions always use full-scan recovery. Explicit
+`recover STATE`, standalone administrative checkpoints and `Session.scrub()`
+remain full audits. Standalone Session/Controller APIs retain conservative default
+scans; pass `persistent_index=True` to select the fast path.
+
+The index costs about 32 MiB per TiB, plus a 4 KiB header, and is separate from
+redo authority and the bounded temporary node cache. Fast unmount does not audit
+untouched media: silent damage is rejected when a chunk is read, or by a full
+scrub. See WORKFLOW.md and DURABILITY.md for publication ordering, fallback,
+external-change handling and qualification limits.

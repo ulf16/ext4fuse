@@ -87,6 +87,8 @@ try:
     finally: os.close(fd)
     check(b'Safe to disconnect this volume' in run([cli, 'unmount', state]))
     check(process.wait(timeout=60) == 0, log.read_text()); process = None
+    check('Loading authenticated integrity index' in log.read_text())
+    check('full-volume read' not in log.read_text(), 'clean mount/close scanned whole device')
     check(run(['debugfs', '-R', 'cat /persisted', device]) == b'installed direct writer')
     run(['e2fsck', '-fn', device])
     # Kill the launcher after acknowledged physical writes; its persistent guard must survive.

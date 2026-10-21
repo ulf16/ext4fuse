@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
-"""Session-local verified bytes. The admission/closing scans remain mandatory.
+"""Session-local verified bytes, bound to a scanned or authenticated stored tree.
 
 The private socket returns the bytes that were hashed, never permission to
 reread a raw descriptor. Cached bytes are immutable and generation-bound; a

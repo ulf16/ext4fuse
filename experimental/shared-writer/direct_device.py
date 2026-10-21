@@ -2,7 +2,7 @@
 """Guarded physical I/O with sealed page redo and no persistent data shadow."""
 import contextlib,os,stat,sys
 from pathlib import Path
-import chain,image_io,inplace,journal_candidate,journal_recovery,live_device,merkle
+import integrity_index,chain,image_io,inplace,journal_candidate,journal_recovery,live_device,merkle
 from durable import regular,sync,directory,boundary
 from device_admission import Device,refuse
 old=live_device.offline
@@ -157,8 +157,10 @@ def init(device,root,work,*,check_bytes=1024**3,recover_journal=False,journal_by
  return root
 
 class Controller:
- def __init__(self,root,device,work,*,check_bytes=1024**3,journal_bytes=256*1024**2):
+ def __init__(self,root,device,work,*,check_bytes=1024**3,journal_bytes=256*1024**2,persistent_index=False):
   budget_check(check_bytes);journal_candidate.budget(journal_bytes);self.journal_bytes=journal_bytes
+  if type(persistent_index) is not bool:raise ValueError("invalid persistent index option")
+  self.persistent_index=persistent_index
   self.root=Path(root);self.path=device;self.work=Path(work);self.check_bytes=check_bytes;self.failed=False;self.head=None;self.integrity=None
  def seal(self,**changes):
   self.state=dict(self.state,**changes);inplace.seal(self.root,'direct-state',self.state)
@@ -193,9 +195,15 @@ class Controller:
    elif s['phase']!='active':
     if current['pending'] is not None:refuse('pending direct transaction without active guard')
     if s['phase']=='clean' and live_device.magic(self.target)!=b'\x53\xef':refuse('clean direct device was changed')
-    self.integrity=live_device.scan(self.target)
+    self.integrity=integrity_index.load(self.chain,current) if self.persistent_index and s['phase']=='clean' else None
+    if self.integrity is None:self.integrity=live_device.scan(self.target)
     if self.integrity.root()!=current['sha256']:refuse('direct device changed outside recovery')
-    view=live_device.DeviceView(self.target);view.seek(0);sb=view.read(4096)[1024:2048]
+    # Authenticate the primary superblock before installing the physical guard.
+    self.integrity.stamp=merkle.fingerprint(os.stat(self.chain/'image.img'))
+    from verified_reads import Reader
+    verifier=Reader(self.chain/'image.img',lambda:(current,self.integrity))
+    try:sb=verifier.read(1024,1024)
+    finally:verifier.close()
     if sb[104:120].hex()!=s['uuid'] or int.from_bytes(sb[58:60],'little')!=1 or int.from_bytes(sb[96:100],'little')&4:refuse('direct source identity or clean state changed')
     self.seal(phase='arming');boundary('direct:arming')
     live_device.guard(self.target);self.seal(phase='active');boundary('direct:active')
@@ -248,11 +256,18 @@ class Controller:
  def finish(self):
   if self.failed:refuse('failed direct session must keep device guarded')
   with chain.locked(self.chain):
-   # The session is closed and chain-lock held: release the old index before
-   # allocating the one full close audit's tree.
+   # Fast close reuses the session tree; administrative recovery keeps a
+   # complete scan. In both cases metadata is checked through verified reads.
+   cache=self.integrity if self.persistent_index else None
    self.integrity=None
-   current,tree=chain.recover_integrity_locked(self.chain);self.recover_integrity(current,tree)
-   uuid,_=checked(self.chain/'image.img',self.target,self.work,self.root,self.check_bytes)
+   current,tree=chain.recover_integrity_locked(self.chain,cache);self.recover_integrity(current,tree)
+   # The metadata snapshot must use authenticated bytes when a close scan is skipped.
+   from verified_reads import Reader
+   verifier=Reader(self.chain/'image.img',lambda:(current,tree))
+   try:
+    with image_io.verified(self.chain/'image.img',verifier):
+     uuid,_=checked(self.chain/'image.img',self.target,self.work,self.root,self.check_bytes)
+   finally:verifier.close()
    if uuid!=self.state['uuid']:refuse('direct filesystem identity changed')
    self.checkpoint_integrity(current,tree);self.seal(phase='closing');boundary('direct:closing')
    start=live_device.MAGIC//self.target.sector*self.target.sector;data=bytearray(old.read_at(self.target.fd,self.target.sector,start));at=live_device.MAGIC-start;data[at:at+2]=b'\x53\xef'
@@ -261,3 +276,4 @@ class Controller:
    if old.read_at(self.target.fd,self.target.sector,start)!=data:refuse('direct clean publication changed')
    self.target.check()
    self.seal(phase='clean');boundary('direct:closed')
+   integrity_index.save(self.chain,current,tree)
