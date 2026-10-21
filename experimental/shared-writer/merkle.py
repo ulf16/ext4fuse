@@ -7,6 +7,7 @@ on-disk hash index needs its own crash protocol. The cache is trusted only while
 chain-lock is held and the image's identity/mtime/ctime fingerprint is unchanged.
 """
 import image_io
+import progress
 from merkle_store import Nodes
 import fcntl
 import hashlib
@@ -120,6 +121,7 @@ def scan(image, state, *, legacy=False):
     before = fingerprint(identity(image, state))
     tree = Tree(state['size'])
     whole = hashlib.sha256() if legacy else None
+    meter = progress.Scan(tree.size)
     image.seek(0)
     for index in range(tree.count):
         data = image.read(min(CHUNK, tree.size - index * CHUNK))
@@ -127,11 +129,14 @@ def scan(image, state, *, legacy=False):
             raise ValueError('short image during Merkle scan')
         if whole is not None: whole.update(data)
         tree.set(tree.width + index, leaf(index, data))
+        meter.update(min(tree.size, (index + 1) * CHUNK))
+    meter.hashing()
     tree.finish()
     tree.legacy_sha256 = whole.hexdigest() if whole is not None else None
     tree.stamp = fingerprint(identity(image, state))
     if tree.stamp != before:
         raise ValueError('image changed during Merkle scan')
+    meter.complete()
     return tree
 
 

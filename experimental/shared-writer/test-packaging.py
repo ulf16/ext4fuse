@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -54,7 +55,7 @@ check((lib / 'native' / 'reader-server').is_file())
 check(not (lib / 'test-mounted-writer.py').exists())
 check({p.name for p in (lib / 'native').iterdir()} == {
     'mutation-producer', 'reader-server', 'mount-frontend', 'metadata-snapshot', 'journal-candidate'})
-check('0.3.0-beta.1' in run([cli, '--version']).stdout.decode())
+check('ext4fuse-writer ' in run([cli, '--version']).stdout.decode())
 check(json.loads(run([cli, 'doctor']).stdout)['runtime'] == str(lib / 'native'))
 check('state' in run([cli, 'mount', '--help']).stdout.decode())
 # Isolated launch ignores injected Python module paths and current-directory modules.
@@ -80,7 +81,44 @@ def snapshot():
     return {str(p.relative_to(state)): (p.stat().st_size, p.stat().st_mtime_ns, digest(p))
             for p in state.rglob('*') if p.is_file()}
 before = snapshot(); meta(); check(before == snapshot(), 'status changed state')
-run([cli, 'recover', state]); check(meta()['phase'] == 'ready')
+verified = run([cli, 'recover', state])
+check(b'Checking volume integrity: 0%' in verified.stderr)
+check(b'validating hash tree' in verified.stderr)
+check(b'Safe to disconnect' not in verified.stdout)
+check(meta()['phase'] == 'ready')
+# Cancel a real cold scan at its first progress notification. The process is
+# observed by the parent before SIGINT; an unexpected successful exit fails.
+# Use a larger disposable image so there is ample work after the notification.
+cancel_source = tmp / 'cancel-source.img'
+with cancel_source.open('xb') as stream:
+    stream.truncate(512 * 1024**2)
+run(['mke2fs', '-q', '-F', '-t', 'ext4', '-b', '4096', cancel_source])
+cancel_state = tmp / 'cancel-state'
+run([cli, 'init', '--image', cancel_source, cancel_state])
+with (tmp / 'cancel.stdout').open('wb') as output:
+    cancelled = subprocess.Popen([cli, 'recover', cancel_state], stdout=output, stderr=subprocess.PIPE)
+    messages = []
+    try:
+        while True:
+            line = cancelled.stderr.readline()
+            check(bool(line), 'recovery exited before scan progress')
+            messages.append(line)
+            if b'Checking volume integrity: 0%' in line:
+                cancelled.send_signal(signal.SIGINT)
+                break
+        tail = cancelled.communicate(timeout=60)[1]
+        check(cancelled.returncode == 130, repr((messages, tail)))
+        check(b'retain the entire state directory' in tail)
+    finally:
+        if cancelled.poll() is None:
+            cancelled.kill(); cancelled.wait(timeout=30)
+check(b'Safe to disconnect' not in (tmp / 'cancel.stdout').read_bytes())
+cancel_meta = json.loads(run([cli, 'status', cancel_state, '--json']).stdout)
+check(cancel_meta['needs_recovery'] and cancel_meta['phase'] == 'recovery-required')
+run([cli, 'recover', cancel_state])
+check(json.loads(run([cli, 'status', cancel_state, '--json']).stdout)['phase'] == 'ready')
+run(['e2fsck', '-fn', cancel_state / 'chain' / 'image.img'])
+
 run([cli, 'init', '--image', seed, state], expected=1)
 run([cli, 'recover', state, '--device', '/dev/not-a-device'], expected=1)
 check(meta()['phase'] == 'ready')
@@ -143,6 +181,16 @@ if a.mount:
             time.sleep(.1)
         check(meta()['busy'] and meta()['mounted'])
         run([cli, 'recover', state], expected=1)
+        # A process whose cwd is on the volume must prevent normal unmount.
+        # Failure must leave the attachment and never print safe-disconnect.
+        occupant = subprocess.Popen([sys.executable, '-c', 'import sys; sys.stdin.read()'],
+                                    cwd=mount, stdin=subprocess.PIPE)
+        try:
+            busy_result = run([cli, 'unmount', state, '--timeout', '.2'], expected=1)
+            check(attached(mount), 'busy unmount detached a volume still in use')
+            check(b'Safe to disconnect' not in busy_result.stdout)
+        finally:
+            occupant.communicate(timeout=30)
         (mount / 'written').write_bytes(b'installed writer\0durable\n')
         fd = os.open(mount / 'written', os.O_RDWR)
         try: os.fsync(fd)

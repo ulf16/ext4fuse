@@ -165,3 +165,24 @@ still invalidate the fingerprint. Same-metadata latent corruption in an untouche
 chunk is found by cold recovery, standalone administrative checkpoint, clean close
 or an explicit `Session.scrub()`. Cold replay still reads every chunk. The tests
 must distinguish this cadence change from disabling corruption detection.
+
+## Timed mounted endurance
+
+`test-mounted-endurance.py --work WORK --prefix PREFIX --cycles 3 --acks 32
+--duration 1200` runs for at least twenty minutes, completing each crash/recovery
+cycle. Two concurrent writers split and overwrite files, fsync, rename and
+hardlink, then churn directories, symlinks, permissions, truncation and open-unlink
+handles. An off-volume fsynced ledger records acknowledged obligations. After
+process loss, cold recovery, independent e2fsck/debugfs checks and remount verify
+all outstanding acknowledgements. Verified old obligations are durably retired
+before deletion so the volume working set stays bounded during longer runs.
+Incomplete unacknowledged work is cleaned only after recovery and verification.
+
+`--duration` accepts up to 86400 seconds; `--stall-timeout` limits time without a
+new acknowledgement rather than total time in a busy cycle. The report records
+actual elapsed time, completed cycles and total/retained acknowledgements. CI
+runs twenty minutes by default and manual dispatch accepts up to one hour. The
+same job then exercises process-local 96/128 MiB allocation limits and recovery;
+the separate exhaustion job retains actual data-volume and recovery-log ENOSPC
+checks. These are complementary tests, not a claim that the mounted soak ran
+under global host memory pressure or that USB power loss was tested.

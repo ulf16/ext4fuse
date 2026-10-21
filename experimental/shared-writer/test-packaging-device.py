@@ -85,7 +85,7 @@ try:
     fd = os.open(mount / 'persisted', os.O_RDWR)
     try: os.fsync(fd)
     finally: os.close(fd)
-    run([cli, 'unmount', state])
+    check(b'Safe to disconnect this volume' in run([cli, 'unmount', state]))
     check(process.wait(timeout=60) == 0, log.read_text()); process = None
     check(run(['debugfs', '-R', 'cat /persisted', device]) == b'installed direct writer')
     run(['e2fsck', '-fn', device])
@@ -97,7 +97,7 @@ try:
         stream.seek(1080); check(stream.read(2) == bytes(2), 'device was not guarded')
     if sys.platform == 'darwin':
         run([cli, 'recover', state, '--device', device], expected=1)
-    run([cli, 'unmount', state], expected=1)
+    check(b'Safe to disconnect' not in run([cli, 'unmount', state], expected=1))
     check(not attached(mount))
     run([cli, 'mount', state, mount, '--device', device], expected=1)
     run([cli, 'recover', state, '--device', device])
@@ -109,7 +109,7 @@ try:
     check(not (state / 'control.sock').exists(), 'stale device control socket survived')
     process = mount_start(state, mount, device, log)
     check((mount / 'survived').read_bytes() == b'acknowledged before launcher loss')
-    run([cli, 'unmount', state])
+    check(b'Safe to disconnect this volume' in run([cli, 'unmount', state]))
     check(process.wait(timeout=60) == 0, log.read_text()); process = None
     # Sparse token must not silently become a full data shadow.
     check((state / 'device' / 'chain' / 'image.img').stat().st_blocks == 0)

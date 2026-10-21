@@ -32,7 +32,7 @@ Python 3.11+, libfuse3 development files (macFUSE on macOS), and libext2fs/e2fsp
 python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-writer-build
 python3 experimental/shared-writer/install.py --prefix "$HOME/.local" \
   --build-dir /tmp/ext4-writer-build --python "$(command -v python3)" \
-  --version 0.3.0-beta.4
+  --version 0.3.0-beta.5
 "$HOME/.local/bin/ext4fuse-writer" doctor
 ```
 
@@ -199,3 +199,28 @@ offsets for 8 TiB geometry, and measures real 32 MiB image/virtual-device scans.
 It does not claim a complete multi-terabyte filesystem or physical-device test.
 Cold verification remains proportional to capacity; a durable authenticated index
 with verified reads would be a separate integrity design.
+
+## USB progress, cancellation and disconnecting
+
+Initialization, mount and recovery show full-volume read progress on stderr,
+including percentage, bytes read and read throughput. Hash construction and
+metadata checks are separate stages; 100% read does not mean the device is ready
+to disconnect. Progress does not change machine-readable `status --json` output.
+
+Use `ext4fuse-writer unmount STATE` from another terminal. It retries a brief busy
+mount normally, then waits up to one hour for verification and clean publication.
+Close applications and terminals using the mount if it stays busy. `--timeout`
+can choose a wait up to 86400 seconds. A timeout does not cancel the writer:
+keep the USB connected, check the original mount terminal and retry unmount.
+
+Only a successful device unmount reports “Safe to disconnect this volume”. Other
+partitions on the same USB device must also be unused/unmounted before physically
+unplugging it; the writer does not eject them or select a whole disk automatically.
+Keep the durable recovery directory on the Mac even after clean unmount.
+
+Ctrl-C cancels a foreground check. It does not promise a clean device: retain the
+entire state directory, keep the USB attached, detach a remaining mount normally
+and run `recover STATE --device DEVICE`. An interrupted initialization may be
+incomplete; inspect status and preserve it as described above. Never delete state
+or use a second filesystem writer to bypass recovery. Avoid repeatedly interrupting
+cleanup. No progress output or cancellation path declares a failed check safe.

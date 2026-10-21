@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import re
 import signal
 import subprocess
 import sys
@@ -21,6 +22,8 @@ p.add_argument('--work', type=Path, required=True)
 p.add_argument('--prefix', type=Path, required=True)
 p.add_argument('--cycles', type=int, default=3)
 p.add_argument('--acks', type=int, default=32)
+p.add_argument('--duration', type=float, default=0, help='minimum workload seconds; complete crash/recovery cycles until reached')
+p.add_argument('--stall-timeout', type=float, default=240, help='seconds without an acknowledgement before failure')
 p.add_argument('--seed', type=int, default=442211)
 p.add_argument('--worker', nargs=3, metavar=('MOUNT', 'CYCLE', 'WRITER'), help=argparse.SUPPRESS)
 a = p.parse_args()
@@ -57,6 +60,27 @@ if a.worker:
                 os.link(mount/target, mount/(target+'.alias'))
                 os.fsync(directory)
                 assert os.pread(fd, len(value), 0) == value
+                # Repeated namespace churn and open-unlink lifetime alongside
+                # immutable, externally acknowledged files. Per-worker names
+                # avoid replacing another writer's unacknowledged state.
+                scratch = mount / f'.scratch-{writer}'
+                scratch.mkdir()
+                item = scratch / 'item'
+                item.write_bytes(b'copy-and-truncate' * 701)
+                held = os.open(item, os.O_RDWR)
+                try:
+                    os.ftruncate(held, 4097)
+                    os.fchmod(held, 0o640)
+                    os.rename(item, scratch / 'renamed')
+                    os.symlink('renamed', scratch / 'link')
+                    assert (scratch / 'link').read_bytes() == (b'copy-and-truncate' * 701)[:4097]
+                    (scratch / 'link').unlink()
+                    (scratch / 'renamed').unlink()
+                    assert os.pread(held, 4097, 0) == (b'copy-and-truncate' * 701)[:4097]
+                finally:
+                    os.close(held)
+                scratch.rmdir()
+                os.fsync(directory)
             finally:
                 os.close(fd)
             # Parent records only acknowledgements actually received, never
@@ -67,7 +91,8 @@ if a.worker:
     raise SystemExit(0)
 
 
-if not 1 <= a.cycles <= 100 or not 2 <= a.acks <= 10000:
+if (not 1 <= a.cycles <= 10000 or not 2 <= a.acks <= 10000
+        or not 0 <= a.duration <= 86400 or not 1 <= a.stall_timeout <= 3600):
     p.error('invalid cycle/ack count')
 cli = a.prefix/'bin'/'ext4fuse-writer'
 base = Path(tempfile.mkdtemp(prefix='mounted-endurance-', dir=a.work))
@@ -82,6 +107,9 @@ model.command(['debugfs', '-w', '-R', f'set_inode_field / gid {os.getgid()}', se
 state = base/'state'; mount = base/'mount'; mount.mkdir()
 model.command([cli, 'init', '--image', seed, state])
 acknowledged = []
+total_acknowledgements = 0
+started = time.monotonic()
+completed_cycles = 0
 
 
 def start(label):
@@ -126,7 +154,23 @@ def clean_unmount():
 
 
 def verify_mounted():
-    for ack in acknowledged:
+    # Reconstruct obligations from the persisted external oracle, independently
+    # of the parent's live list. Retirement is a durable deletion permission.
+    outstanding = {}
+    if ledger.exists():
+        for raw in ledger.read_bytes().splitlines():
+            item = json.loads(raw)
+            if set(item) == {'retire'}:
+                for old in item['retire']:
+                    key = (old['cycle'], old['writer'], old['number'])
+                    assert outstanding.pop(key) == old
+            else:
+                assert set(item) == {'cycle', 'writer', 'number'}
+                key = (item['cycle'], item['writer'], item['number'])
+                assert key not in outstanding
+                outstanding[key] = item
+    assert list(outstanding.values()) == acknowledged, 'live oracle differs from durable ledger'
+    for ack in outstanding.values():
         target = name(**ack)
         expected = content(**ack)
         for path in (mount/target, mount/(target+'.alias')):
@@ -137,10 +181,39 @@ def verify_mounted():
 broker = None
 workers = []
 ledger = base/'acknowledgements.jsonl'
+with ledger.open('xb') as recorded:
+    durable.sync(recorded.fileno())
+durable.directory(base)
 try:
-    for cycle in range(a.cycles):
+    cycle = 0
+    while cycle < a.cycles or time.monotonic() - started < a.duration:
         broker = start('mount-'+str(cycle))
         verify_mounted()
+        # Retire previously verified acknowledgements in the durable external
+        # oracle BEFORE deleting their files. Keep the on-volume working set
+        # bounded during hour-long runs; never silently drop an obligation.
+        if acknowledged:
+            with ledger.open('ab', buffering=0) as recorded:
+                recorded.write(json.dumps(dict(retire=list(acknowledged))).encode() + b'\n')
+                durable.sync(recorded.fileno())
+            retired = list(acknowledged); acknowledged.clear()
+            for ack in retired:
+                for target in (name(**ack), name(**ack) + '.alias'):
+                    (mount / target).unlink()
+            fd = os.open(mount, os.O_RDONLY | os.O_DIRECTORY)
+            try: os.fsync(fd)
+            finally: os.close(fd)
+        # A crash can leave the following unacknowledged scratch names behind.
+        # Remove them only after recovery and mounted oracle verification.
+        for path in mount.iterdir():
+            if re.fullmatch(r'c[0-9]+-w[01]-[0-9]{6}(?:\.alias)?', path.name):
+                # Files published just before launcher loss may never have
+                # reached the acknowledgement ledger. They are not obligations.
+                path.unlink()
+            elif path.name.startswith('.pending-'):
+                path.unlink()
+            elif path.name.startswith('.scratch-'):
+                shutil.rmtree(path)
         with selectors.DefaultSelector() as poll, ledger.open('ab', buffering=0) as recorded:
             workers = []
             for writer in range(2):
@@ -149,7 +222,7 @@ try:
                     '--seed', str(a.seed), '--worker', str(mount), str(cycle), str(writer)],
                     stdout=subprocess.PIPE, stderr=log, start_new_session=True)
                 log.close(); workers.append(child); poll.register(child.stdout, selectors.EVENT_READ)
-            count = 0; seen = set(); deadline = time.monotonic()+240
+            count = 0; seen = set(); deadline = time.monotonic()+a.stall_timeout
             while count < a.acks or len(seen) < 2:
                 if time.monotonic() >= deadline: raise TimeoutError('mounted writers stalled: '+str(base))
                 for key, unused in poll.select(1):
@@ -159,6 +232,8 @@ try:
                     acknowledged.append(ack); seen.add(ack['writer'])
                     recorded.write(raw); durable.sync(recorded.fileno())
                     count += 1
+                    total_acknowledgements += 1
+                    deadline = time.monotonic() + a.stall_timeout
                     if count >= a.acks and len(seen) == 2: break
         # Crash while both writers may have the next unacknowledged operation
         # in flight. Kill workers too, so their open descriptors cannot hold the
@@ -174,7 +249,10 @@ try:
         for ack in acknowledged:
             target = name(**ack)
             assert model.command(['debugfs', '-R', 'cat /'+target, state/'chain'/'image.img']) == content(**ack), target
-        print('PASS mounted endurance cycle', cycle, 'durable acknowledgements', len(acknowledged), flush=True)
+        completed_cycles += 1
+        print('PASS mounted endurance cycle', cycle, 'total durable acknowledgements', total_acknowledgements,
+              'elapsed seconds', round(time.monotonic() - started, 1), flush=True)
+        cycle += 1
     broker = start('final-remount'); verify_mounted()
     clean_unmount(); assert broker.wait(timeout=60) == 0; broker = None
     model.command(['e2fsck', '-fn', state/'chain'/'image.img'])
@@ -184,7 +262,9 @@ finally:
     if attached(mount):
         subprocess.run([cli, 'unmount', state], timeout=120)
 
-report = dict(result='passed', cycles=a.cycles, writers=2, acknowledgements=len(acknowledged),
+report = dict(result='passed', cycles=completed_cycles, writers=2, acknowledgements=total_acknowledgements,
+              retained_acknowledgements=len(acknowledged), requested_seconds=a.duration,
+              elapsed_seconds=round(time.monotonic()-started, 3), mixed_namespace_operations=True,
               seed=a.seed, retained=str(base), scope='application fsync/rename/directory fsync before process loss; no host power-loss certification')
 (a.work/'mounted-endurance-results.json').write_text(json.dumps(report, indent=2)+'\n')
 print('PASS mounted endurance', json.dumps(report), flush=True)

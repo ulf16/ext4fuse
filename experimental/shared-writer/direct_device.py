@@ -73,6 +73,8 @@ def token(path,size):
 
 def checked(path,target,work,root,budget):
  """Full metadata fsck with sparse scratch; ordinary file contents are omitted."""
+ import progress
+ progress.stage("Checking device filesystem metadata; keep the device connected...")
  header=journal_recovery.inspect(path)
  if header['needed']:refuse('direct mode requires native journal recovery before initialization')
  snapshot=root/'metadata-check.img'

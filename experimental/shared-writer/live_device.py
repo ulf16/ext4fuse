@@ -65,12 +65,17 @@ class DeviceView:
 
 
 def scan(target):
+    import progress
     target.check()
     tree=merkle.Tree(target.size);view=DeviceView(target)
+    meter=progress.Scan(target.size)
     for i in range(tree.count):
         view.seek(i*merkle.CHUNK)
         tree.set(tree.width+i,merkle.leaf(i,view.read(min(merkle.CHUNK,target.size-i*merkle.CHUNK))))
+        meter.update(min(target.size,(i+1)*merkle.CHUNK))
+    meter.hashing()
     tree.finish();target.check()
+    meter.complete()
     return tree
 
 

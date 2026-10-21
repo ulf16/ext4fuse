@@ -2126,3 +2126,24 @@ These counters cover controller image I/O, not native metadata traversal. Dirty
 startup in the final test reads 34 MiB: one 32 MiB cold pass plus touched-chunk
 verification. Real ext4 writes, checkpointing, explicit scrub and process-loss
 recovery also pass with a forced 4 KiB hash-page cache on a 128 MiB fixture.
+
+
+## USB workflow progress and prolonged mounted endurance
+
+The packaged CLI now reports full-volume read percentages and throughput on
+stderr, followed by hash-tree and metadata-check stages. Reads reaching 100%
+never authorize disconnecting. Normal unmount retries transient vnode release,
+waits up to one hour for clean verification, and only a checked device unmount
+prints the safe-disconnect message (other partitions must also be unused).
+Ctrl-C retains recovery state and explains how to detach/recover; tests cancel
+a real scan and independently check the recovered image. Busy mounts remain
+attached, and diagnostic-output failure cannot interrupt durable publication.
+
+The mounted endurance harness adds timed runs with two concurrent writers,
+namespace churn, truncation, mode changes and open-unlink handles, repeatedly
+killing the launcher and validating cold recovery. An fsynced off-volume ledger
+is independently replayed at remount. Only verified obligations are durably
+retired before deletion, bounding storage during twenty-minute CI campaigns and
+optional longer runs. Process-local memory exhaustion follows the mounted run;
+actual volume/log exhaustion remains separately required. See DURABILITY.md for
+scope: this is not global-memory-pressure or physical USB power-loss certification.

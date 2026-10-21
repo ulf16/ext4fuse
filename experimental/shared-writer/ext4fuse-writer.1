@@ -39,6 +39,11 @@ Unmount waits for clean publication and integrity checks; do not unplug first.
 Following interruption, detach any stale mount and run recover with retained STATE.
 Device mount and recovery always require an explicit matching device node.
 Never delete recovery files to bypass an error or edit an active image externally.
+Full-volume reads show progress on standard error, followed by hash/metadata
+checks. Read progress at 100% does not mean clean publication is complete.
+Only successful device unmount prints a safe-disconnect confirmation; other
+partitions on the same physical device must also be unused before unplugging.
+Ctrl-C retains state and requires recovery; it never declares the device safe.
 .SH OPTIONS
 .TP
 .B --recover-journal
@@ -55,7 +60,8 @@ Maximum device metadata-check scratch bytes (default 1073741824).
 Native journal import budget (default 268435456).
 .TP
 .B --timeout SECONDS
-Unmount completion wait (default 120). A timeout retains all recovery state.
+Unmount completion wait (default 3600; maximum 86400 seconds). A timeout retains
+all recovery state and does not stop the writer. Keep the device connected.
 .TP
 .B --version
 Print the installed package version.

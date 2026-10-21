@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 import chain
 import inplace
 import session
+import progress
 from mount_state import attached, mounts
 from credentials import Credentials
 from durable import directory, regular
@@ -122,6 +123,7 @@ def credentials():
 
 
 def check_image(root):
+    progress.stage('Checking filesystem metadata; keep the device connected...')
     import journal_recovery
     result, output = journal_recovery.command(
         [journal_recovery.tool('e2fsck'), '-fn', root / 'chain' / 'image.img'],
@@ -155,6 +157,7 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
         target = None
         if data['mode'] == 'direct':
             from direct_device import Controller
+            progress.stage('Checking device identity and exclusive access...')
             target = device_admission(lambda: stack.enter_context(Controller(root / 'device', args.device, work,
                 check_bytes=args.check_bytes, journal_bytes=args.journal_bytes)))
             chain_root = target.chain
@@ -170,6 +173,7 @@ def run_session(root, data, args, work, broker=None, mountpoint=None):
                 broker.run_mount(opened, work, mountpoint, root / 'control.sock')
             if opened._failed:
                 raise OSError(errno.EIO, 'writer session failed; recovery is required')
+        progress.stage('Finishing writes and verifying clean publication; keep the device connected...')
         if target:
             target.finish()
         else:
@@ -208,6 +212,7 @@ def initialize(args):
     with lock(root):
         inplace.seal(root, 'writer-state', data)
         if args.image:
+            progress.stage('Copying source image into private state...')
             chain.clone(source, root / 'chain')
             run_session(root, data, args, work)
         else:
@@ -310,6 +315,8 @@ def operate(args, mounting):
             raise
         seal(root, data, 'ready')
     print('Cleanly unmounted and checked.' if mounting else 'Recovered, checked and ready.')
+    if data['mode'] == 'direct':
+        print('Writer checks complete. Use unmount after mounting before disconnecting this device.')
 
 
 def status(args):
@@ -349,20 +356,41 @@ def unmount(args):
             raise ValueError('recorded mountpoint contains another filesystem; refusing to unmount it')
         command = ['/sbin/umount', mountpoint] if sys.platform == 'darwin' else [
             shutil.which('fusermount3') or 'fusermount3', '-u', mountpoint]
-        result = subprocess.run(command, check=False)
-        if result.returncode and attached(mountpoint):
-            raise subprocess.CalledProcessError(result.returncode, command)
+        # macFUSE may briefly retain the last vnode after an application closes
+        # it. Retry normal detach, never force-unmount or bypass an open file.
+        detach_deadline = time.monotonic() + min(5, args.timeout)
+        while True:
+            if not attached(mountpoint):
+                break
+            if mounts().get(mountpoint, (None, None))[1] != 'ext4fuse-experimental':
+                raise ValueError('mountpoint changed filesystems; refusing to unmount it')
+            result = subprocess.run(command, capture_output=True, check=False)
+            if not result.returncode or not attached(mountpoint):
+                break
+            if time.monotonic() >= detach_deadline:
+                raise OSError(errno.EBUSY, 'volume is still busy. Close files and terminals using it, then retry unmount. Keep the device connected.')
+            progress.stage('Volume is busy; waiting briefly for open files to close...')
+            time.sleep(.5)
     deadline = time.monotonic() + args.timeout
+    last_notice = 0
     while True:
         try:
             with lock(root):
                 current = manifest(root)
+                if current['mountpoint'] or attached(mountpoint):
+                    raise ValueError('attachment still recorded; run status and recover before disconnecting')
                 if current['phase'] != 'ready':
                     raise ValueError('mount detached; run recover to verify retained state')
                 print('Unmounted; recovery state is ready.')
+                if current['mode'] == 'direct':
+                    print('Writer finished all checks. Safe to disconnect this volume, provided no other partition on the USB device is in use.')
                 return
         except BlockingIOError:
-            if time.monotonic() >= deadline:
+            now = time.monotonic()
+            if now - last_notice >= 5:
+                progress.stage('Mount detached; waiting for writer checks. Keep the device connected. Progress is shown in the mount terminal.')
+                last_notice = now
+            if now >= deadline:
                 raise TimeoutError('mount detached; writer is still finishing checks; inspect status before unplugging')
             time.sleep(.1)
 
@@ -393,7 +421,7 @@ def parser():
     inspect.add_argument('--json', action='store_true')
     stop = sub.add_parser('unmount', help='unmount normally and wait for checked clean publication')
     stop.add_argument('state', type=Path)
-    stop.add_argument('--timeout', type=float, default=120)
+    stop.add_argument('--timeout', type=float, default=3600)
     allocation = sub.add_parser('allocate', help='allocate or punch a mounted file through authenticated control')
     allocation.add_argument('state', type=Path)
     allocation.add_argument('path', help='absolute path within the ext4 filesystem')
@@ -422,8 +450,8 @@ def main():
         elif args.action == 'status':
             status(args)
         elif args.action == 'unmount':
-            if not 0 < args.timeout <= 3600:
-                raise ValueError('unmount timeout must be 0..3600 seconds')
+            if not 0 < args.timeout <= 86400:
+                raise ValueError('unmount timeout must be greater than 0 and at most 86400 seconds')
             unmount(args)
         elif args.action == 'allocate':
             allocate(args)
@@ -443,10 +471,11 @@ def main():
             print('State retained. Inspect status; do not delete recovery files or run another writer.', file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print('ext4fuse-writer: interrupted; unmount any remaining attachment, then run recover.', file=sys.stderr)
+        print('ext4fuse-writer: cancelled. Keep the device connected and retain the entire state directory. Unmount any remaining attachment, then run recover with the same state (and matching --device for device state).', file=sys.stderr)
         return 130
     return 0
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    with progress.reporting():
+        raise SystemExit(main())

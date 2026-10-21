@@ -13,6 +13,11 @@ on:
       - '.github/actions/writer-e2fsprogs/**'
       - 'super.c'
   workflow_dispatch:
+    inputs:
+      soak_seconds:
+        description: 'Minimum mounted endurance seconds (up to 3600)'
+        type: number
+        default: 1200
 permissions:
   contents: read
 jobs:
@@ -701,6 +706,8 @@ jobs:
         run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/writer-prefix" --build-dir "$RUNNER_TEMP/installed-writer" --python "$(command -v python3)" --version 0.3.0-beta.1
       - name: Test installed dirty-journal import and direct-device recovery
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-packaging-device.py --work "$RUNNER_TEMP/installed-writer" --prefix "$RUNNER_TEMP/writer-prefix"
+      - name: Verify progress diagnostics cannot interrupt durable publication
+        run: python3 experimental/shared-writer/test-progress.py
       - name: Save installed workflow validation
         if: always()
         uses: actions/upload-artifact@v4
@@ -714,7 +721,7 @@ jobs:
 
   durability-endurance:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - name: Install endurance and FUSE dependencies
@@ -729,9 +736,15 @@ jobs:
       - name: Verify sustained mixed transactions and storage failures on all profiles
         run: python3 experimental/shared-writer/test-endurance.py --work "$RUNNER_TEMP/endurance" --rounds 240 --seed 918273
       - name: Install mounted endurance runtime
-        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.4
-      - name: Verify concurrent mounted acknowledgements across repeated process loss
-        run: python3 experimental/shared-writer/test-mounted-endurance.py --work "$RUNNER_TEMP/endurance" --prefix "$RUNNER_TEMP/endurance-prefix" --cycles 3 --acks 32
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.5
+      - name: Verify prolonged mixed mounted writes across repeated process loss
+        env:
+          SOAK_SECONDS: ${{ inputs.soak_seconds || 1200 }}
+        run: |
+          python3 -c 'import os; n=float(os.environ["SOAK_SECONDS"]); assert 0 <= n <= 3600, "soak_seconds must be 0..3600"'
+          python3 experimental/shared-writer/test-mounted-endurance.py --work "$RUNNER_TEMP/endurance" --prefix "$RUNNER_TEMP/endurance-prefix" --cycles 3 --acks 32 --duration "$SOAK_SECONDS"
+      - name: Verify constrained-memory recovery after sustained writes
+        run: python3 experimental/shared-writer/test-resource-exhaustion.py --work "$RUNNER_TEMP/endurance" --phase memory
       - name: Save endurance qualification
         if: always()
         uses: actions/upload-artifact@v4
@@ -740,6 +753,7 @@ jobs:
           path: |
             ${{ runner.temp }}/endurance/endurance-results.json
             ${{ runner.temp }}/endurance/mounted-endurance-results.json
+            ${{ runner.temp }}/endurance/resource-exhaustion-results.json
             ${{ runner.temp }}/endurance/mounted-endurance-*/*.log
             ${{ runner.temp }}/endurance/mounted-endurance-*/acknowledgements.jsonl
 
