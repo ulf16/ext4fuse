@@ -29,6 +29,11 @@ def setup(root,sector):
  return t,state,bytes(old),bytes(new)
 with tempfile.TemporaryDirectory(prefix='device-replay-',dir=a.work) as tmp:
  tmp=Path(tmp)
+ busy=tmp/'busy-admission'
+ with patch.object(d,'Device',side_effect=BlockingIOError(errno.EAGAIN,'busy test target')):
+  try:d.snapshot('/dev/not-opened',busy)
+  except BlockingIOError:check(not busy.exists())
+  else:raise AssertionError('busy device admitted')
  for sector in (512,4096):
   phases=['device:guarded','device:data-synced','device:published','device:complete']+[f'device:sector:{i}:{j}' for i in range(3) for j in range(4096//sector)]
   for num,phase in enumerate(phases):

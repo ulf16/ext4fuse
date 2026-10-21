@@ -34,7 +34,13 @@ def recover(root,device):
  subprocess.run(['e2fsck','-fn',str(device)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
 with tempfile.TemporaryDirectory(prefix='continuous-',dir=a.work) as temp,patch.object(live,'Device',Simulated):
- temp=Path(temp);source=a.work/'fixtures/1024-classic-csum0.img'
+ temp=Path(temp)
+ busy=temp/'busy-admission'
+ with patch.object(live,'Device',side_effect=BlockingIOError(errno.EAGAIN,'busy test target')):
+  try:live.init('/dev/not-opened',busy)
+  except BlockingIOError:check(not busy.exists())
+  else:raise AssertionError('busy device admitted')
+ source=a.work/'fixtures/1024-classic-csum0.img'
  # A sealed head-one generation is generated once with the real C mutator.
  # Fault cases clone it and rewrite only the sealed image inode identity.
  device=temp/'seed-device';shutil.copyfile(source,device);seed=temp/'seed';live.init(device,seed)

@@ -12,6 +12,15 @@ def run(args):return subprocess.check_output(list(map(str,args)),stderr=subproce
 def check(value):
  global checks
  assert value;checks+=1
+def snapshot_device(root,device):
+ deadline=time.monotonic()+15
+ while True:
+  try:return d.snapshot(device,root)
+  except OSError as e:
+   # Retry only before admission/state creation; never discard partial state.
+   if (sys.platform!='linux' or e.errno not in (errno.EAGAIN,errno.EBUSY)
+       or root.exists() or time.monotonic()>=deadline):raise
+   time.sleep(.2)
 def recover_device(root,device):
  # udev/blkid may briefly hold a shared flock after a loop-device change.
  # Production admission keeps refusing it; the disposable test retries only
@@ -73,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='device-native-',dir=a.work) as tmp:
     else:raise AssertionError('busy raw device admitted')
     check(sha(image)==initial)
    finally:peer.communicate('',timeout=30)
-  root=tmp/'journal';chain=d.snapshot(device,root);check(sha(image)==initial)
+  root=tmp/'journal';chain=snapshot_device(root,device);check(sha(image)==initial)
   with session.Session(chain,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
    s.chmod('/',0o777);h=s.openat(None,'/device-test','w',create=True,mode=0o600);h.write(b'actual device publication');h.close()
   # Produce a real interruption after durable guard publication.

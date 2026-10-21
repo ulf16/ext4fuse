@@ -65,20 +65,24 @@ def locked(root):
     finally:os.close(fd)
 
 def snapshot(device,root):
-    root=inplace.block.canonical(root);root.mkdir(mode=0o700);directory(root.parent)
-    with locked(root),Device(device,root) as target:
-        target.check();before=fd_hash(target.fd,target.size)
-        fd=os.open(root/'base.img',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
-        with os.fdopen(fd,'wb') as output:
-            for pos in range(0,target.size,1024*1024):output.write(read_at(target.fd,min(1024*1024,target.size-pos),pos))
-            output.flush();sync(output.fileno())
-        uuid=clean_image(root/'base.img',target.size)
-        target.check()
-        if fd_hash(target.fd,target.size)!=before:refuse('device changed during snapshot')
-        with regular(root/'base.img') as base:
-            if digest(base)!=before:refuse('snapshot differs from admitted device')
-        chain.clone(root/'base.img',root/'chain')
-        inplace.seal(root,'device-state',dict(version=1,identity=target.identity,size=target.size,sector=target.sector,uuid=uuid,base_sha256=before))
+    root=inplace.block.canonical(root)
+    if root.exists() or root.is_symlink():raise FileExistsError(root)
+    # A busy pre-admission device must not leave a partial state directory.
+    with Device(device,root.parent) as target:
+        root.mkdir(mode=0o700);directory(root.parent)
+        with locked(root):
+            target.check();before=fd_hash(target.fd,target.size)
+            fd=os.open(root/'base.img',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+            with os.fdopen(fd,'wb') as output:
+                for pos in range(0,target.size,1024*1024):output.write(read_at(target.fd,min(1024*1024,target.size-pos),pos))
+                output.flush();sync(output.fileno())
+            uuid=clean_image(root/'base.img',target.size)
+            target.check()
+            if fd_hash(target.fd,target.size)!=before:refuse('device changed during snapshot')
+            with regular(root/'base.img') as base:
+                if digest(base)!=before:refuse('snapshot differs from admitted device')
+            chain.clone(root/'base.img',root/'chain')
+            inplace.seal(root,'device-state',dict(version=1,identity=target.identity,size=target.size,sector=target.sector,uuid=uuid,base_sha256=before))
     return root/'chain'
 
 def validate_state(state,target):

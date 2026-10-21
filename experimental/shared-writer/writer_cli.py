@@ -315,8 +315,6 @@ def operate(args, mounting):
             raise
         seal(root, data, 'ready')
     print('Cleanly unmounted and checked.' if mounting else 'Recovered, checked and ready.')
-    if data['mode'] == 'direct':
-        print('Writer checks complete. Use unmount after mounting before disconnecting this device.')
 
 
 def status(args):
