@@ -45,6 +45,7 @@ class Session:
         self._closed = False
         self._failed = False
         self._process = None
+        self._reader_suspended = False
         self._verified = None
         self._verified_context = None
         self._files = set()
@@ -132,7 +133,11 @@ class Session:
             before_request = getattr(self._commit_sink, 'before_request', None)
             if before_request is not None:
                 before_request()
-            if self._verified is not None:
+            # During replay the reader is gated busy and the image can be
+            # between roots. Audit only a published view, or the explicit
+            # refresh after the committed state/tree binding has advanced.
+            audit = not self._reader_suspended or op == 4
+            if self._verified is not None and audit:
                 self._verified.guard()
             deadline = time.monotonic() + 30
             self._send(REQUEST.pack(b'E4RD0001', op, len(path), offset, length) + path, deadline)
@@ -155,7 +160,7 @@ class Session:
                     or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
-            if self._verified is not None:
+            if self._verified is not None and audit:
                 self._verified.guard()
         except BaseException:
             self._failed = True
@@ -166,6 +171,10 @@ class Session:
             # Ordinary lookup errors keep the session usable. Refresh failure
             # is caught by apply/recover, which keeps the reader suspended.
             raise OSError(error, os.strerror(error))
+        if op == 3:
+            self._reader_suspended = True
+        elif op == 4:
+            self._reader_suspended = False
         return size, data
 
     @staticmethod
