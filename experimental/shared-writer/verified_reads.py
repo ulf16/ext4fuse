@@ -32,7 +32,7 @@ def exact(sock, count):
 
 
 class Reader:
-    def __init__(self, path, binding, cache_chunks=8):
+    def __init__(self, path, binding, cache_chunks=32):
         self.path = path
         self.binding = binding
         self.failed = threading.Event()

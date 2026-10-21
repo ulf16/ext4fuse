@@ -181,7 +181,7 @@ cleared on suspend, publication/refresh and rollback. The broker checks image
 identity and fingerprint before and after every reader operation, including
 operations entirely served by that native cache. No cache hit rereads raw bytes.
 
-The verifier keeps at most eight immutable chunks (8 MiB payload), shared by the
+The verifier keeps at most 32 immutable chunks (32 MiB payload), shared by the
 serialized reader and producer. It discards that cache when the committed root,
 image fingerprint or tree instance changes. Each request also checks the image
 identity and fingerprint. Cached bytes remain a previously authenticated snapshot;
