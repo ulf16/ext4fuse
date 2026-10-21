@@ -7,9 +7,11 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <poll.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #define PAGE 4096
@@ -20,7 +22,7 @@ struct page {
   struct page *next;
 };
 struct overlay {
-  int fd, base_fd;
+  int fd, base_fd, verified_fd;
   unsigned sector;
   uint64_t size, epoch, baseline;
   char *path;
@@ -64,9 +66,95 @@ static int exact_read(int fd, void *b, size_t n, uint64_t off) {
   }
   return 0;
 }
+/* Private, bounded transport: the parent returns precisely the bytes it
+ * authenticated. No raw-device descriptor is inherited in verified mode. */
+static int channel_io(int fd, void *buffer, size_t length, int sending) {
+  unsigned char *p = buffer;
+  while (length) {
+    struct pollfd wait = {fd, sending ? POLLOUT : POLLIN, 0};
+    int ready;
+    do {
+      ready = poll(&wait, 1, 30000);
+    } while (ready < 0 && errno == EINTR);
+    if (ready <= 0)
+      return EIO;
+    ssize_t n;
+    if (sending) {
+#ifdef MSG_NOSIGNAL
+      n = send(fd, p, length, MSG_NOSIGNAL);
+#else
+      n = send(fd, p, length, 0);
+#endif
+    } else
+      n = recv(fd, p, length, 0);
+    if (n < 0 && errno == EINTR)
+      continue;
+    if (n <= 0)
+      return EIO;
+    p += n;
+    length -= (size_t)n;
+  }
+  return 0;
+}
+static uint32_t little32(const unsigned char *p) {
+  return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+         (uint32_t)p[3] << 24;
+}
+static int verified_read(struct overlay *t, void *b, size_t n, uint64_t off) {
+  while (n) {
+    size_t take = n > 1048576 ? 1048576 : n;
+    unsigned char request[16], reply[8];
+    for (unsigned i = 0; i < 8; i++) {
+      request[i] = off >> (8 * i);
+      request[8 + i] = (uint64_t)take >> (8 * i);
+    }
+    int e = channel_io(t->verified_fd, request, sizeof(request), 1);
+    if (!e)
+      e = channel_io(t->verified_fd, reply, sizeof(reply), 0);
+    if (e || little32(reply) || little32(reply + 4) != take)
+      return EIO;
+    e = channel_io(t->verified_fd, b, take, 0);
+    if (e)
+      return e;
+    b = (char *)b + take;
+    off += take;
+    n -= take;
+  }
+  return 0;
+}
+static int verified_view(struct overlay *t, const struct stat *token) {
+  const char *config = getenv("EXT4_VERIFIED_READ");
+  if (!config)
+    return 0;
+  unsigned fd;
+  uint64_t dev, ino, size;
+  int end = 0, type;
+  socklen_t length = sizeof(type);
+  if (getenv("EXT4_DEVICE_VIEW") ||
+      sscanf(config, "%u,%" SCNu64 ",%" SCNu64 ",%" SCNu64 "%n", &fd, &dev,
+             &ino, &size, &end) != 4 ||
+      config[end] || fd > INT_MAX || dev != (uint64_t)token->st_dev ||
+      ino != (uint64_t)token->st_ino || size != (uint64_t)token->st_size ||
+      getsockopt((int)fd, SOL_SOCKET, SO_TYPE, &type, &length) ||
+      type != SOCK_STREAM)
+    return EINVAL;
+  t->verified_fd = dup((int)fd);
+  if (t->verified_fd < 0)
+    return errno;
+  if (fcntl(t->verified_fd, F_SETFD, FD_CLOEXEC) < 0)
+    return errno;
+#ifdef SO_NOSIGPIPE
+  int yes = 1;
+  if (setsockopt(t->verified_fd, SOL_SOCKET, SO_NOSIGPIPE, &yes, sizeof(yes)))
+    return errno;
+#endif
+  return 0;
+}
 /* Guard normalization is confined to explicitly inherited, read-only device
  * descriptors. Paths alone never opt an ordinary image into device access. */
 static int base_read(struct overlay *t, void *b, size_t n, uint64_t off) {
+  if (t->verified_fd >= 0)
+    return verified_read(t, b, n, off);
   if (t->base_fd < 0)
     return exact_read(t->fd, b, n, off);
   uint64_t original = off;
@@ -177,8 +265,13 @@ struct overlay *overlay_open(const char *path, size_t max) {
   changed(t);
   t->baseline = t->epoch;
   t->base_fd = -1;
-  int view_error = device_view(t, &s);
+  t->verified_fd = -1;
+  int view_error = verified_view(t, &s);
+  if (!view_error && t->verified_fd < 0)
+    view_error = device_view(t, &s);
   if (view_error) {
+    if (t->verified_fd >= 0)
+      close(t->verified_fd);
     free(t->path);
     free(t);
     close(fd);
@@ -209,6 +302,8 @@ void overlay_close(struct overlay *t) {
   if (!t)
     return;
   overlay_rollback(t);
+  if (t->verified_fd >= 0)
+    close(t->verified_fd);
   if (t->base_fd >= 0)
     close(t->base_fd);
   close(t->fd);

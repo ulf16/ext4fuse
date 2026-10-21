@@ -801,7 +801,7 @@ jobs:
         run: python3 experimental/shared-writer/test-endurance.py --work "$RUNNER_TEMP/endurance" --rounds 240 --seed 918273
       - name: Install mounted endurance runtime
         if: ${{ !inputs.reuse_endurance_run }}
-        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.5
+        run: python3 experimental/shared-writer/install.py --prefix "$RUNNER_TEMP/endurance-prefix" --build-dir "$RUNNER_TEMP/endurance" --python "$(command -v python3)" --version 0.3.0-beta.6
       - name: Verify prolonged mixed mounted writes across repeated process loss
         if: ${{ !inputs.reuse_endurance_run }}
         env:
@@ -887,6 +887,8 @@ jobs:
         run: python3 experimental/shared-writer/run-matrix.py --work "$RUNNER_TEMP/integrity"
       - name: Verify paged hash storage, large offsets, scan reuse and corruption checks
         run: sudo env PATH="$PATH" python3 experimental/shared-writer/test-integrity-scaling.py --work "$RUNNER_TEMP/integrity" --devices
+      - name: Verify authenticated native reads and silent corruption refusal
+        run: python3 experimental/shared-writer/test-verified-reads.py --work "$RUNNER_TEMP/integrity"
       - name: Verify legacy roots and every Merkle recovery boundary
         run: python3 experimental/shared-writer/test-merkle.py --work "$RUNNER_TEMP/integrity"
       - name: Save integrity qualification
@@ -897,3 +899,4 @@ jobs:
           path: |
             ${{ runner.temp }}/integrity/integrity-scaling-results.json
             ${{ runner.temp }}/integrity/merkle-results.json
+            ${{ runner.temp }}/integrity/verified-reads-results.json

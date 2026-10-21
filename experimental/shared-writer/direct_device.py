@@ -83,8 +83,8 @@ def checked(path,target,work,root,budget):
    info=os.fstat(saved.fileno())
    if info.st_uid!=os.getuid() or info.st_nlink!=1:refuse('unsafe metadata scratch image')
   snapshot.unlink();directory(root)
- options=image_io.child(path)
- result,output=journal_recovery.command([Path(work)/'metadata-snapshot',path,snapshot,budget],options['env'],pass_fds=options.get('pass_fds',()))
+ with image_io.child_process(path) as options:
+  result,output=journal_recovery.command([Path(work)/'metadata-snapshot',path,snapshot,budget],options['env'],pass_fds=options.get('pass_fds',()))
  if result:raise OSError('metadata snapshot failed: '+output.decode(errors='replace')[-2048:])
  result,output=journal_recovery.command([journal_recovery.tool('e2fsck'),'-fn',snapshot],dict(os.environ,LC_ALL='C',E2FSCK_CONFIG='/dev/null'))
  if result:raise OSError('direct filesystem did not pass read-only metadata check: '+output.decode(errors='replace')[-2048:])

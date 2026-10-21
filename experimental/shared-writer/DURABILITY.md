@@ -161,10 +161,42 @@ requirements and the explicit remaining cold-scan cost.
 
 Live session checkpoints now retire history against the verified in-process tree;
 they no longer perform an independent whole-volume audit. Ordinary external edits
-still invalidate the fingerprint. Same-metadata latent corruption in an untouched
-chunk is found by cold recovery, standalone administrative checkpoint, clean close
+still invalidate the fingerprint. Same-metadata latent corruption in a chunk not read through the live verifier
+is found by cold recovery, standalone administrative checkpoint, clean close
 or an explicit `Session.scrub()`. Cold replay still reads every chunk. The tests
 must distinguish this cadence change from disabling corruption detection.
+
+## Verified live reads
+
+A live Session now verifies base data and metadata before either the resident
+native reader or libext2fs mutation overlay consumes them. A private inherited
+socket returns exactly the bytes hashed against the admission scan's 1 MiB
+Merkle leaves. Native children receive no raw device descriptor in this mode.
+Python overlay-preimage comparisons use the same verifier. Transaction replay
+keeps its existing independent preimage/redo and readback checks: a partially
+published chunk does not yet belong to either completed root.
+
+The verifier keeps at most eight immutable chunks (8 MiB payload), shared by the
+serialized reader and producer. It discards that cache when the committed root,
+image fingerprint or tree instance changes. Each request also checks the image
+identity and fingerprint. Cached bytes remain a previously authenticated snapshot;
+silent corruption of cached media is detected on a later cache miss or full scan,
+not by rereading unchecked bytes after a successful hash. Corruption anywhere in
+an uncached chunk rejects even an undamaged subrange requested from that chunk.
+An integrity failure latches the session closed to further operations; the failed
+producer path cannot rebuild a tree and silently accept the changed contents.
+
+Each native process has its own framed, bounded channel. Child loss cannot leave
+a stale reply for a later process. Reads, response sizes, image identity, short
+I/O and socket errors fail closed. This private interface assumes trusted shipped
+helpers and an exclusively claimed volume; it is not a hostile-process sandbox.
+
+Admission, cold recovery and clean-close whole-volume scans remain unchanged,
+as do explicit scrubs and metadata filesystem checks. This is not a persistent
+authenticated index and does not yet reduce startup or unmount scan costs.
+`test-verified-reads.py` checks hidden-metadata corruption, native reader and
+producer refusal, preimage failure latching, generation cache replacement, partial
+last chunks, cross-chunk reads, malformed bounds and short image I/O.
 
 ## Timed mounted endurance
 

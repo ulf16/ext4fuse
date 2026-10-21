@@ -109,16 +109,26 @@ source=a.work/'fixtures/4096-extents-csum1.img'
 assert source.exists(), 'prepare run-matrix fixtures first'
 root=base/'chain';chain.clone(source,root)
 info=os.stat(root/'image.img');identity=(info.st_dev,info.st_ino)
-counts={'bytes':0}
+counts={'bytes':0,'verified_bytes':0}
+# Keep measuring complete scan I/O separately from the new authenticated
+# chunk reads. A native read is now serviced in Python, too.
+from contextvars import ContextVar
+from verified_reads import Reader
+verified_io=ContextVar('verified_io',default=False)
+original_verified_read=Reader.read
+def measured_verified(self,*args,**kwargs):
+    token=verified_io.set(True)
+    try:return original_verified_read(self,*args,**kwargs)
+    finally:verified_io.reset(token)
 class Counted:
     def __init__(self,f):self.f=f
     def __getattr__(self,name):return getattr(self.f,name)
     def __enter__(self):return self
     def __exit__(self,*args):return self.f.__exit__(*args)
     def read(self,*args):
-        data=self.f.read(*args);counts['bytes']+=len(data);return data
+        data=self.f.read(*args);counts['verified_bytes' if verified_io.get() else 'bytes']+=len(data);return data
     def readinto(self,buffer):
-        n=self.f.readinto(buffer);counts['bytes']+=n;return n
+        n=self.f.readinto(buffer);counts['verified_bytes' if verified_io.get() else 'bytes']+=n;return n
 fdopen=os.fdopen
 
 def measured(*args,**kwargs):
@@ -127,7 +137,7 @@ def measured(*args,**kwargs):
     return Counted(f) if (st.st_dev,st.st_ino)==identity else f
 
 measurements={}
-with patch.object(os,'fdopen',measured):
+with patch.object(os,'fdopen',measured),patch.object(Reader,'read',measured_verified):
     with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
         measurements['legacy_startup']=counts['bytes'];check(counts['bytes']==info.st_size)
         s.applyat([dict(kind='create',path='/scale',data_hex=b'acknowledged'.hex())])
@@ -155,7 +165,7 @@ worker=('import sys;from pathlib import Path;sys.path.insert(0,sys.argv[1]);impo
 proc=subprocess.run([sys.executable,'-c',worker,str(Path(__file__).parent),str(root),str(a.work)],capture_output=True,timeout=120)
 check(proc.returncode==77)
 counts['bytes']=0
-with patch.object(os,'fdopen',measured):
+with patch.object(os,'fdopen',measured),patch.object(Reader,'read',measured_verified):
     with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
         measurements['dirty_startup']=counts['bytes']
         check(info.st_size<=counts['bytes']<=info.st_size+2*merkle.CHUNK)
@@ -251,7 +261,7 @@ if a.devices:
         model.command(['hdiutil','detach',device] if sys.platform=='darwin' else ['losetup','--detach',device])
 
 report=dict(result='passed',checks=checks,image_size=info.st_size,image_bytes_read=measurements,
-            geometry_test_bytes=8*1024**4,geometry_scope='node geometry and high offsets only; no full 8 TiB filesystem scan',
+            verified_read_bytes=counts['verified_bytes'],geometry_test_bytes=8*1024**4,geometry_scope='node geometry and high offsets only; no full 8 TiB filesystem scan',
             paged_ext4_replay=True,device_full_passes=device_measurements,paged_reference_bytes=size,paged_resident_budget=4*HASH_PAGE,diagnostics=str(base))
 (a.work/'integrity-scaling-results.json').write_text(json.dumps(report,indent=2)+'\n')
 print(json.dumps(report),flush=True)

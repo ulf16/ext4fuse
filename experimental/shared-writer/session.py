@@ -45,6 +45,8 @@ class Session:
         self._closed = False
         self._failed = False
         self._process = None
+        self._verified = None
+        self._verified_context = None
         self._files = set()
         self._lookup_files = {}
         self._file_key = object()
@@ -62,10 +64,15 @@ class Session:
                 self.state, self._integrity = merkle.activate(self.root, self.state)
             if self._commit_sink is not None:
                 self._recover_sink()
+            from verified_reads import Reader
+            self._verified = Reader(self.root / 'image.img', lambda: (self.state, self._integrity))
+            self._verified_context = image_io.verified(self.root / 'image.img', self._verified)
+            self._verified_context.__enter__()
             self._checkpoint_head = self.state['head']
-            self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
-                                             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                             stderr=subprocess.DEVNULL, bufsize=0, **image_io.child(self.root / 'image.img'))
+            with image_io.child_process(self.root / 'image.img') as options:
+                self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],
+                                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                                 stderr=subprocess.DEVNULL, bufsize=0, **options)
             os.set_blocking(self._process.stdin.fileno(), False)
             if credentials is not None:
                 self._rpc(6, credentials.encode())
@@ -86,6 +93,8 @@ class Session:
         self.close()
 
     def _ready(self):
+        if self._verified is not None and self._verified.failed.is_set():
+            self._failed = True
         if self._closed or self._failed:
             raise OSError(errno.EIO, 'session is closed or requires recovery in a new session')
 
@@ -143,10 +152,14 @@ class Session:
                     or (op in (17,20) and (count != size or count > 4096))):
                 raise OSError(errno.EIO, 'invalid resident reader response')
             data = self._receive(count, deadline)
+            if self._verified is not None:
+                self._verified.check()
         except BaseException:
             self._failed = True
             raise
         if error:
+            if error == errno.EIO:
+                self._failed = True
             # Ordinary lookup errors keep the session usable. Refresh failure
             # is caught by apply/recover, which keeps the reader suspended.
             raise OSError(error, os.strerror(error))
@@ -592,6 +605,8 @@ class Session:
                         raise
                 self.state = committed
             except BaseException:
+                if self._verified.failed.is_set():
+                    self._failed = True
                 if self._failed:
                     raise
                 # A failed producer may leave an unsealed intent; a transport
@@ -698,6 +713,8 @@ class Session:
         with self._mutex:
             if self._closed:
                 return
+            if self._verified is not None and self._verified.failed.is_set():
+                self._failed = True
             if self._failed and self._commit_sink is not None:
                 self._commit_sink.abort()
             self._cwd=None
@@ -729,6 +746,11 @@ class Session:
                         self._process.wait(timeout=5)
                     self._process.stdout.close()
             finally:
+                if self._verified_context is not None:
+                    self._verified_context.__exit__(None, None, None)
+                    self._verified_context = None
+                if self._verified is not None:
+                    self._verified.close()
                 self._lock.__exit__(None, None, None)
                 self._integrity = None
             if cleanup_error is not None:

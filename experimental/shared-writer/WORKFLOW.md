@@ -32,7 +32,7 @@ Python 3.11+, libfuse3 development files (macFUSE on macOS), and libext2fs/e2fsp
 python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-writer-build
 python3 experimental/shared-writer/install.py --prefix "$HOME/.local" \
   --build-dir /tmp/ext4-writer-build --python "$(command -v python3)" \
-  --version 0.3.0-beta.5
+  --version 0.3.0-beta.6
 "$HOME/.local/bin/ext4fuse-writer" doctor
 ```
 

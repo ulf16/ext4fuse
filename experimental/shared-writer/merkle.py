@@ -162,7 +162,8 @@ def capture(image_path, generation, producer, tree, expected_base):
         info = os.fstat(image.fileno())
         state = dict(device=info.st_dev, inode=info.st_ino, size=tree.size, sha256=expected_base)
         tree.check(image, state)
-        process = subprocess.Popen([str(producer), str(image_path), '--stream'], stdout=subprocess.PIPE, **image_io.child(image_path))
+        with image_io.child_process(image_path) as options:
+            process = subprocess.Popen([str(producer), str(image_path), '--stream'], stdout=subprocess.PIPE, **options)
         try:
             read = inplace.block.read_exact
             magic, size, staged = struct.unpack('<8sQQ', read(process.stdout, 24))
@@ -180,7 +181,7 @@ def capture(image_path, generation, producer, tree, expected_base):
                     if not previous < index < size // PAGE:
                         raise ValueError('invalid overlay stream page order or bounds')
                     image.seek(index * PAGE)
-                    if image.read(PAGE) != old:
+                    if image_io.verified_bytes(image_path, image, index * PAGE, PAGE) != old:
                         raise ValueError('overlay stream preimage mismatch')
                     if old != new:
                         log.write(record)

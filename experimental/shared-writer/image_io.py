@@ -3,6 +3,7 @@
 import contextlib,os,stat,threading
 from pathlib import Path
 _views={}
+_verified={}
 _lock=threading.RLock()
 
 def key(path):return str(Path(path).absolute())
@@ -37,9 +38,49 @@ def flush(image):
  if hasattr(image,'flush_device'):image.flush_device()
  sync(image.fileno())
 
+@contextlib.contextmanager
+def verified(path, reader):
+ name=key(path)
+ with _lock:
+  if name in _verified:raise ValueError('verified reader already registered')
+  _verified[name]=reader
+ try:yield
+ finally:
+  with _lock:_verified.pop(name)
+
+def verified_bytes(path,image,offset,length):
+ """Preimage consumers get authenticated bytes during a live Session.
+
+ Cold admission and replay retain their separate whole-image/log checks.
+ """
+ with _lock:reader=_verified.get(key(path))
+ if reader is not None:return reader.read(offset,length)
+ image.seek(offset)
+ return image.read(length)
+
 def child(path):
  """Only explicitly selected native reader/producer children get read access."""
+ with _lock:reader=_verified.get(key(path))
+ if reader is not None:raise ValueError('live native children require a verified channel')
  view=lookup(path);env=dict(os.environ);env.pop('EXT4_DEVICE_VIEW',None)
+ env.pop('EXT4_VERIFIED_READ',None)
  if view is None:return dict(env=env)
  env['EXT4_DEVICE_VIEW']=view.config()
  return dict(env=env,pass_fds=(view.read_fd,))
+
+@contextlib.contextmanager
+def child_process(path):
+ """One private channel per native process; close parent's copy after spawn."""
+ with _lock:reader=_verified.get(key(path))
+ if reader is None:
+  yield child(path)
+  return
+ reader.check()
+ with reader.channel() as channel:
+  env=dict(os.environ)
+  env.pop('EXT4_DEVICE_VIEW',None)
+  env.pop('EXT4_VERIFIED_READ',None)
+  info=os.stat(path,follow_symlinks=False)
+  fd=channel.fileno()
+  env['EXT4_VERIFIED_READ']=f'{fd},{info.st_dev},{info.st_ino},{info.st_size}'
+  yield dict(env=env,pass_fds=(fd,))

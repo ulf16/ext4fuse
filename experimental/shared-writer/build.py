@@ -90,7 +90,8 @@ index_incremental = compile_source(here/'index-incremental-unit.c','index-increm
 index_convert = compile_source(here/'index-convert-unit.c','index-convert-unit')
 unit = compile_source(here / 'overlay-unit.c', 'overlay-unit')
 bench = compile_source(here / 'read-bench.c', 'read-bench')
-for name, objects in [('index-scale-fixture',[index_scale]), ('index-convert-unit',[overlay,manager,index,conversion,index_convert]), ('index-incremental-unit',[overlay,manager,index,index_incremental]), ('index-cache-unit',[overlay,manager,index,index_cache]), ('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
+verified_unit = compile_source(here / 'verified-read-unit.c', 'verified-read-unit')
+for name, objects in [('verified-read-unit',[overlay,verified_unit]), ('index-scale-fixture',[index_scale]), ('index-convert-unit',[overlay,manager,index,conversion,index_convert]), ('index-incremental-unit',[overlay,manager,index,index_incremental]), ('index-cache-unit',[overlay,manager,index,index_cache]), ('journal-candidate', [overlay, candidate]), ('metadata-snapshot', [overlay, manager, snapshot]), ('index-collision-fixture', [index_collision]), ('index-corrupt', [index_corrupt]), ('native-inherit-unit', [policy_core, policy_acl, native_unit]),
                       ('prototype', [overlay, manager, reader, prototype, *reader_objects]),
                       ('step-writer', [overlay, manager, reader, step, *reader_objects]),
                       ('mutation-producer', [overlay, manager, policy_core, policy_fs, policy_acl, grant, namespace, index, conversion, mutation, metadata, path_at, producer]),
