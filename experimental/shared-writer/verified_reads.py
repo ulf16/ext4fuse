@@ -92,14 +92,22 @@ class Reader:
         # channel. Closing our client copy immediately after spawn also lets
         # the worker notice child exit. Bound blocked replies after process loss.
         server.settimeout(30)
-        thread = threading.Thread(target=self.serve, args=(server,), daemon=True,
-                                  name='ext4-verified-reads')
-        with self.channel_lock:
-            if self.closed:
-                server.close(); client.close()
-                raise OSError(errno.EIO, 'verified reader closed')
-            self.channels[server] = thread
-            thread.start()
+        try:
+            thread = threading.Thread(target=self.serve, args=(server,), daemon=True,
+                                      name='ext4-verified-reads')
+            with self.channel_lock:
+                if self.closed:
+                    raise OSError(errno.EIO, 'verified reader closed')
+                self.channels[server] = thread
+                try:
+                    thread.start()
+                except BaseException:
+                    self.channels.pop(server, None)
+                    raise
+        except BaseException:
+            server.close()
+            client.close()
+            raise
         try:
             yield client
         finally:

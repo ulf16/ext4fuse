@@ -37,7 +37,9 @@ with tempfile.TemporaryDirectory(prefix='session-checkpoint-',dir=a.work) as tmp
    with image.open('r+b') as f:f.seek(-1,2);v=f.read(1);f.seek(-1,2);f.write(bytes([v[0]^1]));f.flush();os.fsync(f.fileno())
    before=hashlib.sha256(image.read_bytes()).digest()
    try:s.apply([dict(kind='create',path='/unsafe',data_hex='')])
-   except ValueError:check(True)
+   except (ValueError,OSError) as error:
+    check(isinstance(error,ValueError) or error.errno==5)
+    check(s._failed)
    else:raise AssertionError('clean-byte corruption was not detected')
    check(hashlib.sha256(image.read_bytes()).digest()==before)
   print('PASS live checkpoint',source.name,flush=True)

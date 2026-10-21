@@ -73,6 +73,14 @@ with tempfile.TemporaryDirectory(prefix='verified-', dir=a.work) as tmp:
         check(output == data[offset:offset+length])
 
     try:
+        # Resource pressure can prevent worker startup. It must not leave a
+        # registered unstarted thread that makes Session.close fail as well.
+        for error in (MemoryError(), RuntimeError('injected thread failure')):
+            with patch('threading.Thread.start', side_effect=error):
+                try:
+                    with reader.channel():raise AssertionError('worker unexpectedly started')
+                except (MemoryError, RuntimeError):check(True)
+            check(not reader.channels)
         native(merkle.CHUNK-17,35)
         native(len(data)-32,32)
         # Lost consumers cannot poison another process's framing or leave

@@ -66,8 +66,9 @@ class Session:
                 self._recover_sink()
             from verified_reads import Reader
             self._verified = Reader(self.root / 'image.img', lambda: (self.state, self._integrity))
-            self._verified_context = image_io.verified(self.root / 'image.img', self._verified)
-            self._verified_context.__enter__()
+            verified_context = image_io.verified(self.root / 'image.img', self._verified)
+            verified_context.__enter__()
+            self._verified_context = verified_context
             self._checkpoint_head = self.state['head']
             with image_io.child_process(self.root / 'image.img') as options:
                 self._process = subprocess.Popen([str(Path(reader).absolute()), str(self.root / 'image.img')],

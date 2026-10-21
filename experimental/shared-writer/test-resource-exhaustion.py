@@ -365,7 +365,7 @@ def memory_worker(request):
         except (MemoryError, OSError, ValueError) as e:
             failure = type(e).__name__
         finally: held.clear()
-        assert hits and failure and allocated > 8*MiB, 'memory budget did not reject transaction'
+        assert hits and failure and allocated > 8*MiB, ('memory budget did not reject transaction', cfg, allocated, hits, failure)
         failed_closed = s._failed
         if cfg['stage'] != 'before-request':
             assert failed_closed, 'memory-starved replay did not fail closed'
@@ -387,13 +387,18 @@ def memory(base):
         return dict(result='not-run', reason='Darwin does not reliably enforce RLIMIT_AS; Linux CI is required')
     source = base/'memory-seed.img'; seed(source)
     rows = []
+    # The verifier introduces a service thread. glibc otherwise reserves a
+    # mostly empty 64 MiB arena per thread, exhausting RLIMIT_AS without
+    # touching memory. Cap arenas in the worker process so these same hard
+    # 96/128 MiB limits still exercise actual retained allocations and replay.
     for limit in (96*MiB, 128*MiB):
         for stage in ('before-request', 'prepared', 'applied'):
             root = base/f'memory-{limit}-{stage}'; fresh(source, root)
             request = base/f'memory-{limit}-{stage}.json'
             request.write_text(json.dumps(dict(root=str(root), limit=limit, stage=stage)))
             result = subprocess.run([sys.executable, __file__, '--work', str(a.work), '--memory-worker', str(request)],
-                                    capture_output=True, timeout=120)
+                                    capture_output=True, timeout=120,
+                                    env=dict(os.environ,MALLOC_ARENA_MAX='1'))
             assert result.returncode == 0, (result.returncode, result.stderr)
             expected = {'/ack': b'previously acknowledged', '/resumed': b'resumed'}
             with opened(root) as s:
