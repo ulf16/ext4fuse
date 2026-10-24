@@ -87,7 +87,7 @@ def read_exact(stream, length):
     return bytes(chunks)
 
 
-def prepare_overlay(source, target, journal, producer, expected_base=None):
+def prepare_overlay(source, target, journal, producer, expected_base=None, *, request=None):
     source, target, journal = [canonical(p) for p in (source, target, journal)]
     if target.exists() or target.is_symlink():
         raise FileExistsError(target)
@@ -104,8 +104,9 @@ def prepare_overlay(source, target, journal, producer, expected_base=None):
         if expected_base is not None and (not isinstance(expected_base,str) or len(expected_base)!=64 or any(c not in '0123456789abcdef' for c in expected_base)):
             raise ValueError('invalid expected source hash')
         original = expected_base if expected_base is not None else digest(base)
+        environment = dict(os.environ, EXT4_MUTATION_REQUEST=str(Path(request).absolute())) if request is not None else None
         process = subprocess.Popen([str(Path(producer).absolute()), str(source), '--stream'],
-                                   stdout=subprocess.PIPE)
+                                   stdout=subprocess.PIPE, env=environment)
         try:
             magic, stream_size, staged = struct.unpack('<8sQQ', read_exact(process.stdout, 24))
             if magic == b'E4ER0001':

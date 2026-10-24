@@ -64,12 +64,10 @@ def capture_overlay(image, session, producer, expected_base=None, integrity=None
         import merkle
         merkle.capture(image, session, producer, integrity, expected_base, request=request)
         return image
-    if request is not None:
-        raise ValueError('direct request dispatch requires authenticated incremental integrity')
     with regular(image) as current:
         before = expected_base if expected_base is not None else digest(current)
     capture = session / 'capture'
-    block.prepare_overlay(image, session / 'unused-export', capture, producer, expected_base=before)
+    block.prepare_overlay(image, session / 'unused-export', capture, producer, expected_base=before, request=request)
     with regular(capture / 'manifest') as manifest:
         metadata = json.load(manifest)
     with regular(image) as base, regular(capture / 'blocks') as log:

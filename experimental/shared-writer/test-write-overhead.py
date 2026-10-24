@@ -39,6 +39,13 @@ for name,block,features in [('classic','1024','^extent,^64bit,^metadata_csum,^or
  poison=base/(name+'-poison');poison.write_bytes(b'invalid inherited request')
  native=subprocess.Popen
  with patch.dict(os.environ,dict(PYTHONPATH=str(custom),EXT4_MUTATION_REQUEST=str(poison))):
+  legacy_root=base/(name+'-legacy');chain.clone(source,legacy_root)
+  result=session.write_api.apply(legacy_root,a.work/'mutation-producer',[dict(kind='create',path='/legacy'),dict(kind='write',path='/legacy',offset=0,data_hex=b'legacy data'.hex())])
+  check(result['version']==1 and result['head']==1)
+  check(not list(legacy_root.glob('g-*/request-producer')))
+  check(command(['debugfs','-R','cat /legacy',legacy_root/'image.img']).stdout==b'legacy data')
+  command(['e2fsck','-fn',legacy_root/'image.img'])
+  chain.checkpoint(legacy_root);check(not list(legacy_root.glob('g-*')))
   with patch.object(subprocess,'Popen',wraps=native) as launches:
    with session.Session(root,a.work/'mutation-producer',a.work/'reader-server',Credentials(0,0)) as s:
     s._mount_nodes()
