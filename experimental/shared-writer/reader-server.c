@@ -120,14 +120,14 @@ int main(int argc, char **argv) {
         : op >= 15 && op <= 17 ? (pathlen != 8 || offset || length)
         : op == 14 ? (!pathlen || (offset != 1 && offset != 4) || length)
         : op == 13 ? (!pathlen || offset || length)
-        : op == 12 ? (pathlen || offset || length)
+        : (op == 12 || op == 44) ? (pathlen || offset || length)
         : op == 6  ? (pathlen < 16 || pathlen > 16 + 4 * POLICY_GROUPS ||
                       offset || length)
         : op == 7  ? (!pathlen || offset < 1 || offset > 3 || length > 1)
         : op >= 8  ? (pathlen != 8 || (op != 8 && (offset || length)))
         : op == 1 || op == 2 ? !pathlen
                              : (pathlen || offset || length);
-    if (op < 1 || op > 43 ||
+    if (op < 1 || op > 44 ||
         pathlen > (op == 35 ? 4360
                    : (op == 19 || op == 20 || op == 22 || op == 25 ||
                       op == 26 || op == 31 || op == 34 || op == 38)

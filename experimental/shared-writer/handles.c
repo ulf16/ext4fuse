@@ -123,8 +123,8 @@ static int compare_inode(const void *a, const void *b) {
   ext2_ino_t x = *(const ext2_ino_t *)a, y = *(const ext2_ino_t *)b;
   return x < y ? -1 : x > y;
 }
-static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
-                              unsigned *count) {
+static errcode_t pin_snapshot_ready(ext2_filsys fs, struct inode_pin *pins,
+                                    unsigned *count, unsigned *reapable) {
   *count = 0;
   memset(pin_slots, 0, sizeof(pin_slots));
   ext2_ino_t orphans[PIN_LIMIT];
@@ -186,7 +186,20 @@ static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
         return e;
     }
   }
+  if (reapable) {
+    *reapable = 0;
+    /* Every inserted pin was validated against this same published view,
+     * including zero-link directory ancestors. No producer is needed when
+     * all validated orphans still have a live pin. */
+    for (unsigned i = 0; i < orphan_count; i++)
+      if (!pin_slots[pin_position(orphans[i])])
+        (*reapable)++;
+  }
   return 0;
+}
+static errcode_t pin_snapshot(ext2_filsys fs, struct inode_pin *pins,
+                              unsigned *count) {
+  return pin_snapshot_ready(fs, pins, count, NULL);
 }
 static errcode_t allocate(ext2_filsys fs, const struct inode_grant *g,
                           uint64_t *size, unsigned char **data, size_t *count) {
@@ -292,7 +305,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
     mounted_nodes = 1;
     return 0;
   }
-  if (command >= 38 && !mounted_nodes)
+  if (command >= 38 && command <= 43 && !mounted_nodes)
     return EPERM;
   if (command == 42) {
     if (!c || !mounted_nodes || bytes || offset || length)
@@ -351,11 +364,11 @@ int handles_dispatch(const char *image, const struct credentials *c,
     *count = 8;
     return 0;
   }
-  if (!c && command != 12)
+  if (!c && command != 12 && command != 44)
     return EPERM;
   struct handle *h = NULL, root = {0};
   int root_request = 0;
-  if (command != 7 && command != 12 && command != 14) {
+  if (command != 7 && command != 12 && command != 44 && command != 14) {
     if ((command == 19 || command == 20 || command == 22 || command == 25 ||
          command == 26 || command == 31 || command == 34 || command == 35 ||
          command == 38)
@@ -470,10 +483,10 @@ int handles_dispatch(const char *image, const struct credentials *c,
     }
     if (!e)
       e = allocate(fs, &g, size, data, count);
-  } else if (!e && command == 12) {
+  } else if (!e && (command == 12 || command == 44)) {
     struct inode_pin pins[PIN_LIMIT];
-    unsigned n;
-    e = pin_snapshot(fs, pins, &n);
+    unsigned n, reapable = 0;
+    e = pin_snapshot_ready(fs, pins, &n, command == 44 ? &reapable : NULL);
     if (!e) {
       *data = calloc(n ? n * 8 : 1, 1);
       if (!*data)
@@ -484,7 +497,7 @@ int handles_dispatch(const char *image, const struct credentials *c,
           put(*data + i * 8 + 4, pins[i].generation, 4);
         }
         *count = n * 8;
-        *size = fs->super->s_last_orphan;
+        *size = command == 44 ? reapable : fs->super->s_last_orphan;
       }
     }
   } else if (!e) {

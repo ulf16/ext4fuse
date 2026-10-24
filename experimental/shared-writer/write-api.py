@@ -224,13 +224,10 @@ def apply_encoded_locked(root, producer, request, cache=None):
     proposed.mkdir(mode=0o700); directory(root)
     request_path = proposed / 'operations'
     request_path.write_bytes(request)
-    adapter = proposed / 'request-producer'
-    # repr creates Python string literals, never shell source. Data stays in
-    # a bounded binary request retained with the generation until retirement.
-    executable = str(Path(producer).absolute())
-    adapter.write_text('#!/usr/bin/env python3\nimport os,sys\nos.environ["EXT4_MUTATION_REQUEST"] = ' + repr(str(request_path)) + '\nos.execv(' + repr(executable) + ', [' + repr(executable) + '] + sys.argv[1:])\n')
-    adapter.chmod(0o700)
-    inplace.capture_overlay(root / 'image.img', proposed, adapter, expected_base=state['sha256'], integrity=cache)
+    # The native producer already reads this private, bounded request. Avoid
+    # a fresh Python interpreter (and its site imports) for every transaction.
+    inplace.capture_overlay(root / 'image.img', proposed, Path(producer).absolute(), expected_base=state['sha256'],
+                            integrity=cache, request=request_path)
     return chain.recover_locked(root, cache)
 
 

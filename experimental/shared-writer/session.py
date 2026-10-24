@@ -152,7 +152,7 @@ class Session:
             if (magic != b'E4RP0001' or reserved or count > LIMIT or (error and (size or count))
                     or (op in (2, 8) and count > length) or (op in (1, 3, 4, 6, 9, 10, 28, 29, 37, 41, 42) and count)
                     or (op == 13 and (count != size or count > 4095))
-                    or (op == 12 and (count % 8 or count > 65536*8))
+                    or (op in (12,44) and (count % 8 or count > 65536*8 or (op==44 and size>65536)))
                     or (not error and ((op in (7,14,18,19,22,24,38,39) and count != 24) or (op in (11,15,21,25) and count != 16)))
                     or (not error and op==23 and count!=8)
                     or (not error and op==27 and (count<8 or count>length or size>=2**63-1))
@@ -573,8 +573,11 @@ class Session:
             return self._apply_request(write_api.encode_broker(normalized,self._credentials,pins))
 
     def _cleanup_orphans(self):
-        head,pins=self._rpc(12)
-        if head:
+        # Read-only validation includes file, lookup, cwd and ancestor pins.
+        # An all-pinned orphan chain cannot change, so avoid an empty durable
+        # producer transaction until some orphan actually becomes reclaimable.
+        ready,pins=self._rpc(44)
+        if ready:
             self._apply_request(write_api.encode_broker([],self._credentials,pins))
 
     def link(self, source, target):

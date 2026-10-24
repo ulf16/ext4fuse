@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import json
 import os
+from pathlib import Path
 import stat
 import struct
 import subprocess
@@ -157,13 +158,15 @@ def activate(root, state):
     return state, tree
 
 
-def capture(image_path, generation, producer, tree, expected_base):
+def capture(image_path, generation, producer, tree, expected_base, *, request=None):
     import inplace
     with regular(image_path) as image:
         info = os.fstat(image.fileno())
         state = dict(device=info.st_dev, inode=info.st_ino, size=tree.size, sha256=expected_base)
         tree.check(image, state)
         with image_io.child_process(image_path) as options:
+            if request is not None:
+                options['env']['EXT4_MUTATION_REQUEST'] = str(Path(request).absolute())
             process = subprocess.Popen([str(producer), str(image_path), '--stream'], stdout=subprocess.PIPE, **options)
         try:
             read = inplace.block.read_exact

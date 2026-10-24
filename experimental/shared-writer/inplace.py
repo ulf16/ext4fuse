@@ -59,11 +59,13 @@ def prepare(source, session, producer):
     return capture_overlay(image, session, producer)
 
 
-def capture_overlay(image, session, producer, expected_base=None, integrity=None):
+def capture_overlay(image, session, producer, expected_base=None, integrity=None, *, request=None):
     if integrity is not None:
         import merkle
-        merkle.capture(image, session, producer, integrity, expected_base)
+        merkle.capture(image, session, producer, integrity, expected_base, request=request)
         return image
+    if request is not None:
+        raise ValueError('direct request dispatch requires authenticated incremental integrity')
     with regular(image) as current:
         before = expected_base if expected_base is not None else digest(current)
     capture = session / 'capture'

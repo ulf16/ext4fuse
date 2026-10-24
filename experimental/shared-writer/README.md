@@ -2194,3 +2194,17 @@ Progress records are optional diagnostics, never recovery or disconnect authorit
 operations and directory workloads on two disposable ext4 layouts, with a local
 host-filesystem comparison, raw samples and independent final fsck/debugfs checks.
 See WORKFLOW.md for reproducible arguments and cache/physical-device limitations.
+
+
+## Direct request dispatch and orphan eligibility
+
+The managed producer receives its bounded request directly through its existing
+private environment contract, avoiding a generated Python interpreter launcher.
+Transaction formats, durable barriers and verified reads are unchanged. The
+reader's private opcode 44 returns validated reclaimable-orphan count and live
+pins. Session cleanup skips a producer only when this count is zero; real
+reclamation still uses the existing authenticated durable transaction path.
+All live file/lookup/cwd/directory-ancestor pins retain their previous authority.
+`test-write-overhead.py` checks interpreter isolation, legacy adapter retirement,
+unrelated closes without new generations, and reclamation at final pin release.
+`profile-write-path.py` records a fixed developer workload; see WORKFLOW.md.

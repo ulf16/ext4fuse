@@ -32,7 +32,7 @@ Python 3.11+, libfuse3 development files (macFUSE on macOS), and libext2fs/e2fsp
 python3 experimental/shared-writer/build.py --runtime-only --work /tmp/ext4-writer-build
 python3 experimental/shared-writer/install.py --prefix "$HOME/.local" \
   --build-dir /tmp/ext4-writer-build --python "$(command -v python3)" \
-  --version 0.3.0-beta.9
+  --version 0.3.0-beta.10
 "$HOME/.local/bin/ext4fuse-writer" doctor
 ```
 
@@ -390,3 +390,40 @@ Use the same arguments and a quiet host when comparing versions; real USB throug
 large populated filesystems and hardware durability require separate measurements.
 CI runs a smaller correctness workload. Failed runs retain state and mounts for
 normal inspection/recovery; the benchmark never force-unmounts or deletes them.
+
+
+## Write-path overhead and inode cleanup
+
+Managed requests launch the native mutation producer directly, with an explicit
+private request path and the same verified-read socket. There is no generated
+Python launcher or per-transaction site import. Existing redo formats, flushes,
+readback, permissions, acknowledged-write semantics and recovery remain unchanged.
+Old generations containing `request-producer` adapters remain readable and can
+be retired normally; adapters are not executed during redo recovery.
+
+A private read-only reader query validates the orphan chain and live pins,
+including lookup references, directory handles, cwd and removed ancestors. If
+every orphan is pinned, releasing an unrelated handle does not create a new
+transaction. Once an orphan becomes eligible, the existing durable reaper still
+runs. Cold recovery with no live pins still reclaims retained orphans. This
+reduces needless work during normal file operations and mount teardown without
+reclaiming open inodes early or weakening filesystem checks.
+
+For a fixed source-level profile on a disposable owned image copy:
+
+```sh
+python3 experimental/shared-writer/profile-write-path.py \
+  --work /path/to/built/runtime --source /path/to/owned-fixture.img \
+  --output /private/tmp/ext4-write-profile.json
+```
+
+The profile measures 65 real transactions: a large-file create and sixteen
+64 KiB writes, sixteen small-file creates and writes, and eight rename/unlink
+pairs. The original source image is not modified. It records wall time,
+Python-side fsync/full-flush counts and elapsed time, process-spawn counts and
+cumulative call statistics. Blocking/socket waits and service-thread scheduling
+are included; cumulative profile times are neither CPU-only nor additive.
+Native child fsync calls are not included in the Python counters. `--code` can
+select an alternate Python source directory, paired with that revision's native
+helpers, for comparisons. The installed FUSE benchmark remains the end-to-end
+measurement; profiling is a diagnostic aid, not physical-media certification.
